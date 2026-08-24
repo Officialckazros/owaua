@@ -139,6 +139,106 @@ _TYPE_ALIASES = {
     "add_reaction": "react_message",
 }
 
+_ACTION_REQUEST_RE = re.compile(
+    r"(?is)(?:"
+    r"\b(?:rename|nick(?:name)?|kick|ban|mute|timeout|unmute|untimeout|purge|"
+    r"slowmode)\b"
+    r"|\b(?:give|assign|add|remove|take|create|delete)\b.{0,80}\b(?:role|channel)\b"
+    r"|\b(?:dm|message|react\s+to)\b.{0,80}(?:<@!?\d{15,22}>|\bmessage\b)"
+    r"|\b(?:set|change)\b.{0,80}\b(?:server\s+name|status|channel\s+topic)\b"
+    r"|\bdeny\b.{0,80}\b(?:media|attachments?|embeds?)\b"
+    r")"
+)
+_UNDO_REQUEST_RE = re.compile(
+    r"(?is)^\s*(?:please\s+)?(?:undo|revert|reverse)(?:\s+(?:it|that|this|"
+    r"the\s+(?:last|previous)\s+(?:action|change)|the\s+change))?[.!?]*\s*$"
+    r"|^\s*(?:please\s+)?(?:change|put)\s+(?:it|that)\s+back[.!?]*\s*$"
+)
+
+
+def assistant_proposals(raw_actions: object) -> List[dict]:
+    """Return one valid assistant action proposal, or fail closed.
+
+    Assistant turns use the structured-chat JSON contract rather than native
+    tool calls.  Treat that model output as untrusted and never let one reply
+    smuggle multiple mutations into a single confirmation.
+    """
+    if not isinstance(raw_actions, list) or len(raw_actions) != 1:
+        return []
+    proposal = raw_actions[0]
+    if not isinstance(proposal, dict) or action_type(proposal) is None:
+        return []
+    return [proposal]
+
+
+def looks_like_action_request(text: str) -> bool:
+    """Conservatively identify imperative Discord-action requests."""
+    return bool(_ACTION_REQUEST_RE.search(str(text or "").strip()))
+
+
+def is_undo_request(text: str) -> bool:
+    """Return whether an assistant turn is an unambiguous last-action undo."""
+    return bool(_UNDO_REQUEST_RE.fullmatch(str(text or "").strip()))
+
+
+def audit_action_arguments(action: dict) -> dict:
+    """Create bounded audit metadata without retaining message/reason bodies."""
+    if not isinstance(action, dict):
+        return {}
+    out = {"type": action_type(action) or "unknown"}
+    sensitive = {"reason", "message", "content", "text", "dm_content"}
+    for key, value in action.items():
+        key = str(key)[:80]
+        if key in {"type", "action", "name"}:
+            continue
+        if key in sensitive:
+            rendered = str(value or "")
+            out[f"{key}_supplied"] = bool(rendered)
+            out[f"{key}_length"] = len(rendered)
+            continue
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            out[key] = value[:200] if isinstance(value, str) else value
+    return out
+
+
+def action_target_id(action: dict) -> Optional[str]:
+    """Extract an exact numeric target id for audit indexing when available."""
+    if not isinstance(action, dict):
+        return None
+    raw = (
+        action.get("target_user")
+        or action.get("user")
+        or action.get("target")
+        or action.get("member")
+        or action.get("user_id")
+        or action.get("target_member")
+    )
+    uid = _uid(raw)
+    return str(uid) if uid is not None else None
+
+
+def is_state_changing(action: dict) -> bool:
+    """Whether a confirmed proposal should enter the assistant undo ledger."""
+    action_name = action_type(action)
+    return action_name is not None and action_name != "list_roles"
+
+
+def action_results_ok(results: List[str], action: Optional[dict] = None) -> bool:
+    """Recognize only executor success messages; unknown wording fails closed."""
+    if len(results or []) != 1:
+        return False
+    line = str(results[0]).lower()
+    success_prefixes = (
+        "kicked ", "banned ", "gave ", "removed ", "created role ",
+        "deleted role ", "dm'd ", "timed out ", "cleared timeout for ",
+        "set ", "purged ", "created #", "deleted #", "slowmode in #",
+        "updated #", "renamed server to ", "status set to ",
+        "denied attach files and embed links for ", "reacted ",
+    )
+    if any(line.startswith(prefix) for prefix in success_prefixes):
+        return "failed" not in line
+    return action_type(action or {}) == "list_roles" and " roles: " in line
+
 
 def _uid(raw) -> Optional[int]:
     if raw is None:
@@ -433,6 +533,20 @@ def preview_action(action: dict) -> str:
     role = action.get("role") or action.get("role_name")
     if role is not None:
         details.append(f"role={str(role)[:80]}")
+    if canonical == "set_nickname":
+        nickname = (
+            action.get("nickname") or action.get("nick")
+            or action.get("new_nickname") or action.get("new_nick")
+        )
+        details.append(f"nickname={str(nickname)[:80] if nickname else '(reset)'}")
+    if canonical in {"create_role", "create_channel", "set_server_name"}:
+        name = action.get("name")
+        if name is not None:
+            details.append(f"name={str(name)[:80]}")
+    if canonical == "set_slowmode":
+        details.append(f"seconds={str(action.get('seconds') or 0)[:8]}")
+    if canonical == "set_channel_topic":
+        details.append(f"topic={str(action.get('topic') or '')[:100]}")
     if canonical == "purge_messages":
         details.append(f"count={str(action.get('count') or action.get('amount') or 10)[:8]}")
     reason = str(action.get("reason") or "").strip()
@@ -440,6 +554,178 @@ def preview_action(action: dict) -> str:
         details.append(f"reason={reason[:120]}")
     summary = canonical + (f" ({', '.join(details)})" if details else "")
     return discord.utils.escape_mentions(summary[:400])
+
+
+def _member_target(action: dict):
+    return (
+        action.get("target_user")
+        or action.get("user")
+        or action.get("target")
+        or action.get("member")
+        or action.get("user_id")
+        or action.get("target_member")
+    )
+
+
+async def prepare_inverse(
+    action: dict, requester, guild, channel=None,
+) -> Optional[dict]:
+    """Capture the pre-action state needed for a safe one-step undo."""
+    action_name = action_type(action)
+    if guild is None or action_name is None:
+        return None
+    target_raw = _member_target(action)
+    target = None
+    if target_raw is not None:
+        target = await _resolve_member(
+            guild, target_raw, requester=requester, fresh=True
+        )
+
+    if action_name == "set_nickname" and target is not None:
+        requested = str(
+            action.get("nickname") or action.get("nick") or action.get("name")
+            or action.get("new_nickname") or action.get("new_nick") or ""
+        ).strip() or None
+        if requested == getattr(target, "nick", None):
+            return None
+        return {
+            "type": "set_nickname",
+            "target_user": str(target.id),
+            "nickname": getattr(target, "nick", None) or "",
+            "reason": "revert previous assistant action",
+        }
+
+    if action_name in {"assign_role", "remove_role"} and target is not None:
+        role_raw = action.get("role") or action.get("role_name") or action.get("name")
+        role = await _resolve_role(guild, role_raw, fresh=True)
+        if role is None:
+            return None
+        has_role = any(getattr(item, "id", None) == role.id for item in target.roles)
+        if (action_name == "assign_role" and has_role) or (
+            action_name == "remove_role" and not has_role
+        ):
+            return None
+        return {
+            "type": "remove_role" if action_name == "assign_role" else "assign_role",
+            "target_user": str(target.id),
+            "role": str(role.id),
+            "reason": "revert previous assistant action",
+        }
+
+    if action_name in {"timeout_user", "remove_timeout"} and target is not None:
+        old_until = getattr(target, "timed_out_until", None)
+        now_utc = discord.utils.utcnow()
+        if old_until is not None and old_until.tzinfo is None:
+            old_until = old_until.replace(tzinfo=datetime.timezone.utc)
+        if old_until is not None and old_until > now_utc:
+            return {
+                "type": "timeout_user",
+                "target_user": str(target.id),
+                "until": old_until.isoformat(),
+                "reason": "revert previous assistant action",
+            }
+        if action_name == "timeout_user":
+            return {
+                "type": "remove_timeout",
+                "target_user": str(target.id),
+                "reason": "revert previous assistant action",
+            }
+        return None
+
+    if action_name in {"set_slowmode", "set_channel_topic"}:
+        scoped = await _resolve_channel(
+            guild, channel, action.get("channel"), fresh=True
+        )
+        if scoped is None:
+            return None
+        if action_name == "set_slowmode":
+            try:
+                requested = int(action.get("seconds") or 0)
+            except (TypeError, ValueError):
+                requested = 0
+            previous = int(getattr(scoped, "slowmode_delay", 0) or 0)
+            if requested == previous:
+                return None
+            return {
+                "type": "set_slowmode", "channel": str(scoped.id),
+                "seconds": previous, "reason": "revert previous assistant action",
+            }
+        requested = str(action.get("topic") or "")[:1024]
+        previous = str(getattr(scoped, "topic", None) or "")[:1024]
+        if requested == previous:
+            return None
+        return {
+            "type": "set_channel_topic", "channel": str(scoped.id),
+            "topic": previous, "reason": "revert previous assistant action",
+        }
+
+    if action_name == "set_server_name":
+        requested = str(action.get("name") or "").strip()
+        previous = str(getattr(guild, "name", ""))
+        if not previous or requested == previous:
+            return None
+        return {
+            "type": "set_server_name", "name": previous,
+            "reason": "revert previous assistant action",
+        }
+
+    if action_name == "create_role":
+        try:
+            existing_roles = await guild.fetch_roles()
+        except (discord.Forbidden, discord.HTTPException):
+            existing_roles = getattr(guild, "roles", [])
+        return {
+            "_created_type": "role",
+            "name": str(action.get("role") or action.get("name") or action.get("role_name") or "")[:100],
+            "existing_ids": [str(role.id) for role in existing_roles],
+        }
+    if action_name == "create_channel":
+        try:
+            existing_channels = await guild.fetch_channels()
+        except (discord.Forbidden, discord.HTTPException):
+            existing_channels = getattr(guild, "channels", [])
+        return {
+            "_created_type": "channel",
+            "name": str(action.get("name") or "")[:100],
+            "existing_ids": [str(item.id) for item in existing_channels],
+        }
+    return None
+
+
+async def finalize_inverse(seed: Optional[dict], guild) -> Optional[dict]:
+    """Resolve ids for newly created resources after a successful action."""
+    if not seed or guild is None:
+        return None
+    created_type = seed.get("_created_type")
+    if created_type is None:
+        return seed if action_type(seed) is not None else None
+    existing = {str(value) for value in seed.get("existing_ids") or []}
+    name = str(seed.get("name") or "")
+    try:
+        if created_type == "role":
+            resources = await guild.fetch_roles()
+            inverse_type = "delete_role"
+            target_key = "role"
+        elif created_type == "channel":
+            resources = await guild.fetch_channels()
+            inverse_type = "delete_channel"
+            target_key = "channel"
+        else:
+            return None
+    except (discord.Forbidden, discord.HTTPException):
+        return None
+    candidates = [
+        item for item in resources
+        if str(getattr(item, "id", "")) not in existing
+        and getattr(item, "name", None) == name
+    ]
+    if not candidates:
+        return None
+    created = max(candidates, key=lambda item: int(item.id))
+    return {
+        "type": inverse_type, target_key: str(created.id),
+        "reason": "revert previous assistant action",
+    }
 
 
 def _resolve_emoji(guild, raw) -> Optional[Union[str, discord.Emoji, discord.PartialEmoji]]:
@@ -912,11 +1198,30 @@ async def _one(
         err = _bot_can_act_on(guild, target, me) or _requester_can_act_on(requester, target)
         if err:
             return err
-        try:
-            minutes = max(1, min(_MAX_TIMEOUT_MINUTES, int(a.get("minutes") or a.get("duration") or a.get("time") or 10)))
-        except (TypeError, ValueError):
-            minutes = 10
-        until = discord.utils.utcnow() + datetime.timedelta(minutes=minutes)
+        now_utc = discord.utils.utcnow()
+        raw_until = str(a.get("until") or "").strip()
+        until = None
+        if raw_until:
+            try:
+                until = datetime.datetime.fromisoformat(raw_until.replace("Z", "+00:00"))
+                if until.tzinfo is None:
+                    until = until.replace(tzinfo=datetime.timezone.utc)
+                until = min(
+                    until,
+                    now_utc + datetime.timedelta(minutes=_MAX_TIMEOUT_MINUTES),
+                )
+                if until <= now_utc:
+                    return "timeout: stored restore time has already passed"
+            except ValueError:
+                return "timeout: invalid restore time"
+        if until is None:
+            try:
+                minutes = max(1, min(_MAX_TIMEOUT_MINUTES, int(a.get("minutes") or a.get("duration") or a.get("time") or 10)))
+            except (TypeError, ValueError):
+                minutes = 10
+            until = now_utc + datetime.timedelta(minutes=minutes)
+        else:
+            minutes = max(1, math.ceil((until - now_utc).total_seconds() / 60))
         await target.timeout(until, reason=reason)
         return f"timed out {target.display_name} for {minutes}m"
 

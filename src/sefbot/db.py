@@ -26,7 +26,7 @@ from typing import List, Optional
 from sefbot import config
 from sefbot.scope import is_dm_scope, is_guild_scope
 
-LATEST_SCHEMA_VERSION = 4
+LATEST_SCHEMA_VERSION = 6
 MAX_RETENTION_DAYS = 30
 _db_lock = threading.RLock()
 
@@ -215,10 +215,27 @@ CREATE TABLE IF NOT EXISTS action_audit (
     created        REAL NOT NULL,
     completed      REAL
 );
+CREATE TABLE IF NOT EXISTS assistant_action_history (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_id     TEXT NOT NULL,
+    scope_id     TEXT NOT NULL,
+    channel_id   TEXT,
+    action       TEXT NOT NULL,
+    target_id    TEXT,
+    parameters   TEXT NOT NULL DEFAULT '{}',
+    result       TEXT NOT NULL,
+    inverse      TEXT,
+    source_nonce TEXT NOT NULL UNIQUE,
+    created      REAL NOT NULL,
+    consumed     REAL
+);
+CREATE INDEX IF NOT EXISTS idx_assistant_action_lookup
+ON assistant_action_history(actor_id,scope_id,created DESC);
 CREATE TABLE IF NOT EXISTS economy_accounts (
     user_id    TEXT PRIMARY KEY,
     balance    INTEGER NOT NULL DEFAULT 0 CHECK(balance >= 0),
     deposit    INTEGER NOT NULL DEFAULT 0 CHECK(deposit >= 0),
+    gems       INTEGER NOT NULL DEFAULT 0 CHECK(gems >= 0),
     updated    REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS work_cooldowns (
@@ -249,6 +266,71 @@ CREATE TABLE IF NOT EXISTS cli_active_conversations (
     heartbeat  REAL NOT NULL,
     PRIMARY KEY (user_id, session_id)
 );
+CREATE TABLE IF NOT EXISTS user_levels (
+    user_id   TEXT NOT NULL,
+    guild_id  TEXT NOT NULL,
+    xp        INTEGER NOT NULL DEFAULT 0 CHECK(xp >= 0),
+    level     INTEGER NOT NULL DEFAULT 0 CHECK(level >= 0),
+    messages  INTEGER NOT NULL DEFAULT 0 CHECK(messages >= 0),
+    last_xp   REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, guild_id)
+);
+CREATE TABLE IF NOT EXISTS daily_claims (
+    user_id     TEXT NOT NULL,
+    guild_id    TEXT NOT NULL,
+    last_claim  REAL NOT NULL DEFAULT 0,
+    streak      INTEGER NOT NULL DEFAULT 0 CHECK(streak >= 0),
+    PRIMARY KEY (user_id, guild_id)
+);
+CREATE TABLE IF NOT EXISTS module_settings (
+    guild_id  TEXT NOT NULL,
+    module    TEXT NOT NULL,
+    enabled   INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
+    data      TEXT NOT NULL DEFAULT '{}',
+    updated   REAL NOT NULL,
+    actor_id  TEXT,
+    PRIMARY KEY (guild_id, module)
+);
+CREATE TABLE IF NOT EXISTS dashboard_audit (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id   TEXT NOT NULL,
+    actor_id   TEXT NOT NULL,
+    action     TEXT NOT NULL,
+    module     TEXT,
+    detail     TEXT NOT NULL DEFAULT '{}',
+    created    REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS community_records (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT NOT NULL,
+    guild_id   TEXT NOT NULL,
+    user_id    TEXT,
+    record_key TEXT,
+    data       TEXT NOT NULL DEFAULT '{}',
+    status     TEXT NOT NULL DEFAULT 'active',
+    due        REAL,
+    created    REAL NOT NULL,
+    updated    REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS afk_statuses (
+    guild_id      TEXT NOT NULL,
+    user_id       TEXT NOT NULL,
+    reason        TEXT NOT NULL,
+    original_nick TEXT,
+    notify_return INTEGER NOT NULL DEFAULT 1 CHECK(notify_return IN (0, 1)),
+    created       REAL NOT NULL,
+    PRIMARY KEY (guild_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS afk_notes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id    TEXT NOT NULL,
+    target_id   TEXT NOT NULL,
+    author_id   TEXT NOT NULL,
+    channel_id  TEXT,
+    message_id  TEXT,
+    content     TEXT NOT NULL,
+    created     REAL NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_convo_user ON conversations(user_id, guild_id, created);
 CREATE INDEX IF NOT EXISTS idx_quotes_guild ON quotes(guild_id);
 CREATE INDEX IF NOT EXISTS idx_msg_guild_user ON server_messages(guild_id, user_id, created);
@@ -257,6 +339,15 @@ CREATE INDEX IF NOT EXISTS idx_msg_bad ON server_messages(guild_id, has_bad_word
 CREATE INDEX IF NOT EXISTS idx_msg_created ON server_messages(created);
 CREATE INDEX IF NOT EXISTS idx_cli_active_heartbeat
     ON cli_active_conversations(heartbeat);
+CREATE INDEX IF NOT EXISTS idx_levels_guild_xp ON user_levels(guild_id, xp DESC);
+CREATE INDEX IF NOT EXISTS idx_module_settings_guild ON module_settings(guild_id);
+CREATE INDEX IF NOT EXISTS idx_dashboard_audit_guild
+    ON dashboard_audit(guild_id, created DESC);
+CREATE INDEX IF NOT EXISTS idx_community_records_lookup
+    ON community_records(guild_id, kind, status, due);
+CREATE INDEX IF NOT EXISTS idx_community_records_user
+    ON community_records(user_id, kind, status);
+CREATE INDEX IF NOT EXISTS idx_afk_notes_target ON afk_notes(guild_id, target_id, created);
 """
 
 _WORD = re.compile(r"[a-z0-9]{3,}")
@@ -434,6 +525,13 @@ def _migrate(c: sqlite3.Connection) -> None:
             if "scope_id" not in feedback_cols:
                 c.execute("ALTER TABLE feedback ADD COLUMN scope_id TEXT")
 
+            economy_cols = _table_columns(c, "economy_accounts")
+            if "gems" not in economy_cols:
+                c.execute(
+                    "ALTER TABLE economy_accounts ADD COLUMN gems INTEGER "
+                    "NOT NULL DEFAULT 0 CHECK(gems >= 0)"
+                )
+
             c.execute(
                 "CREATE INDEX IF NOT EXISTS idx_mem_subject ON memories(subject,guild_id)"
             )
@@ -453,6 +551,7 @@ def _migrate(c: sqlite3.Connection) -> None:
             c.execute("DROP TABLE IF EXISTS geo_tokens")
             c.execute(f"PRAGMA user_version={LATEST_SCHEMA_VERSION}")
             c.commit()
+            c.execute("PRAGMA optimize")
         except Exception:
             c.rollback()
             raise
@@ -1022,6 +1121,316 @@ def guild_settings_set(guild_id: str, **patch) -> dict:
     conn().commit()
     _gs_cache[guild_id] = (time.time(), dict(cur))
     return cur
+
+
+def module_config(guild_id: str, module: str) -> dict:
+    """Return one module's stored state merged with its current defaults."""
+    from sefbot.module_catalog import MODULES, merge_settings
+
+    name = str(module).strip().lower()
+    if name not in MODULES:
+        raise KeyError(name)
+    gid = f"guild:{guild_id}" if str(guild_id).isdigit() else str(guild_id)
+    row = conn().execute(
+        "SELECT enabled,data,updated,actor_id FROM module_settings "
+        "WHERE guild_id=? AND module=?",
+        (gid, name),
+    ).fetchone()
+    if row is None:
+        return {
+            "module": name,
+            "enabled": bool(MODULES[name].get("default_enabled", False)),
+            "settings": merge_settings(name, {}),
+            "updated": None,
+            "actor_id": None,
+        }
+    return {
+        "module": name,
+        "enabled": bool(row["enabled"]),
+        "settings": merge_settings(name, _json_dict(row["data"])),
+        "updated": float(row["updated"]),
+        "actor_id": row["actor_id"],
+    }
+
+
+def module_configs(guild_id: str) -> list[dict]:
+    from sefbot.module_catalog import MODULES
+
+    return [module_config(guild_id, name) for name in MODULES]
+
+
+def module_config_set(
+    guild_id: str,
+    module: str,
+    *,
+    enabled: bool,
+    settings: dict,
+    actor_id: str,
+) -> dict:
+    """Validate and atomically persist a dashboard-controlled module."""
+    from sefbot.module_catalog import MODULES, merge_settings
+
+    gid = f"guild:{guild_id}" if str(guild_id).isdigit() else str(guild_id)
+    name = str(module).strip().lower()
+    if name not in MODULES:
+        raise KeyError(name)
+    clean = merge_settings(name, settings)
+    payload = json.dumps(clean, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    if len(payload.encode("utf-8")) > 256_000:
+        raise ValueError("module configuration is too large")
+    timestamp = now()
+    c = conn()
+    with _db_lock:
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            c.execute(
+                "INSERT INTO module_settings(guild_id,module,enabled,data,updated,actor_id) "
+                "VALUES(?,?,?,?,?,?) ON CONFLICT(guild_id,module) DO UPDATE SET "
+                "enabled=excluded.enabled,data=excluded.data,updated=excluded.updated,"
+                "actor_id=excluded.actor_id",
+                (gid, name, 1 if enabled else 0, payload, timestamp, str(actor_id)[:100]),
+            )
+            c.execute(
+                "INSERT INTO dashboard_audit(guild_id,actor_id,action,module,detail,created) "
+                "VALUES(?,?,?,?,?,?)",
+                (
+                    gid,
+                    str(actor_id)[:100],
+                    "module.updated",
+                    name,
+                    json.dumps({"enabled": bool(enabled)}, sort_keys=True),
+                    timestamp,
+                ),
+            )
+            c.commit()
+        except Exception:
+            c.rollback()
+            raise
+    return module_config(gid, name)
+
+
+def dashboard_audit_list(guild_id: str, limit: int = 100) -> list[dict]:
+    gid = f"guild:{guild_id}" if str(guild_id).isdigit() else str(guild_id)
+    rows = conn().execute(
+        "SELECT id,actor_id,action,module,detail,created FROM dashboard_audit "
+        "WHERE guild_id=? ORDER BY created DESC,id DESC LIMIT ?",
+        (gid, max(1, min(500, int(limit)))),
+    ).fetchall()
+    output = []
+    for row in rows:
+        item = dict(row)
+        item["detail"] = _json_dict(item.get("detail"))
+        output.append(item)
+    return output
+
+
+def community_record_create(
+    kind: str,
+    guild_id: str,
+    data: dict,
+    *,
+    user_id: str | None = None,
+    record_key: str | None = None,
+    status: str = "active",
+    due: float | None = None,
+) -> int:
+    """Create a typed durable record used by reminders, tags, tickets and feeds."""
+    safe_kind = re.sub(r"[^a-z0-9_-]", "", str(kind).lower())[:40]
+    if not safe_kind:
+        raise ValueError("record kind is required")
+    payload = json.dumps(data if isinstance(data, dict) else {}, ensure_ascii=False)
+    if len(payload.encode("utf-8")) > 256_000:
+        raise ValueError("record is too large")
+    timestamp = now()
+    cur = conn().execute(
+        "INSERT INTO community_records(kind,guild_id,user_id,record_key,data,status,due,"
+        "created,updated) VALUES(?,?,?,?,?,?,?,?,?)",
+        (
+            safe_kind,
+            str(guild_id),
+            str(user_id) if user_id is not None else None,
+            str(record_key)[:200] if record_key is not None else None,
+            payload,
+            str(status)[:30],
+            float(due) if due is not None else None,
+            timestamp,
+            timestamp,
+        ),
+    )
+    conn().commit()
+    return int(cur.lastrowid)
+
+
+def community_records(
+    kind: str,
+    guild_id: str,
+    *,
+    user_id: str | None = None,
+    status: str | None = "active",
+    due_before: float | None = None,
+    limit: int = 500,
+) -> list[dict]:
+    uid = str(user_id) if user_id is not None else None
+    wanted_status = str(status) if status is not None else None
+    deadline = float(due_before) if due_before is not None else None
+    rows = conn().execute(
+        "SELECT * FROM community_records WHERE kind=? AND guild_id=? "
+        "AND (? IS NULL OR user_id=?) AND (? IS NULL OR status=?) "
+        "AND (? IS NULL OR (due IS NOT NULL AND due<=?)) "
+        "ORDER BY COALESCE(due,created),id LIMIT ?",
+        (
+            str(kind), str(guild_id), uid, uid, wanted_status, wanted_status,
+            deadline, deadline, max(1, min(5000, int(limit))),
+        ),
+    ).fetchall()
+    output = []
+    for row in rows:
+        item = dict(row)
+        item["data"] = _json_dict(item.get("data"))
+        output.append(item)
+    return output
+
+
+def community_record_update(
+    record_id: int,
+    *,
+    data: dict | None = None,
+    status: str | None = None,
+    due: float | None = None,
+) -> bool:
+    row = conn().execute(
+        "SELECT data,status,due FROM community_records WHERE id=?", (int(record_id),)
+    ).fetchone()
+    if row is None:
+        return False
+    payload = (
+        json.dumps(data, ensure_ascii=False)
+        if isinstance(data, dict)
+        else str(row["data"])
+    )
+    cur = conn().execute(
+        "UPDATE community_records SET data=?,status=?,due=?,updated=? WHERE id=?",
+        (
+            payload,
+            str(status)[:30] if status is not None else str(row["status"]),
+            float(due) if due is not None else row["due"],
+            now(),
+            int(record_id),
+        ),
+    )
+    conn().commit()
+    return int(cur.rowcount) > 0
+
+
+def community_record_delete(record_id: int, *, guild_id: str | None = None) -> bool:
+    if guild_id is None:
+        cur = conn().execute("DELETE FROM community_records WHERE id=?", (int(record_id),))
+    else:
+        cur = conn().execute(
+            "DELETE FROM community_records WHERE id=? AND guild_id=?",
+            (int(record_id), str(guild_id)),
+        )
+    conn().commit()
+    return int(cur.rowcount) > 0
+
+
+def afk_set(
+    guild_id: str,
+    user_id: str,
+    reason: str,
+    *,
+    original_nick: str | None = None,
+    notify_return: bool = True,
+) -> None:
+    conn().execute(
+        "INSERT INTO afk_statuses(guild_id,user_id,reason,original_nick,notify_return,created) "
+        "VALUES(?,?,?,?,?,?) ON CONFLICT(guild_id,user_id) DO UPDATE SET "
+        "reason=excluded.reason,original_nick=excluded.original_nick,"
+        "notify_return=excluded.notify_return,created=excluded.created",
+        (
+            str(guild_id), str(user_id), str(reason)[:1000],
+            str(original_nick)[:100] if original_nick else None,
+            1 if notify_return else 0, now(),
+        ),
+    )
+    conn().commit()
+
+
+def afk_get(guild_id: str, user_id: str) -> dict | None:
+    row = conn().execute(
+        "SELECT * FROM afk_statuses WHERE guild_id=? AND user_id=?",
+        (str(guild_id), str(user_id)),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def afk_list(guild_id: str, limit: int = 100) -> list[dict]:
+    return [
+        dict(row) for row in conn().execute(
+            "SELECT * FROM afk_statuses WHERE guild_id=? ORDER BY created DESC LIMIT ?",
+            (str(guild_id), max(1, min(1000, int(limit)))),
+        ).fetchall()
+    ]
+
+
+def afk_clear(guild_id: str, user_id: str | None = None) -> list[dict]:
+    rows = afk_list(guild_id, 1000) if user_id is None else [afk_get(guild_id, user_id)]
+    clean_rows = [row for row in rows if row is not None]
+    if user_id is None:
+        conn().execute("DELETE FROM afk_statuses WHERE guild_id=?", (str(guild_id),))
+    else:
+        conn().execute(
+            "DELETE FROM afk_statuses WHERE guild_id=? AND user_id=?",
+            (str(guild_id), str(user_id)),
+        )
+    conn().commit()
+    return clean_rows
+
+
+def afk_note_add(
+    guild_id: str,
+    target_id: str,
+    author_id: str,
+    content: str,
+    *,
+    channel_id: str | None = None,
+    message_id: str | None = None,
+) -> int:
+    cur = conn().execute(
+        "INSERT INTO afk_notes(guild_id,target_id,author_id,channel_id,message_id,"
+        "content,created) VALUES(?,?,?,?,?,?,?)",
+        (
+            str(guild_id), str(target_id), str(author_id),
+            str(channel_id) if channel_id else None,
+            str(message_id) if message_id else None,
+            str(content)[:1800], now(),
+        ),
+    )
+    conn().commit()
+    return int(cur.lastrowid)
+
+
+def afk_notes_pop(guild_id: str, target_id: str) -> list[dict]:
+    c = conn()
+    with _db_lock:
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            rows = [
+                dict(row) for row in c.execute(
+                    "SELECT * FROM afk_notes WHERE guild_id=? AND target_id=? "
+                    "ORDER BY created,id",
+                    (str(guild_id), str(target_id)),
+                ).fetchall()
+            ]
+            c.execute(
+                "DELETE FROM afk_notes WHERE guild_id=? AND target_id=?",
+                (str(guild_id), str(target_id)),
+            )
+            c.commit()
+            return rows
+        except Exception:
+            c.rollback()
+            raise
 
 
 def _bond_label(score: float) -> str:
@@ -1824,6 +2233,29 @@ def privacy_export(user_id: str) -> dict:
             for metadata in [dynamic_block_get(uid)]
             if metadata is not None
         ],
+        "assistant_actions": [
+            dict(r) for r in c.execute(
+                "SELECT id,scope_id,channel_id,action,target_id,parameters,result,"
+                "inverse,created,consumed FROM assistant_action_history "
+                "WHERE actor_id=? ORDER BY created", (uid,)
+            ).fetchall()
+        ],
+        "community_records": [
+            dict(r) for r in c.execute(
+                "SELECT * FROM community_records WHERE user_id=? ORDER BY created", (uid,)
+            ).fetchall()
+        ],
+        "afk_statuses": [
+            dict(r) for r in c.execute(
+                "SELECT * FROM afk_statuses WHERE user_id=? ORDER BY created", (uid,)
+            ).fetchall()
+        ],
+        "afk_notes": [
+            dict(r) for r in c.execute(
+                "SELECT * FROM afk_notes WHERE target_id=? OR author_id=? ORDER BY created",
+                (uid, uid),
+            ).fetchall()
+        ],
     }
 
 
@@ -1845,6 +2277,14 @@ def privacy_delete_user(user_id: str) -> dict[str, int]:
         "dm_contacts": ("DELETE FROM dm_contacts WHERE user_id=?", (uid,)),
         "cli_active_conversations": ("DELETE FROM cli_active_conversations WHERE user_id=?", (uid,)),
         "dynamic_blocks": ("DELETE FROM dynamic_blocks WHERE user_id=?", (uid,)),
+        "assistant_action_history": (
+            "DELETE FROM assistant_action_history WHERE actor_id=?", (uid,)
+        ),
+        "community_records": ("DELETE FROM community_records WHERE user_id=?", (uid,)),
+        "afk_statuses": ("DELETE FROM afk_statuses WHERE user_id=?", (uid,)),
+        "afk_notes": (
+            "DELETE FROM afk_notes WHERE target_id=? OR author_id=?", (uid, uid)
+        ),
     }
     counts: dict[str, int] = {}
     c = conn()
@@ -1879,6 +2319,17 @@ def cleanup_expired_content(retention_days: int = MAX_RETENTION_DAYS) -> dict[st
             cur = c.execute("DELETE FROM feedback WHERE created<?", (cutoff,))
             counts["feedback"] = max(0, int(cur.rowcount))
             cur = c.execute(
+                "DELETE FROM assistant_action_history WHERE created<?", (cutoff,)
+            )
+            counts["assistant_action_history"] = max(0, int(cur.rowcount))
+            cur = c.execute("DELETE FROM dashboard_audit WHERE created<?", (cutoff,))
+            counts["dashboard_audit"] = max(0, int(cur.rowcount))
+            cur = c.execute(
+                "DELETE FROM community_records WHERE status!='active' AND updated<?",
+                (cutoff,),
+            )
+            counts["community_records"] = max(0, int(cur.rowcount))
+            cur = c.execute(
                 "DELETE FROM cli_active_conversations WHERE heartbeat<?",
                 (now() - 300.0,),
             )
@@ -1910,11 +2361,122 @@ def record_action_audit(
     conn().commit()
 
 
+def record_assistant_action(
+    *, actor_id: str, scope_id: str, channel_id: str | None, action: str,
+    target_id: str | None, parameters: dict, result: str,
+    inverse: dict | None, source_nonce: str, consumed_action_id: int | None = None,
+) -> int:
+    """Persist one confirmed assistant outcome and optionally consume its undo."""
+    c = conn()
+    with _db_lock:
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            if consumed_action_id is not None:
+                c.execute(
+                    "UPDATE assistant_action_history SET consumed=? "
+                    "WHERE id=? AND actor_id=? AND scope_id=? AND consumed IS NULL",
+                    (now(), int(consumed_action_id), str(actor_id), str(scope_id)),
+                )
+            cur = c.execute(
+                "INSERT INTO assistant_action_history(actor_id,scope_id,channel_id,"
+                "action,target_id,parameters,result,inverse,source_nonce,created) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (
+                    str(actor_id), str(scope_id),
+                    str(channel_id) if channel_id is not None else None,
+                    str(action)[:80], str(target_id) if target_id else None,
+                    json.dumps(parameters, sort_keys=True, default=str)[:4000],
+                    str(result)[:500],
+                    json.dumps(inverse, sort_keys=True, default=str)[:4000]
+                    if inverse else None,
+                    str(source_nonce)[:100], now(),
+                ),
+            )
+            action_id = int(cur.lastrowid)
+            c.commit()
+            return action_id
+        except Exception:
+            c.rollback()
+            raise
+
+
+def latest_assistant_action(actor_id: str, scope_id: str) -> dict | None:
+    """Return the most recent unconsumed assistant outcome for this exact scope."""
+    row = conn().execute(
+        "SELECT id,channel_id,action,target_id,result,inverse,created "
+        "FROM assistant_action_history WHERE actor_id=? AND scope_id=? "
+        "AND consumed IS NULL ORDER BY created DESC,id DESC LIMIT 1",
+        (str(actor_id), str(scope_id)),
+    ).fetchone()
+    if row is None:
+        return None
+    item = dict(row)
+    try:
+        item["inverse"] = json.loads(item["inverse"]) if item["inverse"] else None
+    except json.JSONDecodeError:
+        item["inverse"] = None
+    return item
+
+
+def recent_assistant_actions(
+    actor_id: str, scope_id: str, limit: int = 5,
+) -> list[dict]:
+    """Return bounded action summaries for assistant self-knowledge."""
+    safe_limit = max(1, min(10, int(limit)))
+    return [
+        dict(row) for row in conn().execute(
+            "SELECT action,target_id,result,created,consumed FROM assistant_action_history "
+            "WHERE actor_id=? AND scope_id=? ORDER BY created DESC,id DESC LIMIT ?",
+            (str(actor_id), str(scope_id), safe_limit),
+        ).fetchall()
+    ]
+
+
 def economy_balance(user_id: str) -> int:
     row = conn().execute(
         "SELECT balance FROM economy_accounts WHERE user_id=?", (str(user_id),)
     ).fetchone()
     return int(row["balance"]) if row else 0
+
+
+def economy_profile(user_id: str) -> dict[str, int]:
+    row = conn().execute(
+        "SELECT balance,deposit,gems FROM economy_accounts WHERE user_id=?",
+        (str(user_id),),
+    ).fetchone()
+    if row is None:
+        return {"balance": 0, "deposit": 0, "gems": 0}
+    return {key: int(row[key]) for key in ("balance", "deposit", "gems")}
+
+
+def economy_spend(user_id: str, amount: int) -> int:
+    """Atomically debit a positive coin amount or raise on insufficient funds."""
+    uid, value = str(user_id), int(amount)
+    if value <= 0:
+        raise ValueError("The amount must be positive.")
+    c = conn()
+    with _db_lock:
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            row = c.execute(
+                "SELECT balance FROM economy_accounts WHERE user_id=?", (uid,)
+            ).fetchone()
+            balance = int(row["balance"]) if row else 0
+            if balance < value:
+                c.rollback()
+                raise ValueError("You do not have enough coins.")
+            balance -= value
+            c.execute(
+                "UPDATE economy_accounts SET balance=?,updated=? WHERE user_id=?",
+                (balance, now(), uid),
+            )
+            c.commit()
+            return balance
+        except ValueError:
+            raise
+        except Exception:
+            c.rollback()
+            raise
 
 
 def economy_adjust(user_id: str, delta: int) -> int:
@@ -1937,6 +2499,51 @@ def economy_adjust(user_id: str, delta: int) -> int:
             raise
 
 
+def economy_transfer(sender_id: str, receiver_id: str, amount: int) -> tuple[int, int]:
+    """Atomically transfer coins without allowing self-pay or overdrafts."""
+    sender, receiver = str(sender_id), str(receiver_id)
+    value = int(amount)
+    if sender == receiver:
+        raise ValueError("You cannot pay yourself.")
+    if value <= 0:
+        raise ValueError("The transfer amount must be positive.")
+    c = conn()
+    with _db_lock:
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            sender_row = c.execute(
+                "SELECT balance FROM economy_accounts WHERE user_id=?", (sender,)
+            ).fetchone()
+            sender_balance = int(sender_row["balance"]) if sender_row else 0
+            if sender_balance < value:
+                c.rollback()
+                raise ValueError("You do not have enough coins.")
+            receiver_row = c.execute(
+                "SELECT balance FROM economy_accounts WHERE user_id=?", (receiver,)
+            ).fetchone()
+            receiver_balance = int(receiver_row["balance"]) if receiver_row else 0
+            timestamp = now()
+            sender_balance -= value
+            receiver_balance += value
+            c.execute(
+                "INSERT INTO economy_accounts(user_id,balance,updated) VALUES(?,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET balance=excluded.balance,updated=excluded.updated",
+                (sender, sender_balance, timestamp),
+            )
+            c.execute(
+                "INSERT INTO economy_accounts(user_id,balance,updated) VALUES(?,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET balance=excluded.balance,updated=excluded.updated",
+                (receiver, receiver_balance, timestamp),
+            )
+            c.commit()
+            return sender_balance, receiver_balance
+        except ValueError:
+            raise
+        except Exception:
+            c.rollback()
+            raise
+
+
 def economy_leaderboard(limit: int = 10) -> list[tuple[str, dict]]:
     rows = conn().execute(
         "SELECT user_id,balance,deposit FROM economy_accounts ORDER BY balance DESC LIMIT ?",
@@ -1946,6 +2553,156 @@ def economy_leaderboard(limit: int = 10) -> list[tuple[str, dict]]:
         (str(r["user_id"]), {"balance": int(r["balance"]), "deposit": int(r["deposit"])})
         for r in rows
     ]
+
+
+def xp_needed(level: int) -> int:
+    """Total XP required to advance from ``level`` to ``level + 1``."""
+    lvl = max(0, int(level))
+    return 5 * lvl * lvl + 50 * lvl + 100
+
+
+def level_for_xp(xp: int) -> int:
+    """Highest level whose cumulative requirement is met by ``xp``."""
+    remaining = max(0, int(xp))
+    level = 0
+    while remaining >= xp_needed(level):
+        remaining -= xp_needed(level)
+        level += 1
+    return level
+
+
+def levels_profile(user_id: str, guild_id: str) -> dict:
+    row = conn().execute(
+        "SELECT xp,level,messages,last_xp FROM user_levels WHERE user_id=? AND guild_id=?",
+        (str(user_id), str(guild_id)),
+    ).fetchone()
+    if not row:
+        return {"xp": 0, "level": 0, "messages": 0, "last_xp": 0.0}
+    return {
+        "xp": int(row["xp"]),
+        "level": int(row["level"]),
+        "messages": int(row["messages"]),
+        "last_xp": float(row["last_xp"]),
+    }
+
+
+def levels_award(
+    user_id: str, guild_id: str, amount: int, cooldown_seconds: float
+) -> dict | None:
+    """Atomically award XP if off cooldown.
+
+    Returns ``None`` while the user is still on cooldown, otherwise a dict
+    with ``gained``, ``leveled_to`` (only when a level-up happened) and the
+    updated ``xp``/``level``.
+    """
+    uid = str(user_id)
+    gid = str(guild_id)
+    c = conn()
+    with _db_lock:
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            row = c.execute(
+                "SELECT xp,level,messages,last_xp FROM user_levels "
+                "WHERE user_id=? AND guild_id=?",
+                (uid, gid),
+            ).fetchone()
+            current_time = now()
+            xp = int(row["xp"]) if row else 0
+            level = int(row["level"]) if row else 0
+            messages = (int(row["messages"]) + 1) if row else 1
+            last_xp = float(row["last_xp"]) if row else 0.0
+            if cooldown_seconds > 0 and (current_time - last_xp) < cooldown_seconds:
+                if row:
+                    c.execute(
+                        "UPDATE user_levels SET messages=? WHERE user_id=? AND guild_id=?",
+                        (messages, uid, gid),
+                    )
+                    c.commit()
+                c.rollback()
+                return None
+            gained = max(0, int(amount))
+            new_xp = xp + gained
+            new_level = level_for_xp(new_xp)
+            leveled_to = new_level if new_level > level else None
+            c.execute(
+                "INSERT INTO user_levels(user_id,guild_id,xp,level,messages,last_xp) "
+                "VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(user_id,guild_id) DO UPDATE SET xp=excluded.xp,"
+                "level=excluded.level,messages=excluded.messages,last_xp=excluded.last_xp",
+                (uid, gid, new_xp, new_level, messages, current_time),
+            )
+            c.commit()
+            result = {
+                "gained": gained,
+                "xp": new_xp,
+                "level": new_level,
+                "messages": messages,
+            }
+            if leveled_to is not None:
+                result["leveled_to"] = leveled_to
+                result["next_needed"] = xp_needed(leveled_to)
+            return result
+        except Exception:
+            c.rollback()
+            raise
+
+
+def levels_top(guild_id: str, limit: int = 10) -> list[dict]:
+    rows = conn().execute(
+        "SELECT user_id,xp,level,messages FROM user_levels "
+        "WHERE guild_id=? ORDER BY xp DESC LIMIT ?",
+        (str(guild_id), max(1, min(100, int(limit)))),
+    ).fetchall()
+    return [
+        {
+            "user_id": str(r["user_id"]),
+            "xp": int(r["xp"]),
+            "level": int(r["level"]),
+            "messages": int(r["messages"]),
+        }
+        for r in rows
+    ]
+
+
+def daily_claim(
+    user_id: str, guild_id: str, reward: int, *, streak_window: float = 172_800.0
+) -> tuple[float, int, int]:
+    """Atomically claim a daily reward.
+
+    Returns ``(seconds_until_next_claim, credited, streak)``.  ``credited`` is
+    ``0`` when the claim is still on cooldown.  A claim within ``streak_window``
+    of the previous one keeps the streak alive; anything longer resets it.
+    """
+    uid = str(user_id)
+    gid = str(guild_id)
+    c = conn()
+    with _db_lock:
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            row = c.execute(
+                "SELECT last_claim,streak FROM daily_claims WHERE user_id=? AND guild_id=?",
+                (uid, gid),
+            ).fetchone()
+            current_time = now()
+            last_claim = float(row["last_claim"]) if row else 0.0
+            streak = int(row["streak"]) if row else 0
+            remaining = max(0.0, 86_400.0 - (current_time - last_claim))
+            if remaining > 0:
+                c.rollback()
+                return remaining, 0, streak
+            streak = streak + 1 if (current_time - last_claim) <= streak_window else 1
+            c.execute(
+                "INSERT INTO daily_claims(user_id,guild_id,last_claim,streak) "
+                "VALUES(?,?,?,?) "
+                "ON CONFLICT(user_id,guild_id) DO UPDATE SET "
+                "last_claim=excluded.last_claim,streak=excluded.streak",
+                (uid, gid, current_time, streak),
+            )
+            c.commit()
+            return 0.0, max(0, int(reward)), streak
+        except Exception:
+            c.rollback()
+            raise
 
 
 def economy_claim_work(user_id: str, reward: int, cooldown_seconds: int = 60) -> tuple[int, int]:

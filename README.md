@@ -17,7 +17,8 @@ Stack enough of all three and its "level" climbs from Newborn to Sage.
 - Model replies use a validated structured shape before they are rendered.
 - Guild, DM, and user data use exact scopes so one server or private conversation cannot read another.
 - Stored raw history requires both server enablement and the individual user's opt-in, and expires within 30 days.
-- Ordinary chat is read-only. `/act` may propose one administration action, but the invoking user must confirm an exact preview; permissions and role hierarchy are checked again at confirmation time.
+- Ordinary chat is read-only. `/act` and explicit one-shot `/assistant` or `!assistant` requests may propose one administration action, but the invoking user must confirm an exact preview; permissions and role hierarchy are checked again at confirmation time.
+- Confirmed assistant actions keep a scoped, 30-day undo record when an exact inverse exists. Use `!assistant undo` or `/assistant request:undo`; irreversible operations are reported as such and never fake a rollback.
 - Can throw together a chart (bar/line/pie/radar) via QuickChart, no API key needed.
 - `!vibecheck` gives an unfiltered read on how a channel's doing.
 - No emoji, ever, in anything it sends.
@@ -47,6 +48,48 @@ PYTHONPATH=src python -m sefbot.bot
 
 `@mention` it or DM it to chat. Use `/privacy` for consent, export, and deletion; `/help` lists the currently registered commands and permissions.
 
+## Web dashboard and community modules
+
+The bot now serves an authenticated control center at `/dashboard` on the same
+host and port as its legal and health pages. Generate a private access token,
+put it in `SEFBOT_DASHBOARD_TOKEN`, restart the bot, then sign in and select a
+connected server. A token shorter than 24 characters is rejected. The token is
+exchanged for a signed, HttpOnly, SameSite session; dashboard writes require a
+CSRF token and every module change is recorded in the server's dashboard audit
+trail.
+
+The dashboard exposes every module under one catalog: community, safety,
+automation, support, engagement, feeds, content, utilities and administration.
+There are no SefBot paid tiers or artificial item limits. New high-impact
+modules are disabled by default so installing an update cannot unexpectedly
+moderate members, delete messages, post feeds or change roles; existing safe
+features remain enabled for compatibility. Enable and configure only the
+modules you want. Structured settings such as rules, forms, role menus and
+subscriptions use bounded JSON editors in the module panel. Each module card
+also reports whether its core workflow is live, partial, or configuration-only
+so the dashboard never implies complete Dyno parity where it does not exist.
+The checked-in [`FEATURE_COVERAGE.md`](FEATURE_COVERAGE.md) is the detailed
+release truth table and explicitly lists every remaining parity gap.
+
+Implemented live workflows include AFK statuses/notes, event logs, welcome and
+announcements, auto-delete, scheduled messages and purge, autoban, deterministic
+automod, autoresponders, autoroles/ranks, chat XP, reminders, highlights, tags,
+slowmode, starboard, reaction-based role menus, tickets with transcripts,
+reaction-entry timed giveaways,
+web forms and submission automation, Reddit/YouTube public feeds, voice-text
+links and utility/fun commands. Existing confirmed administration actions,
+custom commands, moderation review, economy and localization remain integrated.
+Third-party networks may still require their own free developer credentials or
+impose upstream quotas; SefBot itself does not charge to unlock them.
+
+Reddit and YouTube polling use public feeds. Twitch and Kick use official app
+access tokens generated from `SEFBOT_TWITCH_CLIENT_ID` /
+`SEFBOT_TWITCH_CLIENT_SECRET` and `SEFBOT_KICK_CLIENT_ID` /
+`SEFBOT_KICK_CLIENT_SECRET`. TikTok's official Display API requires the creator
+to authorize `video.list`; put that access token in
+`SEFBOT_TIKTOK_ACCESS_TOKEN`. Credentials remain environment-only and are never
+returned through the dashboard.
+
 ## Privacy, legal pages, and service health
 
 - Terms: [kozzyx.org/sefbot/terms](https://kozzyx.org/sefbot/terms)
@@ -54,6 +97,9 @@ PYTHONPATH=src python -m sefbot.bot
 - `/privacy status|opt-in|opt-out|export|delete` remains private and available without accepting the ToS. ToS acceptance is not raw-history consent.
 - Moderation, server rules, raw history, and voice transcription are disabled by default. Voice transcription additionally requires participant consent in the exact guild.
 - The built-in HTTP service exposes `/healthz` for liveness and `/readyz` for sanitized Discord/database readiness. `SEFBOT_PRIVACY_CONTACT` defaults to `privacy@opsef.bot`; `PORT` defaults to `8080`.
+- The authenticated dashboard is at `/dashboard`. Public forms are under
+  `/forms/<server-id>/<form-slug>` and are available only when that exact form
+  and the Forms module are enabled.
 - Changing the legal version invalidates earlier acceptance, so users review material policy changes before resuming normal commands.
 
 ## Modular AI features
@@ -106,6 +152,8 @@ All bot code lives in `src/sefbot/` (run with `PYTHONPATH=src python -m sefbot.b
 - `voice.py` — `/join` `/leave` `/say` and Whisper live transcription
 - `rules.py` — server ruleset + approval-gated enforcement (Approve/Deny buttons)
 - `web.py` — legal pages plus liveness/readiness HTTP endpoints
+- `dashboard.py` / `module_catalog.py` — authenticated module dashboard, public forms and shared schemas
+- `community.py` — dashboard-driven Discord events, automations, feeds, support and engagement workflows
 
 ## Deployment
 

@@ -40,6 +40,37 @@ class IsolatedDatabaseTest(unittest.TestCase):
 
 
 class CapabilityCatalogTest(IsolatedDatabaseTest):
+    def test_assistant_prompt_allows_one_confirmed_action_only(self) -> None:
+        assistant = brain.build_system(
+            "1", "tester", "rename <@123456789012345678> to Raven",
+            Scope.guild(99).key, server_name="lab", assistant=True,
+        )
+        ordinary = brain.build_system(
+            "1", "tester", "rename <@123456789012345678> to Raven",
+            Scope.guild(99).key, server_name="lab",
+        )
+        self.assertIn("exactly ONE proposal", assistant)
+        self.assertIn("awaiting confirmation", assistant)
+        self.assertNotIn("actions MUST always be an empty list", assistant)
+        self.assertIn("actions MUST always be an empty list", ordinary)
+
+    def test_assistant_prompt_knows_confirmed_action_history(self) -> None:
+        scope = Scope.guild(99).key
+        db.record_assistant_action(
+            actor_id="1", scope_id=scope, channel_id="10",
+            action="set_nickname", target_id="2", parameters={},
+            result="set nickname to Raven",
+            inverse={"type": "set_nickname", "target_user": "2", "nickname": "Before"},
+            source_nonce="prompt-history",
+        )
+        prompt = brain.build_system(
+            "1", "tester", "what did you change?", scope,
+            server_name="lab", assistant=True,
+        )
+        self.assertIn("CONFIRMED ASSISTANT ACTION HISTORY", prompt)
+        self.assertIn("set_nickname target=2", prompt)
+        self.assertIn("set nickname to Raven", prompt)
+
     def test_system_prompt_includes_capabilities_and_code_secrecy(self) -> None:
         prompt = brain.build_system(
             "1", "tester", "what can you do", Scope.guild(99).key, server_name="lab"

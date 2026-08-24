@@ -205,15 +205,63 @@ class StatePersistenceTest(unittest.TestCase):
             }
         )
         db.cli_active_touch("606", "session")
+        db.record_assistant_action(
+            actor_id="606",
+            scope_id="guild:1",
+            channel_id="10",
+            action="set_nickname",
+            target_id="607",
+            parameters={"nickname": "new"},
+            result="set nickname",
+            inverse={"type": "set_nickname", "target_user": "607", "nickname": "old"},
+            source_nonce="privacy-test",
+        )
 
         exported = db.privacy_export("606")
         self.assertEqual(len(exported["dynamic_blocks"]), 1)
         self.assertEqual(len(exported["dm_contacts"]), 1)
+        self.assertEqual(len(exported["assistant_actions"]), 1)
         deleted = db.privacy_delete_user("606")
         self.assertEqual(deleted["dynamic_blocks"], 1)
         self.assertEqual(deleted["dm_contacts"], 1)
         self.assertEqual(deleted["cli_active_conversations"], 1)
+        self.assertEqual(deleted["assistant_action_history"], 1)
         self.assertFalse(blocked.is_dynamically_blocked("606"))
+
+    def test_assistant_action_history_is_scope_bound_and_consumable(self) -> None:
+        first_id = db.record_assistant_action(
+            actor_id="10",
+            scope_id="guild:1",
+            channel_id="20",
+            action="set_nickname",
+            target_id="11",
+            parameters={"nickname": "Raven"},
+            result="set nickname to Raven",
+            inverse={"type": "set_nickname", "target_user": "11", "nickname": "Before"},
+            source_nonce="first",
+        )
+        self.assertEqual(first_id, db.latest_assistant_action("10", "guild:1")["id"])
+        self.assertIsNone(db.latest_assistant_action("10", "guild:2"))
+        self.assertIsNone(db.latest_assistant_action("99", "guild:1"))
+
+        db.record_assistant_action(
+            actor_id="10",
+            scope_id="guild:1",
+            channel_id="20",
+            action="set_nickname",
+            target_id="11",
+            parameters={"nickname": "Before"},
+            result="restored nickname",
+            inverse={"type": "set_nickname", "target_user": "11", "nickname": "Raven"},
+            source_nonce="second",
+            consumed_action_id=first_id,
+        )
+        latest = db.latest_assistant_action("10", "guild:1")
+        self.assertNotEqual(first_id, latest["id"])
+        self.assertEqual("Raven", latest["inverse"]["nickname"])
+        history = db.recent_assistant_actions("10", "guild:1")
+        self.assertEqual(2, len(history))
+        self.assertIsNotNone(history[1]["consumed"])
 
     def test_version_three_database_upgrades_without_replaying_rescope(self) -> None:
         connection = db.conn()
@@ -234,7 +282,10 @@ class StatePersistenceTest(unittest.TestCase):
         db.close()
 
         upgraded = db.conn()
-        self.assertEqual(upgraded.execute("PRAGMA user_version").fetchone()[0], 4)
+        self.assertEqual(
+            upgraded.execute("PRAGMA user_version").fetchone()[0],
+            db.LATEST_SCHEMA_VERSION,
+        )
         row = upgraded.execute(
             "SELECT scope_id,name FROM commands WHERE scope_id=? AND name=?",
             ("guild:1", "hello"),

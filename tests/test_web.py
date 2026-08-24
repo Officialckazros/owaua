@@ -9,6 +9,7 @@ from unittest import mock
 
 from aiohttp.test_utils import TestClient, TestServer
 
+from sefbot.legal import LEGAL_EFFECTIVE_DATE, LEGAL_VERSION
 from sefbot.web import (
     ReadinessState,
     WebConfigurationError,
@@ -55,8 +56,8 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
                 body = await response.text()
                 self.assertIn("OpSef", body)
                 if path != "/sefbot":
-                    self.assertIn("Version 3.0", body)
-                    self.assertIn("effective 19 August 2026", body)
+                    self.assertIn(f"Version {LEGAL_VERSION}", body)
+                    self.assertIn(f"effective {LEGAL_EFFECTIVE_DATE}", body)
 
     async def test_legal_pages_match_the_running_privacy_model(self) -> None:
         terms = await (await self.client.get("/sefbot/terms")).text()

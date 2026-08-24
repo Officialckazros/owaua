@@ -25,12 +25,14 @@ from sefbot import (
     blocked,
     brain,
     ckazros,
+    community,
     config,
     customcmds,
     db,
     dm,
     embeds,
     kb,
+    levels,
     moderation,
     multilingual,
     music,
@@ -41,6 +43,7 @@ from sefbot import (
     tos,
     voice,
 )
+from sefbot.dashboard import DashboardAuthConfig
 from sefbot.scope import Scope, scope_key
 from sefbot.services.llm_client import llm as _llm
 from sefbot.web import ReadinessState, WebService
@@ -103,6 +106,7 @@ _chat_last: dict = {}
 INTENTS = discord.Intents.default()
 INTENTS.message_content = True
 INTENTS.reactions = True
+INTENTS.members = True
 
 class SefBotClient(discord.Client):
     """Own every process-lifetime resource and close it deterministically."""
@@ -131,6 +135,18 @@ class SefBotClient(discord.Client):
             readiness=self.readiness,
             host=config.WEB_HOST,
             port=config.WEB_PORT,
+            dashboard_token=config.DASHBOARD_TOKEN,
+            dashboard_auth=DashboardAuthConfig(
+                public_url=config.DASHBOARD_PUBLIC_URL,
+                session_secret=config.DASHBOARD_SESSION_SECRET,
+                firebase_api_key=config.FIREBASE_API_KEY,
+                firebase_auth_domain=config.FIREBASE_AUTH_DOMAIN,
+                firebase_project_id=config.FIREBASE_PROJECT_ID,
+                firebase_app_id=config.FIREBASE_APP_ID,
+                discord_client_id=config.DISCORD_CLIENT_ID,
+                discord_client_secret=config.DISCORD_CLIENT_SECRET,
+            ),
+            guild_provider=_dashboard_guilds,
         )
         await self.web_service.start()
 
@@ -160,6 +176,30 @@ _RECENT_MAX = 500
 _last_activity = {}
 _lurk_channels = {}
 
+
+def _dashboard_guilds() -> list[dict]:
+    """Return a sanitized live server snapshot for the local dashboard."""
+    output = []
+    for guild in list(getattr(client, "guilds", []))[:500]:
+        output.append(
+            {
+                "id": str(guild.id),
+                "name": guild.name,
+                "icon": str(guild.icon.url) if guild.icon else "",
+                "member_count": int(guild.member_count or 0),
+                "channels": [
+                    {"id": str(channel.id), "name": channel.name, "type": str(channel.type)}
+                    for channel in list(guild.channels)[:500]
+                ],
+                "roles": [
+                    {"id": str(role.id), "name": role.name, "color": str(role.color)}
+                    for role in list(guild.roles)[:500]
+                    if not role.is_default()
+                ],
+            }
+        )
+    return output
+
 UP, DOWN = "\U0001F44D", "\U0001F44E"
 
 _CLI_ACTIVE_TTL = 90
@@ -178,14 +218,17 @@ def _track(mid: int, user_msg: str, bot_msg: str, author: str) -> None:
 _tree = slash.setup(client, _track)
 
 
-async def _send(channel, embed, user_msg="", bot_msg="", author="", feedback=False, reference=None):
+async def _send(
+    channel, embed, user_msg="", bot_msg="", author="", feedback=False,
+    reference=None, view=None,
+):
     """Send an embed; fall back to plain text if embeds are blocked in-channel."""
     try:
-        sent = await channel.send(embed=embed, reference=reference)
+        sent = await channel.send(embed=embed, reference=reference, view=view)
     except discord.Forbidden:
         text = (getattr(embed, "description", None) or getattr(embed, "title", None) or "…")
         try:
-            sent = await channel.send(str(text)[:1900], reference=reference)
+            sent = await channel.send(str(text)[:1900], reference=reference, view=view)
         except (discord.Forbidden, discord.HTTPException):
             return None
     except discord.HTTPException:
@@ -193,6 +236,105 @@ async def _send(channel, embed, user_msg="", bot_msg="", author="", feedback=Fal
     if sent is not None and (user_msg or feedback):
         _track(sent.id, user_msg, bot_msg, author)
     return sent
+
+
+def _assistant_action_confirmation(
+    message: discord.Message,
+    proposal: dict,
+    *,
+    source: str = "message-assistant",
+    undo_record_id: int | None = None,
+) -> slash.InvokerConfirmation:
+    """Build an invoker-bound confirmation for a generated message action."""
+    correlation_id = secrets.token_hex(16)
+    action_name = actions.action_type(proposal) or "unknown"
+    audit_parameters = actions.audit_action_arguments(proposal)
+    scope_id = scope_key(
+        guild_id=getattr(message.guild, "id", None), user_id=message.author.id
+    )
+
+    async def _execute(confirmation: discord.Interaction) -> None:
+        inverse_seed = None
+        if confirmation.guild is None:
+            results = ["actions only work in a server"]
+        else:
+            try:
+                inverse_seed = await actions.prepare_inverse(
+                    proposal, confirmation.user, confirmation.guild,
+                    confirmation.channel,
+                )
+            except Exception:
+                _LOG.exception("could not capture assistant action undo state")
+            results = await actions.execute_all(
+                [proposal],
+                confirmation.user,
+                confirmation.guild,
+                confirmation.client,
+                confirmation.channel,
+                message,
+                confirmed=True,
+            )
+        ok = actions.action_results_ok(results, proposal)
+        result = "\n".join(results) or "nothing was executed"
+        if ok and actions.is_state_changing(proposal):
+            try:
+                inverse = await actions.finalize_inverse(
+                    inverse_seed, confirmation.guild
+                )
+                db.record_assistant_action(
+                    actor_id=str(confirmation.user.id),
+                    scope_id=scope_key(
+                        guild_id=confirmation.guild_id,
+                        user_id=confirmation.user.id,
+                    ),
+                    channel_id=str(confirmation.channel_id)
+                    if confirmation.channel_id is not None else None,
+                    action=action_name,
+                    target_id=actions.action_target_id(proposal),
+                    parameters=audit_parameters,
+                    result=result,
+                    inverse=inverse,
+                    source_nonce=view.nonce,
+                    consumed_action_id=undo_record_id,
+                )
+            except Exception:
+                _LOG.exception("could not persist assistant action history")
+        db.record_action_audit(
+            nonce=view.nonce,
+            actor_id=str(confirmation.user.id),
+            scope_id=scope_key(
+                guild_id=confirmation.guild_id, user_id=confirmation.user.id
+            ),
+            action=action_name,
+            target_id=actions.action_target_id(proposal),
+            parameters=audit_parameters,
+            source=source,
+            correlation_id=correlation_id,
+            status="completed" if ok else "failed",
+            result=result,
+        )
+        await confirmation.followup.send(
+            embed=embeds.ok(result) if ok else embeds.error(result), ephemeral=True
+        )
+
+    view = slash.InvokerConfirmation(
+        message.author.id,
+        _execute,
+        guild_id=getattr(message.guild, "id", None),
+        channel_id=message.channel.id,
+    )
+    db.record_action_audit(
+        nonce=view.nonce,
+        actor_id=str(message.author.id),
+        scope_id=scope_id,
+        action=action_name,
+        target_id=actions.action_target_id(proposal),
+        parameters=audit_parameters,
+        source=source,
+        correlation_id=correlation_id,
+        status="pending",
+    )
+    return view
 
 
 async def _send_private(message, embed) -> None:
@@ -423,7 +565,7 @@ def _channel_allowed(message) -> bool:
 
 
 async def _guild_sync(guild_id: int) -> List:
-    """Clear any guild-specific command overrides so global commands take precedence without duplicates."""
+    """Clear guild overrides so Discord displays the global catalog once."""
     g = discord.Object(id=int(guild_id))
     _tree.clear_commands(guild=g)
     return await _tree.sync(guild=g)
@@ -475,14 +617,14 @@ async def on_ready():
             # Sync global catalog for all servers, DMs, and user-install contexts
             synced = await _tree.sync()
             print(f"[slash] globally synced {len(synced)} commands")
-            # Clear duplicate guild-scoped commands so Discord displays each command exactly once
+            # Clear stale guild copies so commands are not shown twice.
             guild_ids = list(config.SYNC_GUILDS) if config.SYNC_GUILDS else [str(TARGET_SYNC_GUILD)]
             for g in client.guilds:
                 guild_ids.append(str(g.id))
             for guild_id in dict.fromkeys(guild_ids):
                 try:
                     await _guild_sync(int(guild_id))
-                    print(f"[slash] cleared duplicate guild commands for guild {guild_id}")
+                    print(f"[slash] cleared guild commands for guild {guild_id}")
                 except (TypeError, ValueError) as e:
                     print(f"[slash] invalid guild id {guild_id!r}: {e}")
                 except Exception as e:
@@ -493,6 +635,7 @@ async def on_ready():
     _start_background_task("reflection", _reflection_loop)
     _start_background_task("lurk", _lurk_loop)
     _start_background_task("retention", _retention_loop)
+    _start_background_task("community-scheduler", _community_scheduler_loop)
 
 
 @client.event
@@ -505,6 +648,16 @@ async def _retention_loop():
     while not client.is_closed():
         db.cleanup_expired_content(config.CONTENT_RETENTION_DAYS)
         await asyncio.sleep(86_400)
+
+
+async def _community_scheduler_loop():
+    await client.wait_until_ready()
+    while not client.is_closed():
+        try:
+            await community.scheduler_tick(client)
+        except Exception:
+            _LOG.exception("community scheduler tick failed")
+        await asyncio.sleep(30)
 
 
 async def _reflection_loop():
@@ -593,6 +746,7 @@ async def _lurk_tick():
 
 @client.event
 async def on_raw_reaction_add(payload):
+    await community.raw_reaction(client, payload)
     if payload.user_id == client.user.id or payload.message_id not in _recent:
         return
     if config.is_blocked(payload.user_id):
@@ -611,6 +765,74 @@ async def on_raw_reaction_add(payload):
         db.relationship_set(uid, gid, delta=0.08 if up else -0.1)
 
     client.loop.run_in_executor(None, _write)
+
+
+async def _award_xp(message: discord.Message, guild_id: str, author: str, boosting: bool) -> None:
+    """Grant chat XP (cooldown-gated); announce level-ups."""
+    import functools
+
+    module = db.module_config(guild_id, "levels")
+    if not module["enabled"]:
+        return
+    settings = module["settings"]
+    member_roles = {str(role.id) for role in getattr(message.author, "roles", [])}
+    if str(message.channel.id) in {str(value) for value in settings.get("ignored_channel_ids", [])}:
+        return
+    if member_roles & {str(value) for value in settings.get("ignored_role_ids", [])}:
+        return
+    allowed_channels = {str(value) for value in settings.get("allowed_channel_ids", [])}
+    if allowed_channels and str(message.channel.id) not in allowed_channels:
+        return
+    allowed_roles = {str(value) for value in settings.get("allowed_role_ids", [])}
+    if allowed_roles and not member_roles & allowed_roles:
+        return
+    result = await client.loop.run_in_executor(
+        None,
+        functools.partial(
+            levels.award_message,
+            author,
+            guild_id,
+            is_boosting=boosting,
+            settings=settings,
+            channel_id=str(message.channel.id),
+        ),
+    )
+    if not result or "leveled_to" not in result:
+        return
+    new_level = int(result["leveled_to"])
+    title = levels.level_title(new_level)
+    perk = " (booster xp boost)" if boosting else ""
+    try:
+        target_channel = message.channel
+        configured_channel = str(settings.get("level_up_channel_id") or "")
+        if configured_channel.isdigit() and message.guild:
+            target_channel = message.guild.get_channel(int(configured_channel)) or message.channel
+        template = str(settings.get("level_up_message") or "{user.mention} reached level **{level}**!")
+        level_text = (
+            template.replace("{user.mention}", message.author.mention)
+            .replace("{user.name}", message.author.display_name)
+            .replace("{level}", str(new_level))
+        )
+        if isinstance(message.author, discord.Member) and message.guild:
+            for reward in settings.get("reward_roles", [])[:100]:
+                if not isinstance(reward, dict) or int(reward.get("level") or -1) != new_level:
+                    continue
+                role_id = str(reward.get("role_id") or "")
+                role = message.guild.get_role(int(role_id)) if role_id.isdigit() else None
+                if role:
+                    try:
+                        await message.author.add_roles(role, reason=f"Level {new_level} reward")
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
+        await _send(
+            target_channel,
+            embeds.ok(
+                f"{level_text}\n{title}{perk}"
+            ),
+            feedback=False,
+        )
+    except discord.HTTPException:
+        pass
 
 
 async def _enforce_tos_violation(
@@ -709,6 +931,65 @@ async def _check_trivia_answer(message: discord.Message, scope_id: str) -> bool:
 
 
 @client.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    if before.premium_since != after.premium_since:
+        notice = await levels.handle_member_update(before, after)
+        if notice:
+            print(f"[boost] {notice}")
+    before_roles = {role.id for role in before.roles}
+    after_roles = {role.id for role in after.roles}
+    added = [role.mention for role in after.roles if role.id in after_roles - before_roles]
+    removed = [role.name for role in before.roles if role.id in before_roles - after_roles]
+    if added or removed:
+        detail = f"{after.mention} (`{after.id}`)"
+        if added:
+            detail += "\nAdded: " + ", ".join(added)
+        if removed:
+            detail += "\nRemoved: " + ", ".join(removed)
+        _start_message_task(
+            community.event_log(after.guild, "member", "Member roles updated", detail)
+        )
+    if before.timed_out_until != after.timed_out_until:
+        _start_message_task(
+            community.event_log(
+                after.guild,
+                "moderation",
+                "Member timeout updated",
+                f"{after.mention} (`{after.id}`): {after.timed_out_until or 'cleared'}",
+            )
+        )
+
+
+@client.event
+async def on_member_join(member: discord.Member):
+    await community.member_join(member)
+
+
+@client.event
+async def on_member_remove(member: discord.Member):
+    await community.member_remove(member)
+
+
+@client.event
+async def on_member_ban(guild: discord.Guild, user: discord.User):
+    await community.member_ban(guild, user)
+
+
+@client.event
+async def on_member_unban(guild: discord.Guild, user: discord.User):
+    await community.event_log(
+        guild, "moderation", "Member unbanned", f"{user} (`{user.id}`) was unbanned."
+    )
+
+
+@client.event
+async def on_voice_state_update(
+    member: discord.Member, before: discord.VoiceState, after: discord.VoiceState
+):
+    await community.voice_update(member, before, after)
+
+
+@client.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
@@ -732,6 +1013,8 @@ async def on_message(message: discord.Message):
         return
 
     if message.guild is not None and message.content:
+        if await community.handle_message(message):
+            return
         _start_message_task(moderation.safety_check(message))
         if config.RULES_ENABLED:
             _start_message_task(rules.check_message(client, message))
@@ -754,6 +1037,10 @@ async def on_message(message: discord.Message):
 
     if await _check_trivia_answer(message, guild_id):
         return
+
+    if message.guild and content and not is_dm:
+        boosting = levels.is_booster(message.author)
+        _start_message_task(_award_xp(message, guild_id, author, boosting))
 
     directed = bool(
         content.startswith(config.PREFIX)
@@ -838,6 +1125,83 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
     _start_message_task(moderation.safety_check(after))
     if config.RULES_ENABLED:
         _start_message_task(rules.check_message(client, after))
+    _start_message_task(community.message_edit(before, after))
+
+
+@client.event
+async def on_message_delete(message: discord.Message):
+    await community.message_delete(message)
+
+
+@client.event
+async def on_bulk_message_delete(messages: list[discord.Message]):
+    first = next((message for message in messages if message.guild), None)
+    if first and first.guild:
+        await community.event_log(
+            first.guild,
+            "message",
+            "Bulk message deletion",
+            f"Deleted **{len(messages)}** messages in {first.channel.mention}.",
+            channel=first.channel,
+        )
+
+
+@client.event
+async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
+    await community.raw_reaction(client, payload, added=False)
+
+
+@client.event
+async def on_guild_role_create(role: discord.Role):
+    await community.event_log(role.guild, "default", "Role created", f"{role.mention} (`{role.id}`) was created.")
+
+
+@client.event
+async def on_guild_role_delete(role: discord.Role):
+    await community.event_log(role.guild, "default", "Role deleted", f"**{role.name}** (`{role.id}`) was deleted.")
+
+
+@client.event
+async def on_guild_role_update(before: discord.Role, after: discord.Role):
+    await community.event_log(after.guild, "default", "Role updated", f"**{before.name}** → **{after.name}** (`{after.id}`).")
+
+
+@client.event
+async def on_guild_channel_create(channel: discord.abc.GuildChannel):
+    await community.event_log(channel.guild, "default", "Channel created", f"**{channel.name}** (`{channel.id}`) was created.", channel=channel)
+
+
+@client.event
+async def on_guild_channel_delete(channel: discord.abc.GuildChannel):
+    await community.event_log(channel.guild, "default", "Channel deleted", f"**{channel.name}** (`{channel.id}`) was deleted.")
+
+
+@client.event
+async def on_guild_channel_update(
+    before: discord.abc.GuildChannel, after: discord.abc.GuildChannel
+):
+    await community.event_log(after.guild, "default", "Channel updated", f"**{before.name}** → **{after.name}** (`{after.id}`); permissions or settings changed.", channel=after)
+
+
+@client.event
+async def on_guild_emojis_update(
+    guild: discord.Guild,
+    before: tuple[discord.Emoji, ...],
+    after: tuple[discord.Emoji, ...],
+):
+    before_map, after_map = {e.id: e.name for e in before}, {e.id: e.name for e in after}
+    created = [name for eid, name in after_map.items() if eid not in before_map]
+    deleted = [name for eid, name in before_map.items() if eid not in after_map]
+    renamed = [f"{before_map[eid]} → {after_map[eid]}" for eid in before_map.keys() & after_map.keys() if before_map[eid] != after_map[eid]]
+    detail = "\n".join(
+        part for part in (
+            "Created: " + ", ".join(created) if created else "",
+            "Deleted: " + ", ".join(deleted) if deleted else "",
+            "Renamed: " + ", ".join(renamed) if renamed else "",
+        ) if part
+    )
+    if detail:
+        await community.event_log(guild, "default", "Emoji update", detail)
 
 
 def _strip_mention(text: str) -> str:
@@ -1083,6 +1447,21 @@ async def _chat(
     # Model classifications are advisory only. They never delete content or
     # globally block a user without staff review.
 
+    proposals = actions.assistant_proposals(data.get("actions")) if assistant else []
+    requested_action = assistant and actions.looks_like_action_request(query)
+    if proposals and message.guild is not None:
+        response = (
+            f"Ready to `{actions.preview_action(proposals[0])}`. Nothing has changed "
+            "yet; use Confirm below to execute it."
+        )
+    elif requested_action and message.guild is None:
+        response = "Discord actions only work inside a server; nothing was changed."
+    elif requested_action and not proposals:
+        response = (
+            "I couldn't resolve that into one safe Discord action, so nothing was "
+            "changed. Mention the exact user, role, or channel and try again."
+        )
+
     brain.persist_memories(data.get("memories"), author, guild_id)
     brain.apply_relationship(data, author, guild_id)
     brain.apply_quotes(data, guild_id, author)
@@ -1091,8 +1470,8 @@ async def _chat(
         db.convo_add(author, guild_id, "user", query)
         db.convo_add(author, guild_id, "bot", response)
 
-    # Ordinary chat is response-only. State changes are available through the
-    # explicit /act confirmation flow.
+    # Ordinary chat stays response-only. Explicit assistant turns may render one
+    # invoker-bound proposal, but execution still requires a human click.
     summaries = []
     image = actions.chart_url(data.get("chart")) if data.get("chart") else None
 
@@ -1104,7 +1483,23 @@ async def _chat(
         embeds.add_support_resources(embed)
     if search_sources:
         embeds.add_sources(embed, search_sources)
-    await _send(message.channel, embed, user_msg=query, bot_msg=response, author=author, reference=message)
+    view = (
+        _assistant_action_confirmation(
+            message,
+            proposals[0],
+            source="message-ckazros" if owner_command else "message-assistant",
+        )
+        if proposals and message.guild is not None else None
+    )
+    await _send(
+        message.channel,
+        embed,
+        user_msg=query,
+        bot_msg=response,
+        author=author,
+        reference=message,
+        view=view,
+    )
 
 
 async def _handle_command(message, body, guild_id, author):
@@ -1113,11 +1508,12 @@ async def _handle_command(message, body, guild_id, author):
         return
     name = parts[0].lower()
     arg = parts[1] if len(parts) > 1 else ""
-
-    if config.is_blocked(author) and name not in {
+    privacy_commands = {
         "privacy", "privacypolicy", "tos", "terms", "termsofservice",
         "help", "about", "status",
-    }:
+    }
+
+    if config.is_blocked(author) and name not in privacy_commands:
         return
 
     if not tos.has_accepted(author) and not tos.command_allowed_without_tos(name):
@@ -1202,6 +1598,12 @@ async def _handle_command(message, body, guild_id, author):
         "gamble": _cmd_gamble,
         "work": _cmd_work,
         "leaderboard": _cmd_leaderboard,
+        "rank": _cmd_rank,
+        "xptop": _cmd_xptop,
+        "daily": _cmd_daily,
+        "boost": _cmd_boostperks,
+        "boostperks": _cmd_boostperks,
+        "boosterrole": _cmd_boosterrole,
         "opsec": _cmd_opsec,
         "gayrate": _cmd_gayrate,
         "user": _cmd_user,
@@ -1211,8 +1613,69 @@ async def _handle_command(message, body, guild_id, author):
         "server": _cmd_server,
         "serverinfo": _cmd_server,
     }
+
+    if message.guild is not None and name not in privacy_commands:
+        controls = db.module_config(guild_id, "bot_controls")
+        if controls["enabled"]:
+            settings = controls["settings"]
+            role_ids = {str(role.id) for role in getattr(message.author, "roles", [])}
+            channel_id = str(message.channel.id)
+            blocked = name in {str(value).lower() for value in settings.get("disabled_commands", [])}
+            blocked = blocked or bool(role_ids & {str(value) for value in settings.get("ignored_role_ids", [])})
+            blocked = blocked or channel_id in {str(value) for value in settings.get("ignored_channel_ids", [])}
+            allowed_roles = {str(value) for value in settings.get("allowed_role_ids", [])}
+            allowed_channels = {str(value) for value in settings.get("allowed_channel_ids", [])}
+            if allowed_roles and not role_ids & allowed_roles:
+                blocked = True
+            if allowed_channels and channel_id not in allowed_channels:
+                blocked = True
+            if blocked:
+                await _send(
+                    message.channel,
+                    embeds.error("this command is disabled for you or this channel."),
+                    feedback=False,
+                )
+                return
+
+        command_modules = {
+            "balance": "economy", "gamble": "economy", "work": "economy",
+            "leaderboard": "economy", "daily": "economy", "opsec": "economy",
+            "gayrate": "fun", "8ball": "fun", "ship": "fun",
+            "roastbattle": "fun", "trivia": "fun", "whoami": "fun",
+            "rank": "levels", "xptop": "levels", "boost": "levels",
+            "boostperks": "levels", "boosterrole": "levels",
+            "nuke": "moderation", "purge": "moderation",
+            "language": "localization", "lang": "localization",
+        }
+        module_name = command_modules.get(name)
+        if module_name and not db.module_config(guild_id, module_name)["enabled"]:
+            # `rank` is also the self-assignable-rank command when Levels is off.
+            if not (
+                name == "rank" and db.module_config(guild_id, "autoroles")["enabled"]
+            ):
+                await _send(
+                    message.channel,
+                    embeds.error(f"the {module_name.replace('_', ' ')} module is disabled."),
+                    feedback=False,
+                )
+                return
+            handlers.pop("rank", None)
+
     if name in handlers:
         await handlers[name](message, arg, guild_id, author)
+        return
+
+    if await community.handle_prefix_command(message, name, arg):
+        return
+
+    if message.guild is not None and not db.module_config(
+        guild_id, "custom_commands"
+    )["enabled"]:
+        await _send(
+            message.channel,
+            embeds.error("the custom commands module is disabled."),
+            feedback=False,
+        )
         return
 
     db.log_interaction("command", author, guild_id)
@@ -1238,11 +1701,15 @@ async def _cmd_help(message, arg, guild_id, author):
         f"**vibe** `{p}mood` `{p}vibecheck` `{p}recap [day|week]` `{p}persona`\n"
         f"**quotes** `{p}quote add|random|list|del`\n"
         f"**games** `{p}ship @a @b` `{p}8ball` `{p}roastbattle @user` `{p}trivia` `{p}whoami`\n"
-        f"**economy** `{p}balance [@user]` `{p}gamble <amount|all>` `{p}work` `{p}leaderboard` `{p}opsec [@user]` `{p}gayrate [@user]`\n"
+        f"**economy** `{p}balance [@user]` `{p}wallet` `{p}pay` `{p}gamble` `{p}work` `{p}daily` `{p}pack` `{p}cards` `{p}fuse` `{p}deck` `{p}battle` `{p}leaderboard`\n"
+        f"**levels** `{p}rank [@user]` `{p}xptop` — boosters earn 1.5x xp\n"
+        f"**community modules** `{p}afk` `{p}remind` `{p}highlight` `{p}tag` `{p}ranks` `{p}ticket` `{p}form` `{p}giveaway`\n"
+        f"**utilities** `{p}coinflip` `{p}dice` `{p}rps` `{p}poll` `{p}cat` `{p}dog` `{p}pug` `{p}dadjoke` `{p}pokemon` `{p}itunes` `{p}github` `{p}iss` `{p}distance`\n"
+        f"**boosters** `{p}boostperks` `{p}boosterrole <#hex> [name]` — custom role + economy perks\n"
         f"**ask** `{p}ask <question>` — ask the DeepSeek V4 Flash model directly\n"
         f"**learn** `{p}cybersec <topic>` (smartest model) · `{p}search <query>`\n"
         f"**music** `{p}music <song name>` — returns a validated search/watch link\n"
-        f"**assistant** `{p}assistant <request>` — one-shot response-only helpful mode\n"
+        f"**assistant** `{p}assistant <request>` — confirmed Discord actions; `{p}assistant undo` reverts the last reversible one\n"
         f"**owner** `{p}ckazros <anything>` — do it; standing orders (speak Hebrew, etc.) stick until `{p}ckazros clear`\n"
         f"**language** `{p}language [name]` — replies in that language (`{p}language hebrew`; `{p}language reset`)\n"
         f"**mode** `{p}mode freaky` `{p}mode normal` — toggle horny mommy mode for this user\n"
@@ -1428,7 +1895,9 @@ async def _cmd_gamble(message, arg, guild_id, author):
     if amount > balance:
         await _send(message.channel, embeds.error("You don't have that much money."), feedback=False)
         return
-    win = secrets.SystemRandom().random() < 0.4
+    win = secrets.SystemRandom().random() < levels.gamble_win_chance(
+        levels.is_booster(message.author)
+    )
     if win:
         opsec.add_balance(author, amount)
         await _send(message.channel, embeds.say(f"You won ${amount}!"), feedback=False)
@@ -1438,13 +1907,18 @@ async def _cmd_gamble(message, arg, guild_id, author):
 
 
 async def _cmd_work(message, arg, guild_id, author):
-    remaining = opsec.work_cooldown_left(author)
+    boosting = levels.is_booster(message.author)
+    cooldown = levels.work_cooldown_seconds(boosting)
+    remaining = opsec.work_cooldown_left(author, cooldown)
     if remaining:
         await _send(message.channel, embeds.error(
             f"You need to wait {remaining} more second{'' if remaining == 1 else 's'} before working again."),
             feedback=False)
         return
-    reward, balance, position = opsec.perform_work(author)
+    multiplier = 1.0 + (levels.BOOSTER_WORK_BONUS if boosting else 0.0)
+    reward, balance, position = opsec.perform_work(
+        author, cooldown_seconds=cooldown, reward_multiplier=multiplier
+    )
     await _send(message.channel, embeds.say(
         f"You worked as a {position} and earned ${reward}. Your balance is now ${balance}."),
         feedback=False)
@@ -1460,6 +1934,67 @@ async def _cmd_leaderboard(message, arg, guild_id, author):
         for idx, (uid, rec) in enumerate(rows)
     )
     await _send(message.channel, embeds.say(body, title="Money Leaderboard"), feedback=False)
+
+
+async def _cmd_rank(message, arg, guild_id, author):
+    target = message.mentions[0] if message.mentions else message.author
+    body = levels.rank_card(str(target.id), guild_id)
+    boosting = levels.is_booster(target)
+    if boosting:
+        body += "\nbooster: **1.5x xp** active"
+    await _send(message.channel,
+                embeds.say(body, title=f"rank — {target.display_name}"), feedback=False)
+
+
+async def _cmd_xptop(message, arg, guild_id, author):
+    rows = db.levels_top(guild_id, 10)
+    if not rows:
+        await _send(
+            message.channel,
+            embeds.say("no xp recorded yet — start chatting."),
+            feedback=False,
+        )
+        return
+    body = "\n".join(
+        f"{idx + 1}. <@{r['user_id']}> — level {r['level']} ({r['xp']} xp)"
+        for idx, r in enumerate(rows)
+    )
+    await _send(message.channel, embeds.say(body, title="xp leaderboard"), feedback=False)
+
+
+async def _cmd_daily(message, arg, guild_id, author):
+    if message.guild is None:
+        await _send(message.channel, embeds.error("daily claims work in servers."), feedback=False)
+        return
+    claim_embed, ok = levels.build_daily_reply(author, guild_id, levels.is_booster(message.author))
+    await _send(message.channel, claim_embed, feedback=False)
+
+
+async def _cmd_boostperks(message, arg, guild_id, author):
+    boosting = levels.is_booster(message.author)
+    await _send(
+        message.channel,
+        embeds.say(levels.perks_summary(boosting), title="booster perks"),
+        feedback=False,
+    )
+
+
+async def _cmd_boosterrole(message, arg, guild_id, author):
+    parts = (arg or "").split(maxsplit=1)
+    if not parts:
+        await _send(
+            message.channel,
+            embeds.error(f"usage: `{config.PREFIX}boosterrole <#hexcolor> [role name]`"),
+            feedback=False,
+        )
+        return
+    if not isinstance(message.author, discord.Member) or message.guild is None:
+        await _send(message.channel, embeds.error("server boosters only."), feedback=False)
+        return
+    ok_flag, msg = await levels.set_booster_role(
+        message.author, parts[0], parts[1] if len(parts) > 1 else None
+    )
+    await _send(message.channel, embeds.ok(msg) if ok_flag else embeds.error(msg), feedback=False)
 
 
 async def _cmd_opsec(message, arg, guild_id, author):
@@ -1645,7 +2180,7 @@ async def _cmd_ask(message, arg, guild_id, author):
 
 
 async def _cmd_assistant(message, arg, guild_id, author):
-    """One-shot helpful mode: clear voice + max compliance for THIS request only.
+    """One-shot helpful mode with confirmed Discord actions for this request.
 
     Normal @mentions / DMs stay full chaotic SefBot. Sticky mode is intentionally
     gone — people hated permanent corporate-assistant vibes.
@@ -1664,6 +2199,7 @@ async def _cmd_assistant(message, arg, guild_id, author):
             f"`{p}assistant <request>` — this one reply is clear + compliant "
             f"(roles, kicks, timeouts, nicknames, answers, etc.)\n\n"
             f"example: `{p}assistant give @user the Moderator role`\n"
+            f"revert the last reversible action: `{p}assistant undo`\n"
             "discord still gates actions by *your* permissions. "
             "there is no sticky on/off — @ me again and i'm chaotic again."
         )
@@ -1672,6 +2208,48 @@ async def _cmd_assistant(message, arg, guild_id, author):
         return
 
     db.log_interaction("assistant", author, guild_id)
+    if actions.is_undo_request(raw):
+        previous = db.latest_assistant_action(author, guild_id)
+        if previous is None:
+            await _send(
+                message.channel,
+                embeds.error(
+                    "I don't have a previous confirmed assistant action to revert "
+                    "in this server."
+                ),
+                feedback=False,
+                reference=message,
+            )
+            return
+        proposals = actions.assistant_proposals([previous.get("inverse")])
+        if not proposals or message.guild is None:
+            await _send(
+                message.channel,
+                embeds.error(
+                    f"The last confirmed action was `{previous['action']}`, but it "
+                    "cannot be safely reversed automatically."
+                ),
+                feedback=False,
+                reference=message,
+            )
+            return
+        proposal = proposals[0]
+        view = _assistant_action_confirmation(
+            message, proposal, undo_record_id=int(previous["id"])
+        )
+        await _send(
+            message.channel,
+            embeds.say(
+                f"Ready to revert `{previous['action']}` with "
+                f"`{actions.preview_action(proposal)}`. Nothing has changed yet; "
+                "use Confirm below.",
+                title="assistant · revert",
+            ),
+            feedback=False,
+            reference=message,
+            view=view,
+        )
+        return
     await _chat(message, raw, guild_id, author, force_assistant=True)
 
 

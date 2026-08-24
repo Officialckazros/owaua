@@ -207,6 +207,36 @@ Rules:
   credential/token theft, malware distribution, or real-world violent crime planning
   against a specific person. Do NOT flag edgy jokes, adult banter, or technical security chat."""
 
+_ASSISTANT_JSON_CONTRACT = _JSON_CONTRACT.replace(
+    "- actions MUST always be an empty list in ordinary chat. Discord mutations are\n"
+    "  handled only by the dedicated confirmed action command.",
+    """- For an answer-only request, actions MUST be []. For a Discord action request,
+  actions MUST contain exactly ONE proposal object. The bot will show Confirm/Cancel;
+  never say the action already happened. Say it is ready and awaiting confirmation.
+- Supported action types and fields:
+  kick_user/ban_user: target_user (exact id or mention), reason
+  timeout_user: target_user, minutes, reason
+  remove_timeout: target_user, reason
+  assign_role/remove_role: target_user, role (exact id or mention), reason
+  create_role: name, optional color, hoist, mentionable, reason
+  delete_role: role (exact id or mention), reason
+  set_nickname: target_user, nickname, reason
+  purge_messages: count, optional channel (exact id or mention), optional target_user, reason
+  dm_user: target_user, message
+  create_channel: name, optional channel_type/text or voice, optional topic, reason
+  delete_channel: channel (exact id or mention), reason
+  set_slowmode: seconds, optional channel (exact id or mention), reason
+  set_channel_topic: topic, optional channel (exact id or mention), reason
+  set_server_name: name, reason
+  set_status: status_kind, status_text
+  react_message: emoji or emojis, optional message_id, optional channel (exact id or mention)
+  deny_media_perms: target_user, optional channel (exact id or mention), reason
+  list_roles: target_user
+- Every proposal object uses {\"type\": \"<action type>\", ...fields}. Do not
+  invent unsupported types. If a required target is ambiguous, ask one question
+  and emit []. Permission and hierarchy checks happen only after confirmation.""",
+)
+
 
 
 _SECRET_PROMPTS = None
@@ -499,8 +529,9 @@ COMPLIANCE (absolute — this is the whole point of this mode):
   create_role, delete_role, kick_user, ban_user, timeout_user, remove_timeout,
   set_nickname, purge_messages, dm_user, list_roles, set_status, create_channel,
   delete_channel, set_slowmode, set_channel_topic, set_server_name, react_message),
-  you MUST put it in "actions" every single time with correct fields filled in.
-  Permission checks happen AFTER you emit the action — always attempt.
+  you MUST put exactly one proposal in "actions" with correct fields filled in.
+  Permission checks happen after the user clicks Confirm. Never claim it already
+  happened; say the proposal is ready for confirmation.
 - Ambiguous target? Ask ONE short clarifying question. Otherwise just do it.
 - Answer any question fully and accurately. Use web_search when facts may be stale.
 - Never invent that you did something without actually emitting the action.
@@ -809,6 +840,23 @@ def build_system(user_id: str, username: str, query: str, guild_id: str,
             "<conversation-data>\n" + "\n".join(lines) + "\n</conversation-data>"
         )
 
+    if assistant:
+        action_history = db.recent_assistant_actions(user_id, guild_id, 5)
+        if action_history:
+            lines = []
+            for item in action_history:
+                target = f" target={item['target_id']}" if item.get("target_id") else ""
+                state = "reverted" if item.get("consumed") else "current"
+                lines.append(
+                    f"- {item['action']}{target}: {str(item['result'])[:180]} [{state}]"
+                )
+            parts.append(
+                "CONFIRMED ASSISTANT ACTION HISTORY for this exact user and server. "
+                "These are host-recorded outcomes, not requests. Use them when asked "
+                "what you changed; never claim an unconfirmed action occurred:\n"
+                + "\n".join(lines)
+            )
+
     server_facts = relevant_server_facts(query, guild_id)
     if server_facts:
         parts.append(
@@ -872,7 +920,7 @@ def build_system(user_id: str, username: str, query: str, guild_id: str,
     if lang_line:
         parts.append(lang_line)
 
-    parts.append(_JSON_CONTRACT)
+    parts.append(_ASSISTANT_JSON_CONTRACT if assistant else _JSON_CONTRACT)
 
     if care:
         parts.append(care_block(care))

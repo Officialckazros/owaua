@@ -27,6 +27,34 @@ Notes:
 ------------------------------------------------------------------------------
 !help                    Full command map.
 
+Dashboard-enabled community commands (available only when their module is on):
+!afk [reason]            Set AFK; `list`, `note @user text`, moderator `clear`.
+!remind 30m <text>       Set a personal reminder (s/m/h/d/w).
+!highlight add|delete    Manage personal highlight phrases.
+!tag create|delete|list  Manage reusable server tags; `!tag <name>` displays one.
+!ranks join|leave|list   Manage self-assignable ranks.
+!pay @user <amount>      Atomically transfer coins.
+!wallet [@user]          Show global coins and gems.
+!pack / !cards           Buy a three-card pack (100 coins) / list collection.
+!fuse <card name>        Fuse two duplicate cards into a stronger copy.
+!deck [set <ids>]        View or equip up to five owned cards.
+!battle @user            Resolve a PvP deck battle and record it in history.
+!announce <message>      Post to the configured announcement channel (moderator).
+!giveaway create 1h | 2 | Prize
+                         Start a timed giveaway; `end <message-id>` draws it.
+!ticket open <subject>   Open a private support ticket; `close`/`resolve` archives it.
+!form <slug>             Open a configured web form; member-only links arrive by DM.
+!coinflip / !dice [n]    Free utility games.
+!rps <choice>            Rock-paper-scissors.
+!poll Question | A | B   Reaction poll with up to ten options.
+!cat / !dog / !pug      Animal media.
+!dadjoke                Fetch a dad joke.
+!pokemon <name>          Pokémon information.
+!itunes <query>          Song information.
+!github owner/repo       GitHub repository information.
+!iss                     Current ISS coordinates.
+!distance a,b,c,d        Great-circle distance between coordinates.
+
 !teach <fact>            Teach a server fact (Manage Server); DMs teach yourself.
 
 !memories [@user]        List memories (with importance).
@@ -69,8 +97,9 @@ Notes:
 !reflect                 Force a learning pass now.
 
 !ask <question>          Ask the DeepSeek V4 Flash model directly (no persona).
-!assistant <request>     ONE-SHOT helpful mode (runs on DeepSeek V4 Flash).
+!assistant <request>     ONE-SHOT helpful mode; Discord actions require Confirm.
 !assist <request>        Alias of !assistant.
+!assistant undo          Revert your latest reversible confirmed assistant action.
 
 !language [name]         Set the language the bot replies to you in
                          (`!language hebrew`, `!language es`, `!language ja`).
@@ -90,8 +119,9 @@ Notes:
 Normal @mentions / DMs stay full chaotic SefBot. Only the !assistant command
 drops the savage tone and answers as a clear, compliant helper for THAT reply
 (roles, timeouts, nicknames, channels, factual answers, etc.). There is no
-sticky on/off — the next @mention is chaotic again. Ordinary chat never runs
-tools; confirmed `/act` requests recheck the exact permission and hierarchy.
+sticky on/off — the next @mention is chaotic again. Assistant actions render
+one Confirm/Cancel proposal and recheck the exact permission and hierarchy;
+ordinary mentions and DMs never run tools.
 
 !music <song name>       Return a validated YouTube search/watch link.
 !song                    Alias of !music. MP3 downloading was removed.

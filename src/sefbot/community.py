@@ -1,0 +1,1493 @@
+"""Dashboard-driven community-management runtime.
+
+This module intentionally keeps enforcement deterministic.  Dashboard rules
+are data, never Python or template code, and every destructive operation still
+depends on Discord's native permissions and hierarchy.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import fnmatch
+import html
+import io
+import json
+import math
+import re
+import secrets
+import time
+from collections import defaultdict, deque
+from datetime import timedelta
+from typing import Final
+from urllib.parse import quote, urlsplit
+
+import aiohttp
+import discord
+
+from sefbot import config as bot_config
+from sefbot import db, embeds
+from sefbot.scope import Scope
+
+_URL_RE: Final = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
+_INVITE_RE: Final = re.compile(
+    r"(?:https?://)?(?:www\.)?(?:discord(?:app)?\.com/invite|discord\.gg)/[\w-]+",
+    re.IGNORECASE,
+)
+_EMOJI_RE: Final = re.compile(r"<a?:\w{2,32}:\d+>|[\U0001F300-\U0001FAFF]")
+_DURATION_RE: Final = re.compile(r"^(\d+)(s|m|h|d|w)$", re.IGNORECASE)
+_rapid: dict[tuple[int, int], deque[float]] = defaultdict(deque)
+_duplicates: dict[tuple[int, int], tuple[str, float]] = {}
+_slow: dict[tuple[int, int], float] = {}
+_HTTP_HOSTS: Final = frozenset(
+    {
+        "dog.ceo", "icanhazdadjoke.com", "pokeapi.co", "itunes.apple.com",
+        "api.github.com", "api.wheretheiss.at", "www.reddit.com", "www.youtube.com",
+        "id.twitch.tv", "api.twitch.tv", "id.kick.com", "api.kick.com",
+        "open.tiktokapis.com",
+    }
+)
+_token_cache: dict[str, tuple[str, float]] = {}
+_CARDS: Final = (
+    {"name": "Cipher Fox", "atk": 18, "def": 12, "skill": "Packet Feint", "faction": "Neon", "lore": "A trickster born between two encrypted frames."},
+    {"name": "Iron Warden", "atk": 11, "def": 21, "skill": "Hard Lock", "faction": "Bastion", "lore": "It never opens the same port twice."},
+    {"name": "Null Siren", "atk": 22, "def": 8, "skill": "Silent Crash", "faction": "Void", "lore": "The last sound a dead process remembers."},
+    {"name": "Patch Witch", "atk": 15, "def": 16, "skill": "Hotfix", "faction": "Neon", "lore": "She repairs allies while production is still burning."},
+    {"name": "Root Golem", "atk": 17, "def": 19, "skill": "Privilege Rise", "faction": "Bastion", "lore": "Built from the permissions nobody meant to grant."},
+    {"name": "Cache Drake", "atk": 20, "def": 13, "skill": "Warm Start", "faction": "Ember", "lore": "It sleeps on the fastest path through memory."},
+    {"name": "Phantom Thread", "atk": 19, "def": 14, "skill": "Race Condition", "faction": "Void", "lore": "Seen only when the debugger looks away."},
+    {"name": "Solar Kernel", "atk": 16, "def": 20, "skill": "Core Flare", "faction": "Ember", "lore": "A tiny sun with an uptime obsession."},
+)
+
+
+def _scope(guild: discord.Guild | int) -> str:
+    return Scope.guild(guild if isinstance(guild, int) else guild.id).key
+
+
+def _cfg(guild: discord.Guild | int, module: str) -> dict:
+    return db.module_config(_scope(guild), module)
+
+
+def _channel(guild: discord.Guild, raw: object):
+    value = str(raw or "")
+    return guild.get_channel(int(value)) if value.isdigit() else None
+
+
+def _ids(values: object) -> set[str]:
+    return {str(value) for value in values} if isinstance(values, list) else set()
+
+
+def _member_roles(member: object) -> set[str]:
+    return {str(role.id) for role in getattr(member, "roles", [])}
+
+
+def _render(template: object, *, member=None, guild=None, channel=None, extra=None) -> str:
+    text = str(template or "")[:4000]
+    values = {
+        "user.id": str(getattr(member, "id", "")),
+        "user.name": str(getattr(member, "display_name", getattr(member, "name", "user"))),
+        "user.mention": str(getattr(member, "mention", "")),
+        "server.id": str(getattr(guild, "id", "")),
+        "server.name": str(getattr(guild, "name", "server")),
+        "server.members": str(getattr(guild, "member_count", 0) or 0),
+        "channel.id": str(getattr(channel, "id", "")),
+        "channel.name": str(getattr(channel, "name", "channel")),
+        "channel.mention": str(getattr(channel, "mention", "")),
+    }
+    for key, value in (extra or {}).items():
+        values[str(key)] = str(value)
+    for key, value in values.items():
+        text = text.replace("{" + key + "}", value)
+    return text[:2000]
+
+
+async def _safe_send(channel, content: str = "", *, embed=None, everyone: bool = False):
+    if channel is None or not hasattr(channel, "send"):
+        return None
+    try:
+        return await channel.send(
+            content=content[:2000] or None,
+            embed=embed,
+            allowed_mentions=discord.AllowedMentions(
+                everyone=everyone, users=True, roles=everyone, replied_user=False
+            ),
+        )
+    except (discord.Forbidden, discord.HTTPException):
+        return None
+
+
+async def _http_get(url: str, *, json_response: bool = True, headers: dict | None = None):
+    """Fetch one bounded response from the small fixed integration allowlist."""
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or (parsed.hostname or "").lower() not in _HTTP_HOSTS:
+        raise ValueError("unsupported integration endpoint")
+    timeout = aiohttp.ClientTimeout(total=10, connect=4)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.get(
+            url,
+            headers={"User-Agent": "SefBot/2.0 (community integrations)", **(headers or {})},
+            allow_redirects=False,
+        ) as response:
+            response.raise_for_status()
+            raw = await response.content.read(512_001)
+            if len(raw) > 512_000:
+                raise ValueError("integration response is too large")
+            if json_response:
+                return json.loads(raw.decode("utf-8"))
+            return raw.decode("utf-8", errors="replace")
+
+
+async def _http_post(
+    url: str,
+    *,
+    form: dict | None = None,
+    payload: dict | None = None,
+    headers: dict | None = None,
+):
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or (parsed.hostname or "").lower() not in _HTTP_HOSTS:
+        raise ValueError("unsupported integration endpoint")
+    timeout = aiohttp.ClientTimeout(total=10, connect=4)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(
+            url,
+            data=form,
+            json=payload,
+            headers={"User-Agent": "SefBot/2.0 (community integrations)", **(headers or {})},
+            allow_redirects=False,
+        ) as response:
+            response.raise_for_status()
+            raw = await response.content.read(512_001)
+            if len(raw) > 512_000:
+                raise ValueError("integration response is too large")
+            return json.loads(raw.decode("utf-8"))
+
+
+async def _app_token(provider: str) -> str:
+    cached = _token_cache.get(provider)
+    if cached and cached[1] > time.time() + 60:
+        return cached[0]
+    if provider == "twitch":
+        client_id, secret = bot_config.TWITCH_CLIENT_ID, bot_config.TWITCH_CLIENT_SECRET
+        endpoint = "https://id.twitch.tv/oauth2/token"
+    elif provider == "kick":
+        client_id, secret = bot_config.KICK_CLIENT_ID, bot_config.KICK_CLIENT_SECRET
+        endpoint = "https://id.kick.com/oauth/token"
+    else:
+        return ""
+    if not client_id or not secret:
+        return ""
+    data = await _http_post(
+        endpoint,
+        form={"client_id": client_id, "client_secret": secret, "grant_type": "client_credentials"},
+    )
+    token = str(data.get("access_token") or "")
+    if token:
+        _token_cache[provider] = (token, time.time() + max(300, int(data.get("expires_in") or 3600)))
+    return token
+
+
+def _ignored(message: discord.Message, settings: dict) -> bool:
+    if str(message.channel.id) in _ids(settings.get("ignored_channel_ids")):
+        return True
+    category_id = getattr(message.channel, "category_id", None)
+    if category_id is not None and str(category_id) in _ids(settings.get("ignored_category_ids")):
+        return True
+    return bool(_member_roles(message.author) & _ids(settings.get("ignored_role_ids")))
+
+
+async def _log(guild: discord.Guild, kind: str, title: str, description: str, *, channel=None):
+    config = _cfg(guild, "action_log")
+    if not config["enabled"]:
+        return
+    settings = config["settings"]
+    if channel is not None:
+        if str(getattr(channel, "id", "")) in _ids(settings.get("ignored_channel_ids")):
+            return
+        category_id = getattr(channel, "category_id", None)
+        if category_id is not None and str(category_id) in _ids(settings.get("ignored_category_ids")):
+            return
+    key = {
+        "message": "message_channel_id", "member": "member_channel_id",
+        "moderation": "moderation_channel_id", "voice": "voice_channel_id",
+    }.get(kind, "default_channel_id")
+    target = _channel(guild, settings.get(key)) or _channel(guild, settings.get("default_channel_id"))
+    if target:
+        await _safe_send(target, embed=embeds.say(description[:3900], title=title))
+
+
+async def _handle_afk(message: discord.Message) -> None:
+    guild = message.guild
+    if guild is None:
+        return
+    config = _cfg(guild, "afk")
+    if not config["enabled"]:
+        return
+    scope = _scope(guild)
+    settings = config["settings"]
+    current = db.afk_get(scope, str(message.author.id))
+    if current and str(message.channel.id) not in _ids(settings.get("ignored_channel_ids")):
+        db.afk_clear(scope, str(message.author.id))
+        if isinstance(message.author, discord.Member):
+            try:
+                await message.author.edit(nick=current.get("original_nick"), reason="AFK ended")
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+        notes = db.afk_notes_pop(scope, str(message.author.id))
+        body = f"Welcome back {message.author.mention}; your AFK status was cleared."
+        if notes:
+            body += "\n" + "\n".join(
+                f"• <@{note['author_id']}>: {note['content']}" for note in notes[:10]
+            )
+            if len(notes) > 10:
+                body += f"\n…and {len(notes) - 10} more note(s)."
+        await _safe_send(message.channel, body)
+    seen: set[int] = set()
+    lines = []
+    for member in message.mentions[:20]:
+        if member.id in seen or member.id == message.author.id:
+            continue
+        seen.add(member.id)
+        status = db.afk_get(scope, str(member.id))
+        if status:
+            lines.append(f"{member.display_name} is AFK: {status['reason']}")
+    if lines:
+        await _safe_send(message.channel, "\n".join(lines))
+
+
+def _filter_matches(message: discord.Message, item: dict) -> bool:
+    content = message.content or ""
+    lowered = content.casefold()
+    kind = str(item.get("type") or "").lower()
+    value = str(item.get("value") or "")
+    has_link = bool(_URL_RE.search(content))
+    has_invite = bool(_INVITE_RE.search(content))
+    has_image = any((a.content_type or "").startswith("image/") for a in message.attachments)
+    mapping = {
+        "links": has_link, "contains_links": has_link, "non_links": not has_link,
+        "does_not_contain_links": not has_link, "invites": has_invite,
+        "discord_invites": has_invite, "non_invites": not has_invite,
+        "images": has_image, "non_images": not has_image,
+        "includes_text": value.casefold() in lowered, "exact_text": lowered == value.casefold(),
+        "excludes_text": value.casefold() not in lowered,
+        "starts_with": lowered.startswith(value.casefold()),
+        "does_not_start_with": not lowered.startswith(value.casefold()),
+        "ends_with": lowered.endswith(value.casefold()), "numbers_only": content.strip().isdigit(),
+        "has_role": value in _member_roles(message.author),
+        "does_not_have_role": value not in _member_roles(message.author),
+        "embeds": bool(message.embeds), "bots": message.author.bot,
+        "humans": not message.author.bot, "mentions": bool(message.mentions),
+        "text_only": bool(content) and not message.attachments and not message.embeds,
+    }
+    return bool(mapping.get(kind, False))
+
+
+async def _auto_delete(message: discord.Message) -> bool:
+    config = _cfg(message.guild, "auto_delete")
+    if not config["enabled"]:
+        return False
+    for rule in config["settings"].get("rules", [])[:100]:
+        if not isinstance(rule, dict) or rule.get("enabled", True) is False:
+            continue
+        if rule.get("channel_id") and str(rule["channel_id"]) != str(message.channel.id):
+            continue
+        filters = [item for item in rule.get("filters", [])[:3] if isinstance(item, dict)]
+        if not filters:
+            continue
+        checks = [_filter_matches(message, item) for item in filters]
+        match = all(checks) if str(rule.get("match", "all")) == "all" else any(checks)
+        if not match:
+            continue
+        delay = max(0, min(86_400, int(rule.get("delay_seconds") or 0)))
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            await message.delete()
+            await _log(message.guild, "message", "Auto Delete", f"Deleted a message from {message.author.mention} in {message.channel.mention}.", channel=message.channel)
+            return True
+        except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+            return False
+    return False
+
+
+def _automod_reason(message: discord.Message, settings: dict) -> str | None:
+    if _ignored(message, settings):
+        return None
+    content = message.content or ""
+    if settings.get("allowed_channel_ids") and str(message.channel.id) not in _ids(settings["allowed_channel_ids"]):
+        return None
+    if settings.get("allowed_role_ids") and not (_member_roles(message.author) & _ids(settings["allowed_role_ids"])):
+        return None
+    lowered = content.casefold()
+    for phrase in settings.get("banned_phrases", [])[:500]:
+        if str(phrase).casefold() in lowered:
+            return "banned phrase"
+    letters = [char for char in content if char.isalpha()]
+    caps = sum(1 for char in letters if char.isupper())
+    if len(letters) >= 10 and caps * 100 / len(letters) >= int(settings.get("max_caps_percent") or 100):
+        return "excessive capitals"
+    if content.count("\n") > int(settings.get("max_newlines") or 9999):
+        return "chat clearing"
+    if len(content) > int(settings.get("max_length") or 9999):
+        return "message too long"
+    if len(message.mentions) + len(message.role_mentions) > int(settings.get("max_mentions") or 9999):
+        return "mention spam"
+    domains = [match.group(0).split("/")[2].lower().split(":")[0] for match in _URL_RE.finditer(content)]
+    blocked = {str(value).lower() for value in settings.get("blocked_domains", [])}
+    allowed = {str(value).lower() for value in settings.get("allowed_domains", [])}
+    if any(domain in blocked for domain in domains):
+        return "blocked link"
+    if allowed and any(domain not in allowed for domain in domains):
+        return "unapproved link"
+    key = (message.guild.id, message.author.id)
+    now = time.monotonic()
+    history = _rapid[key]
+    window = max(1, int(settings.get("rapid_window_seconds") or 8))
+    while history and now - history[0] > window:
+        history.popleft()
+    history.append(now)
+    if len(history) > max(1, int(settings.get("rapid_messages") or 6)):
+        return "rapid message spam"
+    duplicate = _duplicates.get(key)
+    _duplicates[key] = (lowered[:1000], now)
+    if duplicate and duplicate[0] == lowered[:1000] and now - duplicate[1] <= int(settings.get("duplicate_window_seconds") or 15):
+        return "duplicate text"
+    return None
+
+
+async def _automod(message: discord.Message) -> bool:
+    config = _cfg(message.guild, "automod")
+    if not config["enabled"]:
+        return False
+    settings = config["settings"]
+    reason = _automod_reason(message, settings)
+    if not reason:
+        return False
+    deleted = False
+    if settings.get("delete", True):
+        try:
+            await message.delete()
+            deleted = True
+        except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+            pass
+    if settings.get("warn", True):
+        db.community_record_create(
+            "warning", _scope(message.guild), {"reason": reason, "message_id": str(message.id)},
+            user_id=str(message.author.id), record_key=str(message.id),
+        )
+    minutes = max(0, min(40_320, int(settings.get("instant_timeout_minutes") or 0)))
+    if minutes and isinstance(message.author, discord.Member):
+        try:
+            await message.author.timeout(timedelta(minutes=minutes), reason=f"Automod: {reason}")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+    if settings.get("instant_ban") and isinstance(message.author, discord.Member):
+        try:
+            await message.author.ban(reason=f"Automod: {reason}")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+    custom = str(settings.get("custom_response") or "")
+    if custom:
+        await _safe_send(message.channel, _render(custom, member=message.author, guild=message.guild, channel=message.channel, extra={"reason": reason}))
+    log_channel = _channel(message.guild, settings.get("log_channel_id"))
+    if log_channel:
+        await _safe_send(log_channel, embed=embeds.say(f"{message.author.mention} in {message.channel.mention}: **{reason}**", title="Automod"))
+    return deleted
+
+
+async def _slowmode(message: discord.Message) -> bool:
+    config = _cfg(message.guild, "slowmode")
+    if not config["enabled"]:
+        return False
+    rule = next((r for r in config["settings"].get("channels", []) if isinstance(r, dict) and str(r.get("channel_id")) == str(message.channel.id)), None)
+    if not rule or str(rule.get("mode", "bot")) != "bot":
+        return False
+    seconds = max(1, min(21_600, int(rule.get("seconds") or 5)))
+    key = (message.channel.id, message.author.id)
+    now = time.monotonic()
+    previous = _slow.get(key, 0.0)
+    _slow[key] = now
+    if now - previous >= seconds:
+        return False
+    try:
+        await message.delete()
+        return True
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+        return False
+
+
+def _triggered(content: str, trigger: str, match: str) -> bool:
+    if trigger == "{*}":
+        return True
+    text, needle = content.casefold(), trigger.casefold()
+    if match == "exact":
+        return text == needle
+    if match == "wildcard":
+        return fnmatch.fnmatch(text, needle if "*" in needle else f"*{needle}*")
+    return needle in text
+
+
+async def _autorespond(message: discord.Message) -> None:
+    config = _cfg(message.guild, "autoresponder")
+    if not config["enabled"]:
+        return
+    for item in config["settings"].get("responders", [])[:500]:
+        if not isinstance(item, dict) or not _triggered(message.content or "", str(item.get("trigger") or ""), str(item.get("match") or "contains")):
+            continue
+        roles = _member_roles(message.author)
+        if item.get("allowed_role_ids") and not roles & _ids(item["allowed_role_ids"]):
+            continue
+        if roles & _ids(item.get("ignored_role_ids")):
+            continue
+        if item.get("allowed_channel_ids") and str(message.channel.id) not in _ids(item["allowed_channel_ids"]):
+            continue
+        if str(message.channel.id) in _ids(item.get("ignored_channel_ids")):
+            continue
+        response = _render(item.get("response"), member=message.author, guild=message.guild, channel=message.channel)
+        if response:
+            await _safe_send(message.channel, response)
+        for emoji in item.get("reactions", [])[:3]:
+            try:
+                await message.add_reaction(str(emoji))
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+        break
+
+
+async def _highlights(message: discord.Message) -> None:
+    config = _cfg(message.guild, "highlights")
+    if not config["enabled"] or str(message.channel.id) in _ids(config["settings"].get("ignored_channel_ids")):
+        return
+    for item in db.community_records("highlight", _scope(message.guild), limit=1000):
+        if item.get("user_id") == str(message.author.id):
+            continue
+        phrase = str(item["data"].get("phrase") or "")
+        if phrase and phrase.casefold() in (message.content or "").casefold():
+            user = message.guild.get_member(int(item["user_id"])) if str(item.get("user_id", "")).isdigit() else None
+            if user:
+                await _safe_send(user, f'Your highlight **{phrase}** was used by {message.author} in **{message.guild.name}** / {message.channel.mention}:\n{message.jump_url}')
+
+
+async def handle_message(message: discord.Message) -> bool:
+    """Run enabled message modules; return True if the message was deleted."""
+    if message.guild is None or message.author.bot:
+        return False
+    await _handle_afk(message)
+    if await _auto_delete(message):
+        return True
+    if await _automod(message):
+        return True
+    if await _slowmode(message):
+        return True
+    await _autorespond(message)
+    await _highlights(message)
+    return False
+
+
+async def member_join(member: discord.Member) -> None:
+    guild = member.guild
+    autoban = _cfg(guild, "autoban")
+    if autoban["enabled"]:
+        settings = autoban["settings"]
+        age_hours = (discord.utils.utcnow() - member.created_at).total_seconds() / 3600
+        name = member.name.casefold()
+        matches = age_hours < int(settings.get("minimum_account_age_hours") or 0)
+        matches = matches or any(str(v).casefold() in name for v in settings.get("username_contains", []))
+        matches = matches or name in {str(v).casefold() for v in settings.get("username_exact", [])}
+        matches = matches or any(fnmatch.fnmatch(name, str(v).casefold()) for v in settings.get("username_wildcards", []))
+        if matches:
+            try:
+                await member.ban(reason=str(settings.get("reason") or "Autoban rule")[:512])
+                await _log(guild, "moderation", "Autoban", f"Banned {member} (`{member.id}`) on join.")
+                return
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+    roles = _cfg(guild, "autoroles")
+    if roles["enabled"]:
+        for item in roles["settings"].get("join_roles", [])[:100]:
+            if not isinstance(item, dict):
+                continue
+            role_id = str(item.get("role_id") or "")
+            role = guild.get_role(int(role_id)) if role_id.isdigit() else None
+            if not role:
+                continue
+            delay = max(0, min(2_592_000, int(item.get("delay_seconds") or 0)))
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                await member.add_roles(role, reason="Configured autorole")
+            except (discord.Forbidden, discord.HTTPException):
+                continue
+            remove_after = max(0, min(2_592_000, int(item.get("remove_after_seconds") or 0)))
+            if remove_after:
+                await asyncio.sleep(remove_after)
+                try:
+                    await member.remove_roles(role, reason="Autorole expiry")
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+    welcome = _cfg(guild, "welcome")
+    if welcome["enabled"]:
+        settings = welcome["settings"]
+        target = _channel(guild, settings.get("channel_id"))
+        if target:
+            await _safe_send(target, _render(settings.get("message"), member=member, guild=guild, channel=target))
+        dm_message = _render(settings.get("dm_message"), member=member, guild=guild)
+        if dm_message:
+            await _safe_send(member, dm_message)
+    announce = _cfg(guild, "announcements")
+    if announce["enabled"]:
+        target = _channel(guild, announce["settings"].get("channel_id"))
+        if target:
+            await _safe_send(target, _render(announce["settings"].get("join_message"), member=member, guild=guild, channel=target))
+    await _log(guild, "member", "Member joined", f"{member.mention} (`{member.id}`) joined. Account created {discord.utils.format_dt(member.created_at, style='R')}.")
+
+
+async def member_remove(member: discord.Member) -> None:
+    announce = _cfg(member.guild, "announcements")
+    if announce["enabled"]:
+        target = _channel(member.guild, announce["settings"].get("channel_id"))
+        if target:
+            await _safe_send(target, _render(announce["settings"].get("leave_message"), member=member, guild=member.guild, channel=target))
+    await _log(member.guild, "member", "Member left", f"{member} (`{member.id}`) left the server.")
+
+
+async def member_ban(guild: discord.Guild, user: discord.User | discord.Member) -> None:
+    announce = _cfg(guild, "announcements")
+    if announce["enabled"]:
+        target = _channel(guild, announce["settings"].get("channel_id"))
+        if target:
+            await _safe_send(target, _render(announce["settings"].get("ban_message"), member=user, guild=guild, channel=target))
+    await _log(guild, "moderation", "Member banned", f"{user} (`{user.id}`) was banned.")
+
+
+async def message_delete(message: discord.Message) -> None:
+    if message.guild and not message.author.bot:
+        content = (message.content or "(no text)")[:1500]
+        files = "\n".join(a.url for a in message.attachments[:10])
+        await _log(message.guild, "message", "Message deleted", f"**Author:** {message.author} (`{message.author.id}`)\n**Channel:** {message.channel.mention}\n**Content:** {content}" + (f"\n**Files:**\n{files}" if files else ""), channel=message.channel)
+
+
+async def message_edit(before: discord.Message, after: discord.Message) -> None:
+    if after.guild and not after.author.bot and before.content != after.content:
+        await _log(after.guild, "message", "Message edited", f"**Author:** {after.author} (`{after.author.id}`)\n**Channel:** {after.channel.mention}\n**Before:** {(before.content or '(empty)')[:1000]}\n**After:** {(after.content or '(empty)')[:1000]}\n[Jump to message]({after.jump_url})", channel=after.channel)
+
+
+async def voice_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState) -> None:
+    guild = member.guild
+    if before.channel != after.channel:
+        if before.channel and after.channel:
+            text = f"{member.mention} moved from **{before.channel.name}** to **{after.channel.name}**."
+        elif after.channel:
+            text = f"{member.mention} joined **{after.channel.name}**."
+        else:
+            text = f"{member.mention} left **{before.channel.name}**."
+        await _log(guild, "voice", "Voice activity", text)
+    config = _cfg(guild, "voice_text")
+    if not config["enabled"]:
+        return
+    for binding in config["settings"].get("bindings", [])[:100]:
+        if not isinstance(binding, dict):
+            continue
+        voice_id, text_id = str(binding.get("voice_channel_id")), str(binding.get("text_channel_id"))
+        channel = guild.get_channel(int(text_id)) if text_id.isdigit() else None
+        if not isinstance(channel, discord.TextChannel):
+            continue
+        if after.channel and str(after.channel.id) == voice_id:
+            try:
+                await channel.set_permissions(member, view_channel=True, read_message_history=True, send_messages=True, reason="Voice-text link joined")
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            if binding.get("join_message"):
+                await _safe_send(channel, _render(binding["join_message"], member=member, guild=guild, channel=channel))
+        if before.channel and str(before.channel.id) == voice_id and (not after.channel or str(after.channel.id) != voice_id):
+            try:
+                await channel.set_permissions(member, overwrite=None, reason="Voice-text link left")
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            if binding.get("leave_message"):
+                await _safe_send(channel, _render(binding["leave_message"], member=member, guild=guild, channel=channel))
+            if binding.get("purge_when_empty") and not before.channel.members:
+                try:
+                    await channel.purge(limit=1000, check=lambda m: not m.pinned)
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+
+
+async def raw_reaction(
+    client: discord.Client,
+    payload: discord.RawReactionActionEvent,
+    *,
+    added: bool = True,
+) -> None:
+    if payload.guild_id is None or client.user is None or payload.user_id == client.user.id:
+        return
+    guild = client.get_guild(payload.guild_id)
+    if guild is None:
+        return
+    reaction = _cfg(guild, "reaction_roles")
+    if reaction["enabled"]:
+        for menu in reaction["settings"].get("menus", [])[:100]:
+            if not isinstance(menu, dict) or str(menu.get("message_id")) != str(payload.message_id):
+                continue
+            for item in menu.get("items", [])[:20]:
+                if not isinstance(item, dict) or str(item.get("emoji")) != str(payload.emoji):
+                    continue
+                role_id = str(item.get("role_id") or "")
+                role = guild.get_role(int(role_id)) if role_id.isdigit() else None
+                member = guild.get_member(payload.user_id)
+                if role and member:
+                    try:
+                        mode = str(menu.get("mode", "toggle"))
+                        if added and mode != "remove":
+                            await member.add_roles(role, reason="Reaction role")
+                        elif not added and mode not in {"add", "add_only"}:
+                            await member.remove_roles(role, reason="Reaction role removed")
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
+    if not added:
+        return
+    star = _cfg(guild, "starboard")
+    settings = star["settings"]
+    if not star["enabled"] or str(payload.emoji) != str(settings.get("emoji") or "⭐"):
+        return
+    source = guild.get_channel(payload.channel_id)
+    target = _channel(guild, settings.get("channel_id"))
+    if not source or not target or str(source.id) in _ids(settings.get("ignored_channel_ids")):
+        return
+    try:
+        message = await source.fetch_message(payload.message_id)
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+        return
+    reaction_obj = next((r for r in message.reactions if str(r.emoji) == str(payload.emoji)), None)
+    if not reaction_obj or reaction_obj.count < max(1, int(settings.get("threshold") or 3)):
+        return
+    existing = db.community_records("starboard", _scope(guild), limit=5000)
+    if any(item.get("record_key") == str(message.id) for item in existing):
+        return
+    posted = await _safe_send(target, content=f"{payload.emoji} **{reaction_obj.count}** · {message.channel.mention} · {message.jump_url}", embed=embeds.say((message.content or "(attachment)")[:3900], title=str(message.author)))
+    if posted:
+        db.community_record_create("starboard", _scope(guild), {"starboard_message_id": str(posted.id), "stars": reaction_obj.count}, record_key=str(message.id))
+
+
+async def event_log(
+    guild: discord.Guild,
+    kind: str,
+    title: str,
+    description: str,
+    *,
+    channel=None,
+) -> None:
+    await _log(guild, kind, title, description, channel=channel)
+
+
+def _parse_duration(value: str) -> int | None:
+    match = _DURATION_RE.fullmatch(value.strip())
+    if not match:
+        return None
+    amount, unit = int(match.group(1)), match.group(2).lower()
+    return amount * {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}[unit]
+
+
+async def handle_prefix_command(message: discord.Message, name: str, arg: str) -> bool:
+    """Handle community commands not owned by the legacy command table."""
+    if message.guild is None:
+        return False
+    guild, scope, uid = message.guild, _scope(message.guild), str(message.author.id)
+    if name == "afk" and _cfg(guild, "afk")["enabled"]:
+        bits = arg.split(maxsplit=2)
+        if bits and bits[0].lower() == "list":
+            rows = db.afk_list(scope)
+            await _safe_send(message.channel, embed=embeds.say("\n".join(f"<@{r['user_id']}> — {r['reason']}" for r in rows) or "Nobody is AFK.", title="AFK statuses"))
+            return True
+        if bits and bits[0].lower() == "note" and message.mentions:
+            target = message.mentions[0]
+            note = bits[2] if len(bits) > 2 else "Left you a note."
+            if not db.afk_get(scope, str(target.id)):
+                await _safe_send(message.channel, "That user is not AFK.")
+            else:
+                db.afk_note_add(scope, str(target.id), uid, note, channel_id=str(message.channel.id), message_id=str(message.id))
+                await _safe_send(message.channel, f"I’ll give {target.display_name} your note when they return.")
+            return True
+        if bits and bits[0].lower() in {"clear", "reset"} and message.author.guild_permissions.manage_messages:
+            target = message.mentions[0] if message.mentions else None
+            db.afk_clear(scope, str(target.id) if target else None)
+            await _safe_send(message.channel, "AFK status cleared.")
+            return True
+        reason = arg.strip() or "AFK"
+        old_nick = getattr(message.author, "nick", None)
+        db.afk_set(scope, uid, reason, original_nick=old_nick)
+        prefix = str(_cfg(guild, "afk")["settings"].get("nickname_prefix") or "[AFK]")
+        try:
+            await message.author.edit(nick=f"{prefix} {message.author.display_name}"[:32], reason="AFK enabled")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+        await _safe_send(message.channel, f"{message.author.mention} is now AFK: {reason}")
+        return True
+    if name in {"remind", "reminder"} and _cfg(guild, "reminders")["enabled"]:
+        bits = arg.split(maxsplit=1)
+        seconds = _parse_duration(bits[0]) if bits else None
+        if not seconds or len(bits) < 2:
+            await _safe_send(message.channel, "Usage: `!remind 30m text` (s/m/h/d/w).")
+        else:
+            record = db.community_record_create("reminder", scope, {"text": bits[1][:1800], "channel_id": str(message.channel.id), "jump_url": message.jump_url}, user_id=uid, due=time.time() + min(seconds, 31_536_000))
+            await _safe_send(message.channel, f"Reminder #{record} set for <t:{int(time.time()+seconds)}:R>.")
+        return True
+    if name == "highlight" and _cfg(guild, "highlights")["enabled"]:
+        action, _, phrase = arg.partition(" ")
+        if action.lower() == "add" and phrase.strip():
+            db.community_record_create("highlight", scope, {"phrase": phrase.strip()[:100]}, user_id=uid, record_key=phrase.strip().casefold())
+            await _safe_send(message.channel, "Highlight added.")
+        elif action.lower() in {"delete", "del", "remove"} and phrase.strip():
+            items = db.community_records("highlight", scope, user_id=uid)
+            found = next((x for x in items if x["data"].get("phrase", "").casefold() == phrase.strip().casefold()), None)
+            if found:
+                db.community_record_delete(found["id"], guild_id=scope)
+            await _safe_send(message.channel, "Highlight removed." if found else "Highlight not found.")
+        else:
+            items = db.community_records("highlight", scope, user_id=uid)
+            await _safe_send(message.channel, "Your highlights: " + (", ".join(x["data"].get("phrase", "") for x in items) or "none"))
+        return True
+    if name == "tag" and _cfg(guild, "tags")["enabled"]:
+        action, _, rest = arg.partition(" ")
+        if action.lower() in {"create", "add", "edit"}:
+            tag_name, sep, body = rest.partition(" ")
+            if not sep:
+                await _safe_send(message.channel, "Usage: `!tag create name content`.")
+            else:
+                items = db.community_records("tag", scope, status=None, limit=5000)
+                old = next((x for x in items if x.get("record_key") == tag_name.casefold()), None)
+                if old:
+                    db.community_record_update(old["id"], data={"content": body[:1900], "author_id": uid}, status="active")
+                else:
+                    db.community_record_create("tag", scope, {"content": body[:1900], "author_id": uid}, user_id=uid, record_key=tag_name.casefold())
+                await _safe_send(message.channel, "Tag saved.")
+        elif action.lower() in {"delete", "del"} and rest:
+            item = next((x for x in db.community_records("tag", scope, limit=5000) if x.get("record_key") == rest.casefold()), None)
+            if item and (item["user_id"] == uid or message.author.guild_permissions.manage_messages):
+                db.community_record_delete(item["id"], guild_id=scope)
+            await _safe_send(message.channel, "Tag deleted." if item else "Tag not found.")
+        elif action.lower() == "list":
+            items = db.community_records("tag", scope, limit=5000)
+            await _safe_send(message.channel, "Tags: " + (", ".join(x.get("record_key") or "" for x in items) or "none"))
+        else:
+            key = (action or rest).casefold()
+            item = next((x for x in db.community_records("tag", scope, limit=5000) if x.get("record_key") == key), None)
+            await _safe_send(message.channel, item["data"].get("content", "") if item else "Tag not found.")
+        return True
+    if name == "pay" and _cfg(guild, "economy")["enabled"] and message.mentions:
+        amount_match = re.search(r"\b\d+\b", arg)
+        amount = int(amount_match.group()) if amount_match else 0
+        target = message.mentions[0]
+        if amount <= 0 or target.bot or target.id == message.author.id:
+            await _safe_send(message.channel, "Choose another member and a positive amount.")
+        else:
+            try:
+                sender, receiver = db.economy_transfer(uid, str(target.id), amount)
+                await _safe_send(message.channel, f"Paid {target.mention} {amount} coins. Balances: {sender} / {receiver}.")
+            except ValueError as error:
+                await _safe_send(message.channel, str(error))
+        return True
+    if name in {"coins", "wallet"} and _cfg(guild, "economy")["enabled"]:
+        target = message.mentions[0] if message.mentions else message.author
+        profile = db.economy_profile(str(target.id))
+        await _safe_send(message.channel, f"{target.display_name}: **{profile['balance']} coins** · **{profile['gems']} gems**.")
+        return True
+    if name in {"pack", "cards", "fuse", "deck", "battle"} and _cfg(guild, "economy")["enabled"]:
+        cards_enabled = bool(_cfg(guild, "economy")["settings"].get("cards_enabled", True))
+        if not cards_enabled:
+            await _safe_send(message.channel, "Cards and battles are disabled in this server.")
+            return True
+        owned = db.community_records("card", "global", user_id=uid, limit=5000)
+        if name == "pack":
+            try:
+                balance = db.economy_spend(uid, 100)
+            except ValueError as error:
+                await _safe_send(message.channel, f"{error} A pack costs 100 coins.")
+                return True
+            pulled = []
+            for _ in range(3):
+                base = dict(secrets.choice(_CARDS))
+                base["level"] = 1
+                card_id = db.community_record_create("card", "global", base, user_id=uid, record_key=base["name"].casefold())
+                pulled.append(f"#{card_id} **{base['name']}** ({base['atk']} ATK / {base['def']} DEF)")
+            await _safe_send(message.channel, "Pack opened:\n" + "\n".join(pulled) + f"\nBalance: {balance} coins.")
+            return True
+        if name == "cards":
+            if not owned:
+                await _safe_send(message.channel, "No cards yet. Open one with `!pack` (100 coins).")
+            else:
+                await _safe_send(message.channel, embed=embeds.say("\n".join(f"#{item['id']} **{item['data'].get('name')}** · L{item['data'].get('level', 1)} · {item['data'].get('atk')} ATK / {item['data'].get('def')} DEF · {item['data'].get('faction')}" for item in owned[:30]), title=f"{message.author.display_name}'s cards"))
+            return True
+        if name == "fuse":
+            wanted = arg.strip().casefold()
+            matches = [item for item in owned if str(item["data"].get("name", "")).casefold() == wanted]
+            if len(matches) < 2:
+                await _safe_send(message.channel, "You need two copies with that exact card name.")
+                return True
+            first, second = matches[:2]
+            level = max(int(first["data"].get("level") or 1), int(second["data"].get("level") or 1)) + 1
+            upgraded = dict(first["data"])
+            upgraded.update({"level": level, "atk": int(upgraded.get("atk") or 0) + 3, "def": int(upgraded.get("def") or 0) + 3})
+            db.community_record_delete(first["id"])
+            db.community_record_delete(second["id"])
+            card_id = db.community_record_create("card", "global", upgraded, user_id=uid, record_key=wanted)
+            await _safe_send(message.channel, f"Fused into #{card_id} **{upgraded['name']}** level {level} ({upgraded['atk']} ATK / {upgraded['def']} DEF).")
+            return True
+        deck_rows = db.community_records("deck", "global", user_id=uid, limit=10)
+        if name == "deck":
+            if arg.lower().startswith("set "):
+                ids = [int(value) for value in re.findall(r"\d+", arg[4:])[:5]]
+                owned_map = {int(item["id"]): item for item in owned}
+                if not ids or any(card_id not in owned_map for card_id in ids):
+                    await _safe_send(message.channel, "Use up to five card IDs that you own: `!deck set 12 15 18`.")
+                    return True
+                data = {"card_ids": ids}
+                if deck_rows:
+                    db.community_record_update(deck_rows[0]["id"], data=data)
+                else:
+                    db.community_record_create("deck", "global", data, user_id=uid, record_key=uid)
+                await _safe_send(message.channel, "Battle deck saved.")
+            else:
+                ids = deck_rows[0]["data"].get("card_ids", []) if deck_rows else []
+                by_id = {int(item["id"]): item for item in owned}
+                selected = [by_id[int(card_id)] for card_id in ids if int(card_id) in by_id]
+                await _safe_send(message.channel, "Your deck:\n" + ("\n".join(f"#{item['id']} {item['data'].get('name')}" for item in selected) or "empty"))
+            return True
+        if name == "battle":
+            if not message.mentions or message.mentions[0].bot or message.mentions[0].id == message.author.id:
+                await _safe_send(message.channel, "Challenge another member: `!battle @user`.")
+                return True
+            opponent = message.mentions[0]
+            opponent_cards = db.community_records("card", "global", user_id=str(opponent.id), limit=5000)
+            opponent_decks = db.community_records("deck", "global", user_id=str(opponent.id), limit=10)
+            own_ids = deck_rows[0]["data"].get("card_ids", []) if deck_rows else []
+            other_ids = opponent_decks[0]["data"].get("card_ids", []) if opponent_decks else []
+            own_map = {item["id"]: item for item in owned}
+            other_map = {item["id"]: item for item in opponent_cards}
+            own_deck = [own_map[int(card_id)] for card_id in own_ids if int(card_id) in own_map]
+            other_deck = [other_map[int(card_id)] for card_id in other_ids if int(card_id) in other_map]
+            if not own_deck or not other_deck:
+                await _safe_send(message.channel, "Both players need a saved non-empty deck.")
+                return True
+            own_power = sum(int(item["data"].get("atk") or 0) + int(item["data"].get("def") or 0) for item in own_deck) + secrets.randbelow(21)
+            other_power = sum(int(item["data"].get("atk") or 0) + int(item["data"].get("def") or 0) for item in other_deck) + secrets.randbelow(21)
+            if own_power == other_power:
+                result = f"Tie at **{own_power}** power."
+            else:
+                winner = message.author if own_power > other_power else opponent
+                db.economy_adjust(str(winner.id), 25)
+                result = f"{winner.mention} wins **{own_power}–{other_power}** and earns 25 coins."
+            db.community_record_create("battle_history", "global", {"challenger_id": uid, "opponent_id": str(opponent.id), "challenger_power": own_power, "opponent_power": other_power, "result": result}, user_id=uid)
+            await _safe_send(message.channel, result)
+            return True
+    if name == "announce" and _cfg(guild, "announcements")["enabled"]:
+        if not message.author.guild_permissions.manage_messages:
+            await _safe_send(message.channel, "You need Manage Messages.")
+        else:
+            target = _channel(guild, _cfg(guild, "announcements")["settings"].get("channel_id")) or message.channel
+            await _safe_send(target, arg, everyone="@everyone" in arg or "@here" in arg)
+        return True
+    if name == "giveaway" and _cfg(guild, "giveaways")["enabled"]:
+        action, _, rest = arg.partition(" ")
+        if not message.author.guild_permissions.manage_messages:
+            await _safe_send(message.channel, "You need Manage Messages.")
+            return True
+        if action.lower() == "create":
+            parts = [part.strip() for part in rest.split("|")]
+            seconds = _parse_duration(parts[0]) if parts else None
+            winners = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
+            prize = parts[2] if len(parts) > 2 else "Mystery prize"
+            if not seconds:
+                await _safe_send(message.channel, "Usage: `!giveaway create 1h | 2 | Prize`.")
+                return True
+            end_at = time.time() + min(seconds, 31_536_000)
+            post = await _safe_send(
+                message.channel,
+                embed=embeds.say(
+                    f"React with 🎉 to enter.\nEnds <t:{int(end_at)}:R> · {max(1,min(50,winners))} winner(s)",
+                    title=prize[:256],
+                ),
+            )
+            if post:
+                try:
+                    await post.add_reaction("🎉")
+                except discord.HTTPException:
+                    pass
+                db.community_record_create(
+                    "giveaway",
+                    scope,
+                    {
+                        "message_id": str(post.id), "channel_id": str(message.channel.id),
+                        "prize": prize[:500], "winners": max(1, min(50, winners)),
+                    },
+                    user_id=uid,
+                    record_key=str(post.id),
+                    due=end_at,
+                )
+            return True
+        if action.lower() in {"end", "reroll"} and rest.strip().isdigit():
+            item = next(
+                (x for x in db.community_records("giveaway", scope, status=None, limit=5000) if x.get("record_key") == rest.strip()),
+                None,
+            )
+            if item:
+                db.community_record_update(item["id"], status="active", due=time.time())
+                await _safe_send(message.channel, "Giveaway queued for drawing.")
+            else:
+                await _safe_send(message.channel, "Giveaway not found.")
+            return True
+        await _safe_send(message.channel, "Use `!giveaway create <duration> | <winners> | <prize>` or `!giveaway end <message_id>`.")
+        return True
+    if name == "ticket" and _cfg(guild, "tickets")["enabled"]:
+        action, _, detail = arg.partition(" ")
+        settings = _cfg(guild, "tickets")["settings"]
+        existing = [x for x in db.community_records("ticket", scope, user_id=uid) if x["status"] == "active"]
+        if action.lower() in {"open", "create"}:
+            maximum = max(1, min(100, int(settings.get("max_open_per_member") or 5)))
+            if len(existing) >= maximum:
+                await _safe_send(message.channel, f"You already have {len(existing)} open ticket(s).")
+                return True
+            category_id = str(settings.get("category_id") or "")
+            category = guild.get_channel(int(category_id)) if category_id.isdigit() else None
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                message.author: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+                guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+            }
+            for role_id in settings.get("staff_role_ids", [])[:20]:
+                role = guild.get_role(int(role_id)) if str(role_id).isdigit() else None
+                if role:
+                    overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+            safe_name = re.sub(r"[^a-z0-9-]", "-", message.author.name.lower())[:40]
+            try:
+                channel = await guild.create_text_channel(
+                    f"ticket-{safe_name}-{secrets.randbelow(10000):04d}",
+                    category=category if isinstance(category, discord.CategoryChannel) else None,
+                    overwrites=overwrites,
+                    reason="Support ticket opened",
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                await _safe_send(message.channel, "I could not create the ticket channel.")
+                return True
+            record_id = db.community_record_create(
+                "ticket", scope, {"channel_id": str(channel.id), "subject": detail[:500]},
+                user_id=uid, record_key=str(channel.id),
+            )
+            mentions = " ".join(f"<@&{role_id}>" for role_id in settings.get("staff_role_ids", [])[:20])
+            await _safe_send(channel, f"Ticket #{record_id} opened by {message.author.mention}.\n**Subject:** {detail or 'No subject'}\n{mentions}")
+            await _safe_send(message.channel, f"Your ticket is ready: {channel.mention}")
+            return True
+        if action.lower() in {"close", "resolve"}:
+            item = next((x for x in db.community_records("ticket", scope, status=None, limit=5000) if x.get("record_key") == str(message.channel.id)), None)
+            if not item:
+                await _safe_send(message.channel, "This is not a tracked ticket channel.")
+                return True
+            if item.get("user_id") != uid and not message.author.guild_permissions.manage_channels:
+                await _safe_send(message.channel, "Only the ticket owner or staff can close it.")
+                return True
+            lines = []
+            try:
+                async for entry in message.channel.history(limit=1000, oldest_first=True):
+                    lines.append(f"[{entry.created_at.isoformat()}] {entry.author}: {entry.clean_content}")
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            transcript_channel = _channel(guild, settings.get("transcript_channel_id"))
+            if transcript_channel:
+                payload = "\n".join(lines).encode("utf-8")[:2_000_000]
+                try:
+                    await transcript_channel.send(
+                        content=f"Transcript for ticket #{item['id']} ({message.channel.name})",
+                        file=discord.File(io.BytesIO(payload), filename=f"ticket-{item['id']}.txt"),
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+            db.community_record_update(item["id"], status="resolved" if action.lower() == "resolve" else "closed")
+            await _safe_send(message.channel, "Ticket closed. This channel will be deleted in 5 seconds.")
+            await asyncio.sleep(5)
+            try:
+                await message.channel.delete(reason="Ticket closed")
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            return True
+        await _safe_send(message.channel, "Use `!ticket open <subject>` or `!ticket close`.")
+        return True
+    if name == "form" and _cfg(guild, "forms")["enabled"]:
+        settings = _cfg(guild, "forms")["settings"]
+        slug = arg.strip().lower()
+        form = next(
+            (
+                item for item in settings.get("forms", [])[:100]
+                if isinstance(item, dict)
+                and item.get("enabled", True) is not False
+                and str(item.get("slug") or "").lower() == slug
+            ),
+            None,
+        )
+        if not form:
+            names = [str(item.get("slug")) for item in settings.get("forms", []) if isinstance(item, dict) and item.get("enabled", True) is not False]
+            await _safe_send(message.channel, "Forms: " + (", ".join(names) or "none"))
+            return True
+        token_value = ""
+        if form.get("members_only"):
+            token_value = secrets.token_urlsafe(24)
+            db.community_record_create(
+                "form_access", scope, {"form_slug": slug}, user_id=uid,
+                record_key=token_value, due=time.time() + 3600,
+            )
+        base = str(settings.get("public_base_url") or "https://kozzyx.org").rstrip("/")
+        url = f"{base}/forms/{guild.id}/{slug}"
+        if token_value:
+            url += f"?token={token_value}"
+        await _safe_send(message.author if form.get("members_only") else message.channel, f"Open **{form.get('title') or slug}**: {url}")
+        if form.get("members_only"):
+            await _safe_send(message.channel, "I sent your private form link by DM.")
+        return True
+    if name in {"rank", "ranks"} and _cfg(guild, "autoroles")["enabled"]:
+        action, _, rank_name = arg.partition(" ")
+        ranks = [x for x in _cfg(guild, "autoroles")["settings"].get("ranks", []) if isinstance(x, dict)]
+        if action.lower() == "list" or not rank_name:
+            await _safe_send(message.channel, "Ranks: " + (", ".join(str(x.get("name") or "") for x in ranks) or "none"))
+            return True
+        item = next((x for x in ranks if str(x.get("name", "")).casefold() == rank_name.casefold()), None)
+        role_id = str(item.get("role_id") or "") if item else ""
+        role = guild.get_role(int(role_id)) if role_id.isdigit() else None
+        if not role:
+            await _safe_send(message.channel, "Rank not found.")
+        else:
+            try:
+                if action.lower() in {"join", "add"}:
+                    await message.author.add_roles(role, reason="Self-assignable rank")
+                elif action.lower() in {"leave", "remove"}:
+                    await message.author.remove_roles(role, reason="Self-assignable rank")
+                await _safe_send(message.channel, "Rank updated.")
+            except (discord.Forbidden, discord.HTTPException):
+                await _safe_send(message.channel, "I cannot manage that role.")
+        return True
+    if name in {"coinflip", "flip"} and _cfg(guild, "fun")["enabled"]:
+        await _safe_send(message.channel, secrets.choice(["Heads.", "Tails."]))
+        return True
+    if name == "dice" and _cfg(guild, "fun")["enabled"]:
+        sides = max(2, min(1000, int(arg) if arg.isdigit() else 6))
+        await _safe_send(message.channel, f"You rolled **{secrets.randbelow(sides) + 1}** (d{sides}).")
+        return True
+    if name == "rps" and _cfg(guild, "fun")["enabled"]:
+        choice = arg.strip().lower()
+        if choice not in {"rock", "paper", "scissors"}:
+            await _safe_send(message.channel, "Choose rock, paper, or scissors.")
+        else:
+            bot_choice = secrets.choice(["rock", "paper", "scissors"])
+            wins = {("rock", "scissors"), ("paper", "rock"), ("scissors", "paper")}
+            result = "Tie" if choice == bot_choice else ("You win" if (choice, bot_choice) in wins else "I win")
+            await _safe_send(message.channel, f"I chose **{bot_choice}**. {result}.")
+        return True
+    if name in {"cat", "dog", "pug", "dadjoke", "pokemon", "itunes", "github", "iss"} and _cfg(guild, "fun")["enabled"]:
+        try:
+            if name == "cat":
+                text = f"https://cataas.com/cat?cache={secrets.token_hex(4)}"
+            elif name in {"dog", "pug"}:
+                url = "https://dog.ceo/api/breeds/image/random" if name == "dog" else "https://dog.ceo/api/breed/pug/images/random"
+                data = await _http_get(url)
+                text = str(data.get("message") or "No image found.")
+            elif name == "dadjoke":
+                data = await _http_get("https://icanhazdadjoke.com/", headers={"Accept": "application/json"})
+                text = str(data.get("joke") or "No joke found.")
+            elif name == "pokemon":
+                term = re.sub(r"[^a-z0-9-]", "", arg.lower())[:50]
+                if not term:
+                    raise ValueError("Give me a Pokémon name or number.")
+                data = await _http_get(f"https://pokeapi.co/api/v2/pokemon/{quote(term)}")
+                types = ", ".join(item["type"]["name"] for item in data.get("types", []))
+                text = f"**{str(data.get('name', term)).title()}** · #{data.get('id')} · types: {types} · height: {data.get('height')} · weight: {data.get('weight')}"
+            elif name == "itunes":
+                if not arg.strip():
+                    raise ValueError("Give me a song or artist.")
+                data = await _http_get(f"https://itunes.apple.com/search?term={quote(arg[:100])}&entity=song&limit=1")
+                item = next(iter(data.get("results", [])), None)
+                text = (
+                    f"**{item['trackName']}** by {item['artistName']} · {item.get('trackViewUrl', '')}"
+                    if item else "No song found."
+                )
+            elif name == "github":
+                repo = arg.strip().lower()
+                if not re.fullmatch(r"[a-z0-9_.-]{1,39}/[a-z0-9_.-]{1,100}", repo):
+                    raise ValueError("Use `owner/repository`.")
+                data = await _http_get(f"https://api.github.com/repos/{repo}")
+                text = f"**{data.get('full_name', repo)}** · {data.get('stargazers_count', 0)} stars · {data.get('open_issues_count', 0)} open issues\n{data.get('description') or 'No description.'}\n{data.get('html_url', '')}"
+            else:
+                data = await _http_get("https://api.wheretheiss.at/v1/satellites/25544")
+                text = f"ISS position: **{float(data['latitude']):.3f}, {float(data['longitude']):.3f}** · altitude {float(data['altitude']):.1f} km · velocity {float(data['velocity']):.0f} km/h"
+            await _safe_send(message.channel, text)
+        except (ValueError, KeyError, TypeError, aiohttp.ClientError, asyncio.TimeoutError) as error:
+            await _safe_send(message.channel, str(error)[:300] or "That lookup failed.")
+        return True
+    if name == "poll" and _cfg(guild, "fun")["enabled"]:
+        parts = [part.strip() for part in arg.split("|") if part.strip()]
+        if len(parts) < 3 or len(parts) > 11:
+            await _safe_send(message.channel, "Usage: `!poll Question | Option 1 | Option 2` (up to 10 options).")
+        else:
+            marks = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+            post = await _safe_send(message.channel, embed=embeds.say("\n".join(f"{marks[i]} {option}" for i, option in enumerate(parts[1:])), title=parts[0][:256]))
+            if post:
+                for mark in marks[: len(parts) - 1]:
+                    try:
+                        await post.add_reaction(mark)
+                    except discord.HTTPException:
+                        pass
+        return True
+    if name == "distance" and _cfg(guild, "fun")["enabled"]:
+        try:
+            lat1, lon1, lat2, lon2 = [float(value.strip()) for value in arg.split(",")]
+            if not (-90 <= lat1 <= 90 and -90 <= lat2 <= 90 and -180 <= lon1 <= 180 and -180 <= lon2 <= 180):
+                raise ValueError
+            phi1, phi2 = math.radians(lat1), math.radians(lat2)
+            dphi, dlambda = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
+            hav = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+            distance = 6371.0088 * 2 * math.atan2(math.sqrt(hav), math.sqrt(1 - hav))
+            await _safe_send(message.channel, f"Great-circle distance: **{distance:,.2f} km** ({distance * 0.621371:,.2f} mi).")
+        except (ValueError, TypeError):
+            await _safe_send(message.channel, "Usage: `!distance lat1, lon1, lat2, lon2`.")
+        return True
+    return False
+
+
+async def _poll_public_feeds(guild: discord.Guild, scope: str, timestamp: float) -> None:
+    reddit = _cfg(guild, "reddit")
+    if reddit["enabled"]:
+        poll_seconds = max(60, min(86_400, int(reddit["settings"].get("poll_minutes") or 5) * 60))
+        for index, subscription in enumerate(reddit["settings"].get("subscriptions", [])[:100]):
+            if not isinstance(subscription, dict):
+                continue
+            subreddit = str(subscription.get("subreddit") or "").strip().removeprefix("r/")
+            if not re.fullmatch(r"[A-Za-z0-9_]{2,21}", subreddit):
+                continue
+            key = f"feedpoll:reddit:{scope}:{index}"
+            last_poll = float(db.kv_get(key, "0") or 0)
+            if timestamp - last_poll < poll_seconds:
+                continue
+            db.kv_set(key, str(timestamp))
+            try:
+                payload = await _http_get(f"https://www.reddit.com/r/{subreddit}/new.json?limit=10")
+            except (ValueError, aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError):
+                continue
+            posts = payload.get("data", {}).get("children", []) if isinstance(payload, dict) else []
+            seen_key = f"feedseen:reddit:{scope}:{index}"
+            seen = str(db.kv_get(seen_key, "") or "")
+            fresh = []
+            for wrapper in posts:
+                item = wrapper.get("data", {}) if isinstance(wrapper, dict) else {}
+                post_id = str(item.get("name") or "")
+                if not post_id or post_id == seen:
+                    break
+                if item.get("over_18") and not subscription.get("include_nsfw"):
+                    continue
+                flair = str(subscription.get("flair") or "")
+                if flair and str(item.get("link_flair_text") or "").casefold() != flair.casefold():
+                    continue
+                fresh.append(item)
+            channel = _channel(guild, subscription.get("channel_id"))
+            for item in reversed(fresh[:5]):
+                if channel:
+                    link = "https://www.reddit.com" + str(item.get("permalink") or "")
+                    await _safe_send(channel, _render(subscription.get("message") or "New post in r/{subreddit}: **{title}**\n{link}", guild=guild, channel=channel, extra={"subreddit": subreddit, "title": item.get("title", ""), "link": link, "author": item.get("author", "")}))
+            if posts:
+                first = posts[0].get("data", {}) if isinstance(posts[0], dict) else {}
+                if first.get("name"):
+                    db.kv_set(seen_key, str(first["name"]))
+    youtube = _cfg(guild, "youtube")
+    if youtube["enabled"]:
+        poll_seconds = max(60, min(86_400, int(youtube["settings"].get("poll_minutes") or 5) * 60))
+        for index, subscription in enumerate(youtube["settings"].get("subscriptions", [])[:100]):
+            if not isinstance(subscription, dict):
+                continue
+            channel_id = str(subscription.get("youtube_channel_id") or subscription.get("channel") or "")
+            if not re.fullmatch(r"UC[A-Za-z0-9_-]{20,30}", channel_id):
+                continue
+            key = f"feedpoll:youtube:{scope}:{index}"
+            last_poll = float(db.kv_get(key, "0") or 0)
+            if timestamp - last_poll < poll_seconds:
+                continue
+            db.kv_set(key, str(timestamp))
+            try:
+                raw = await _http_get(
+                    f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}",
+                    json_response=False,
+                )
+                if "<!DOCTYPE" in raw.upper() or "<!ENTITY" in raw.upper():
+                    continue
+                entries = []
+                for block in re.findall(r"<entry\b[^>]*>(.*?)</entry>", raw, re.DOTALL | re.IGNORECASE)[:20]:
+                    video_match = re.search(r"<yt:videoId>([^<]+)</yt:videoId>", block)
+                    title_match = re.search(r"<title>(.*?)</title>", block, re.DOTALL | re.IGNORECASE)
+                    if video_match:
+                        entries.append(
+                            (
+                                video_match.group(1).strip(),
+                                html.unescape(re.sub(r"<[^>]+>", "", title_match.group(1))).strip()
+                                if title_match else "New video",
+                            )
+                        )
+            except (ValueError, aiohttp.ClientError, asyncio.TimeoutError):
+                continue
+            seen_key = f"feedseen:youtube:{scope}:{index}"
+            seen = str(db.kv_get(seen_key, "") or "")
+            fresh = []
+            for video_id, title in entries:
+                if not video_id or video_id == seen:
+                    break
+                fresh.append((video_id, title))
+            channel = _channel(guild, subscription.get("channel_id"))
+            for video_id, title in reversed(fresh[:5]):
+                if channel:
+                    link = f"https://www.youtube.com/watch?v={video_id}"
+                    await _safe_send(channel, _render(subscription.get("message") or "**{video.title}**\n{video.link}", guild=guild, channel=channel, extra={"video.title": title, "video.link": link, "channel.link": f"https://www.youtube.com/channel/{channel_id}"}))
+            if entries:
+                latest = entries[0][0]
+                if latest:
+                    db.kv_set(seen_key, latest)
+
+
+async def _poll_social_feeds(guild: discord.Guild, scope: str, timestamp: float) -> None:
+    twitch = _cfg(guild, "twitch")
+    if twitch["enabled"] and bot_config.TWITCH_CLIENT_ID and bot_config.TWITCH_CLIENT_SECRET:
+        try:
+            token = await _app_token("twitch")
+        except (ValueError, aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError):
+            token = ""
+        if token:
+            poll_seconds = max(60, min(86_400, int(twitch["settings"].get("poll_minutes") or 5) * 60))
+            for index, subscription in enumerate(twitch["settings"].get("subscriptions", [])[:100]):
+                if not isinstance(subscription, dict):
+                    continue
+                login = str(subscription.get("username") or "").lower()
+                if not re.fullmatch(r"[a-z0-9_]{3,25}", login):
+                    continue
+                poll_key = f"feedpoll:twitch:{scope}:{index}"
+                if timestamp - float(db.kv_get(poll_key, "0") or 0) < poll_seconds:
+                    continue
+                db.kv_set(poll_key, str(timestamp))
+                try:
+                    payload = await _http_get(
+                        f"https://api.twitch.tv/helix/streams?user_login={quote(login)}",
+                        headers={"Authorization": f"Bearer {token}", "Client-Id": bot_config.TWITCH_CLIENT_ID},
+                    )
+                except (ValueError, aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError):
+                    continue
+                streams = payload.get("data", []) if isinstance(payload, dict) else []
+                live = streams[0] if streams else None
+                state_key = f"feedlive:twitch:{scope}:{index}"
+                was_live = db.kv_get(state_key, "0") == "1"
+                db.kv_set(state_key, "1" if live else "0")
+                if live and not was_live:
+                    target = _channel(guild, subscription.get("channel_id"))
+                    if target:
+                        link = f"https://www.twitch.tv/{login}"
+                        await _safe_send(target, _render(subscription.get("message") or "**{streamer}** is live: {title}\n{link}", guild=guild, channel=target, extra={"streamer": live.get("user_name", login), "title": live.get("title", "Live"), "game": live.get("game_name", ""), "viewers": live.get("viewer_count", 0), "link": link}))
+    kick = _cfg(guild, "kick")
+    if kick["enabled"] and bot_config.KICK_CLIENT_ID and bot_config.KICK_CLIENT_SECRET:
+        try:
+            token = await _app_token("kick")
+        except (ValueError, aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError):
+            token = ""
+        if token:
+            poll_seconds = max(60, min(86_400, int(kick["settings"].get("poll_minutes") or 5) * 60))
+            for index, subscription in enumerate(kick["settings"].get("subscriptions", [])[:100]):
+                if not isinstance(subscription, dict):
+                    continue
+                broadcaster = str(subscription.get("broadcaster_user_id") or "")
+                username = str(subscription.get("username") or "").lower()
+                if not broadcaster.isdigit():
+                    continue
+                poll_key = f"feedpoll:kick:{scope}:{index}"
+                if timestamp - float(db.kv_get(poll_key, "0") or 0) < poll_seconds:
+                    continue
+                db.kv_set(poll_key, str(timestamp))
+                try:
+                    payload = await _http_get(
+                        f"https://api.kick.com/public/v2/livestreams?broadcaster_user_id={broadcaster}",
+                        headers={"Authorization": f"Bearer {token}"},
+                    )
+                except (ValueError, aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError):
+                    continue
+                raw_streams = payload.get("data", []) if isinstance(payload, dict) else []
+                streams = raw_streams.get("data", []) if isinstance(raw_streams, dict) else raw_streams
+                live = streams[0] if isinstance(streams, list) and streams else None
+                state_key = f"feedlive:kick:{scope}:{index}"
+                was_live = db.kv_get(state_key, "0") == "1"
+                db.kv_set(state_key, "1" if live else "0")
+                if live and not was_live:
+                    target = _channel(guild, subscription.get("channel_id"))
+                    if target:
+                        channel_data = live.get("channel") if isinstance(live.get("channel"), dict) else {}
+                        slug = username or str(channel_data.get("slug") or broadcaster)
+                        link = f"https://kick.com/{slug}"
+                        await _safe_send(target, _render(subscription.get("message") or "**{streamer}** is live: {title}\n{link}", guild=guild, channel=target, extra={"streamer": slug, "title": live.get("stream_title") or live.get("title") or "Live", "viewers": live.get("viewer_count", 0), "link": link}))
+    tiktok = _cfg(guild, "tiktok")
+    if tiktok["enabled"] and bot_config.TIKTOK_ACCESS_TOKEN:
+        poll_seconds = max(60, min(86_400, int(tiktok["settings"].get("poll_minutes") or 5) * 60))
+        for index, subscription in enumerate(tiktok["settings"].get("subscriptions", [])[:1]):
+            if not isinstance(subscription, dict):
+                continue
+            poll_key = f"feedpoll:tiktok:{scope}:{index}"
+            if timestamp - float(db.kv_get(poll_key, "0") or 0) < poll_seconds:
+                continue
+            db.kv_set(poll_key, str(timestamp))
+            try:
+                payload = await _http_post(
+                    "https://open.tiktokapis.com/v2/video/list/?fields=id,title,video_description,duration,cover_image_url,embed_link,create_time",
+                    payload={"max_count": 10},
+                    headers={"Authorization": f"Bearer {bot_config.TIKTOK_ACCESS_TOKEN}"},
+                )
+            except (ValueError, aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError):
+                continue
+            videos = payload.get("data", {}).get("videos", []) if isinstance(payload, dict) else []
+            seen_key = f"feedseen:tiktok:{scope}:{index}"
+            seen = str(db.kv_get(seen_key, "") or "")
+            fresh = []
+            for video in videos:
+                video_id = str(video.get("id") or "") if isinstance(video, dict) else ""
+                if not video_id or video_id == seen:
+                    break
+                fresh.append(video)
+            target = _channel(guild, subscription.get("channel_id"))
+            for video in reversed(fresh[:5]):
+                if target:
+                    link = str(video.get("embed_link") or f"https://www.tiktok.com/video/{video.get('id')}")
+                    caption = str(video.get("video_description") or video.get("title") or "New TikTok")
+                    await _safe_send(target, _render(subscription.get("message") or "**{username}** posted: {caption}\n{link}", guild=guild, channel=target, extra={"username": subscription.get("username", "TikTok creator"), "caption": caption, "caption_without_hashtags": re.sub(r"\s*#\w+", "", caption), "link": link, "thumbnail": video.get("cover_image_url", "")}))
+            if videos and isinstance(videos[0], dict) and videos[0].get("id"):
+                db.kv_set(seen_key, str(videos[0]["id"]))
+
+
+async def scheduler_tick(client: discord.Client) -> None:
+    """Deliver due reminders and dashboard-scheduled messages."""
+    timestamp = time.time()
+    for guild in list(client.guilds):
+        scope = _scope(guild)
+        await _poll_public_feeds(guild, scope, timestamp)
+        await _poll_social_feeds(guild, scope, timestamp)
+        for item in db.community_records("reminder", scope, due_before=timestamp, limit=500):
+            user = guild.get_member(int(item["user_id"])) if str(item.get("user_id", "")).isdigit() else None
+            channel = _channel(guild, item["data"].get("channel_id"))
+            target = user or channel
+            if target:
+                jump = item["data"].get("jump_url") or ""
+                await _safe_send(target, f"Reminder: {item['data'].get('text', '')}\n{jump}".strip())
+            db.community_record_update(item["id"], status="delivered")
+        config = _cfg(guild, "auto_message")
+        if config["enabled"]:
+            for index, item in enumerate(config["settings"].get("messages", [])[:100]):
+                if not isinstance(item, dict) or item.get("enabled", True) is False:
+                    continue
+                first = float(item.get("first_at") or item.get("next_at") or 0)
+                if not first or first > timestamp:
+                    continue
+                interval = max(0, min(604_800, int(item.get("interval_seconds") or 0)))
+                due = first if not interval else first + int((timestamp - first) // interval) * interval
+                marker = f"automessage:{scope}:{index}:{int(due)}"
+                if db.kv_get(marker):
+                    continue
+                channel = _channel(guild, item.get("channel_id"))
+                if channel:
+                    await _safe_send(channel, str(item.get("content") or ""))
+                db.kv_set(marker, "1")
+        purge = _cfg(guild, "auto_purge")
+        if purge["enabled"]:
+            for index, rule in enumerate(purge["settings"].get("rules", [])[:100]):
+                if not isinstance(rule, dict) or rule.get("enabled", True) is False:
+                    continue
+                first = float(rule.get("first_at") or 0)
+                interval = max(60, min(604_800, int(rule.get("interval_seconds") or 3600)))
+                if not first or first > timestamp:
+                    continue
+                due = first + int((timestamp - first) // interval) * interval
+                marker = f"autopurge:{scope}:{index}:{int(due)}"
+                if db.kv_get(marker):
+                    continue
+                channel = _channel(guild, rule.get("channel_id"))
+                if not isinstance(channel, discord.TextChannel):
+                    db.kv_set(marker, "invalid-channel")
+                    continue
+                maximum = max(1, min(5000, int(rule.get("maximum") or purge["settings"].get("maximum_per_run") or 100)))
+                filters = [x for x in rule.get("filters", []) if isinstance(x, dict)]
+                matched = []
+                try:
+                    async for entry in channel.history(limit=maximum):
+                        if entry.pinned:
+                            continue
+                        checks = [_filter_matches(entry, item) for item in filters]
+                        if not filters or (all(checks) if rule.get("match", "all") == "all" else any(checks)):
+                            matched.append(entry)
+                    for start in range(0, len(matched), 100):
+                        batch = matched[start : start + 100]
+                        try:
+                            await channel.delete_messages(batch, reason="Scheduled auto purge")
+                        except (discord.Forbidden, discord.HTTPException):
+                            for entry in batch:
+                                try:
+                                    await entry.delete()
+                                except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+                                    pass
+                finally:
+                    db.kv_set(marker, str(len(matched)))
+        for giveaway in db.community_records("giveaway", scope, due_before=timestamp, limit=100):
+            data = giveaway["data"]
+            channel = _channel(guild, data.get("channel_id"))
+            entrants = []
+            if channel:
+                try:
+                    post = await channel.fetch_message(int(data.get("message_id")))
+                    reaction = next((item for item in post.reactions if str(item.emoji) == "🎉"), None)
+                    if reaction:
+                        async for user in reaction.users(limit=5000):
+                            if not user.bot:
+                                entrants.append(user)
+                except (ValueError, discord.Forbidden, discord.NotFound, discord.HTTPException):
+                    pass
+            winner_count = min(len(entrants), max(1, min(50, int(data.get("winners") or 1))))
+            winners = secrets.SystemRandom().sample(entrants, winner_count) if winner_count else []
+            if channel:
+                await _safe_send(channel, f"Giveaway **{data.get('prize', 'Prize')}** ended. " + ("Winners: " + ", ".join(user.mention for user in winners) if winners else "No eligible entries."))
+            for winner in winners:
+                await _safe_send(winner, f"You won **{data.get('prize', 'a giveaway')}** in **{guild.name}**.")
+            db.community_record_update(giveaway["id"], data={**data, "winner_ids": [str(user.id) for user in winners]}, status="ended")
+        for submission in db.community_records("form_submission", scope, limit=100):
+            data = submission["data"]
+            target = _channel(guild, data.get("channel_id"))
+            if target is None:
+                continue
+            author_text = "Anonymous" if data.get("anonymous") else (
+                f"<@{submission['user_id']}>" if submission.get("user_id") else "Web visitor"
+            )
+            lines = [f"**Submitted by:** {author_text}"]
+            for answer in data.get("answers", [])[:50]:
+                if not isinstance(answer, dict):
+                    continue
+                values = ", ".join(str(value) for value in answer.get("values", [])) or "(no answer)"
+                lines.append(f"**{answer.get('label', 'Question')}**\n{values[:1000]}")
+            post = await _safe_send(
+                target,
+                content=" ".join(f"<@&{role_id}>" for role_id in data.get("ping_role_ids", [])[:20]),
+                embed=embeds.say("\n\n".join(lines)[:3900], title=str(data.get("form_title") or "Form submission")[:256]),
+            )
+            if post:
+                for reaction in data.get("reactions", [])[:10]:
+                    try:
+                        await post.add_reaction(str(reaction))
+                    except discord.HTTPException:
+                        pass
+                if data.get("create_thread"):
+                    try:
+                        await post.create_thread(name=f"Submission {submission['id']}", auto_archive_duration=1440)
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
+            member = guild.get_member(int(submission["user_id"])) if str(submission.get("user_id", "")).isdigit() else None
+            if member:
+                add_roles = [guild.get_role(int(role_id)) for role_id in data.get("add_role_ids", []) if str(role_id).isdigit()]
+                remove_roles = [guild.get_role(int(role_id)) for role_id in data.get("remove_role_ids", []) if str(role_id).isdigit()]
+                try:
+                    if any(add_roles):
+                        await member.add_roles(*(role for role in add_roles if role), reason="Form automation")
+                    if any(remove_roles):
+                        await member.remove_roles(*(role for role in remove_roles if role), reason="Form automation")
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+            db.community_record_update(submission["id"], status="posted")

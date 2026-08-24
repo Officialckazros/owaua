@@ -1,13 +1,123 @@
 """Security regression tests for actions, moderation, rules, and voice."""
 
+import datetime
 import types
 import unittest
 from unittest import mock
 
-from sefbot import actions, function_registry, moderation, rules, voice
+from sefbot import actions, brain, function_registry, moderation, rules, slash, voice
 
 
 class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
+    def test_assistant_contract_proposes_one_confirmed_action(self):
+        contract = brain._ASSISTANT_JSON_CONTRACT
+        self.assertIn("exactly ONE proposal", contract)
+        self.assertIn("never say the action already happened", contract)
+        self.assertNotIn("actions MUST always be an empty list", contract)
+
+    def test_assistant_proposal_accepts_one_known_action_only(self):
+        proposal = {"type": "set_nickname", "target_user": "42", "nickname": "Raven"}
+        self.assertEqual([proposal], actions.assistant_proposals([proposal]))
+        self.assertEqual([], actions.assistant_proposals([proposal, proposal]))
+        self.assertEqual([], actions.assistant_proposals([{"type": "shell"}]))
+
+    def test_action_request_detection_does_not_match_general_creation(self):
+        self.assertTrue(actions.looks_like_action_request("rename <@123456789012345678> to Raven"))
+        self.assertTrue(actions.looks_like_action_request("create a private channel"))
+        self.assertFalse(actions.looks_like_action_request("create a Python class for me"))
+
+    def test_undo_request_detection_is_unambiguous(self):
+        for text in ("undo", "revert it", "reverse the last action", "put that back"):
+            self.assertTrue(actions.is_undo_request(text))
+        self.assertFalse(actions.is_undo_request("how do I revert a git commit?"))
+
+    def test_action_audit_redacts_message_and_reason(self):
+        audit = actions.audit_action_arguments(
+            {"type": "dm_user", "target_user": "42", "message": "private", "reason": "secret"}
+        )
+        self.assertNotIn("private", str(audit))
+        self.assertNotIn("secret", str(audit))
+        self.assertEqual(7, audit["message_length"])
+        self.assertEqual(6, audit["reason_length"])
+
+    def test_action_result_status_fails_closed_on_unknown_or_error_text(self):
+        self.assertTrue(actions.action_results_ok(["set Raven's nickname to Raven"]))
+        self.assertFalse(actions.action_results_ok(["set_nickname: target user not found"]))
+        self.assertFalse(actions.action_results_ok(["react: no emoji given"]))
+        self.assertFalse(actions.action_results_ok(["unexpected executor output"]))
+
+    async def test_nickname_inverse_captures_exact_previous_value(self):
+        target = types.SimpleNamespace(id=42, nick="Before")
+        with mock.patch.object(
+            actions, "_resolve_member", new_callable=mock.AsyncMock,
+            return_value=target,
+        ):
+            inverse = await actions.prepare_inverse(
+                {"type": "set_nickname", "target_user": "42", "nickname": "Raven"},
+                object(), object(), object(),
+            )
+        self.assertEqual(
+            {"type": "set_nickname", "target_user": "42", "nickname": "Before",
+             "reason": "revert previous assistant action"},
+            inverse,
+        )
+
+    async def test_irreversible_action_has_no_fake_inverse(self):
+        inverse = await actions.prepare_inverse(
+            {"type": "purge_messages", "count": 10}, object(), object(), object()
+        )
+        self.assertIsNone(inverse)
+
+    async def test_remove_timeout_inverse_preserves_exact_expiry(self):
+        expiry = actions.discord.utils.utcnow() + datetime.timedelta(minutes=17)
+        target = types.SimpleNamespace(id=42, timed_out_until=expiry)
+        with mock.patch.object(
+            actions, "_resolve_member", new_callable=mock.AsyncMock,
+            return_value=target,
+        ):
+            inverse = await actions.prepare_inverse(
+                {"type": "remove_timeout", "target_user": "42"},
+                object(), object(), object(),
+            )
+        self.assertEqual(expiry.isoformat(), inverse["until"])
+
+    async def test_assistant_confirmation_records_inverse_and_consumes_undo(self):
+        proposal = {"type": "set_nickname", "target_user": "42", "nickname": "Before"}
+        interaction = types.SimpleNamespace(
+            user=types.SimpleNamespace(id=7), guild_id=1, channel_id=2,
+        )
+        confirmation = types.SimpleNamespace(
+            user=types.SimpleNamespace(id=7),
+            guild=object(), guild_id=1,
+            channel=object(), channel_id=2,
+            client=object(),
+            followup=types.SimpleNamespace(send=mock.AsyncMock()),
+        )
+        inverse = {"type": "set_nickname", "target_user": "42", "nickname": "Raven"}
+        with (
+            mock.patch.object(
+                actions, "prepare_inverse", new_callable=mock.AsyncMock,
+                return_value=inverse,
+            ),
+            mock.patch.object(
+                actions, "execute_all", new_callable=mock.AsyncMock,
+                return_value=["set user's nickname to Before"],
+            ),
+            mock.patch.object(
+                actions, "finalize_inverse", new_callable=mock.AsyncMock,
+                return_value=inverse,
+            ),
+            mock.patch.object(slash.db, "record_assistant_action") as record_history,
+            mock.patch.object(slash.db, "record_action_audit"),
+        ):
+            view = slash._assistant_action_confirmation(
+                interaction, proposal, undo_record_id=99
+            )
+            await view.on_confirm(confirmation)
+        self.assertEqual(99, record_history.call_args.kwargs["consumed_action_id"])
+        self.assertEqual(inverse, record_history.call_args.kwargs["inverse"])
+        confirmation.followup.send.assert_awaited_once()
+
     async def test_model_actions_fail_closed_without_confirmation(self):
         proposal = {"type": "ban_user", "user_id": "42", "reason": "test"}
         with mock.patch.object(actions, "_one", new_callable=mock.AsyncMock) as execute:

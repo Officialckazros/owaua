@@ -9,8 +9,8 @@ from __future__ import annotations
 import html
 from typing import Final
 
-LEGAL_VERSION: Final = "3.0"
-LEGAL_EFFECTIVE_DATE: Final = "19 August 2026"
+LEGAL_VERSION: Final = "3.1"
+LEGAL_EFFECTIVE_DATE: Final = "24 August 2026"
 PUBLIC_BASE_URL: Final = "https://kozzyx.org/sefbot"
 TERMS_URL: Final = f"{PUBLIC_BASE_URL}/terms"
 PRIVACY_URL: Final = f"{PUBLIC_BASE_URL}/privacy"
@@ -69,7 +69,10 @@ actions. It is not a lawyer, doctor, journalist, or infallible database.</p>
 <li>Ordinary chat cannot execute Discord actions. Kick, ban, timeout, role,
 channel, and purge actions only run after an authorized human confirms an
 exact preview, and the bot re-checks permissions and role hierarchy at
-confirmation time.</li>
+confirmation time. Separately, administrators can deliberately enable
+deterministic dashboard rules such as autoban, automod, auto-delete, autoroles,
+scheduled purge, slowmode, tickets, forms, and giveaways. Those rules can take
+the configured action without a per-message confirmation.</li>
 <li>Community commands created with <code>!request</code> are prompt
 specifications stored as text. They are not executable host code.</li>
 <li>The bot's tone can be rude, sexual (adults), or dark-humored depending on
@@ -121,13 +124,18 @@ still use privacy/ToS/help commands so they can export or delete data.</p>
 
 <h2>6. Servers and administrators</h2>
 <p>Adding OpSef to a server is an administrator decision. Administrators can
-enable or leave disabled: raw history, passive moderation, server-rules
-review, and voice transcription. Those features stay off until both the
-process configuration allows them and the guild setting is turned on.</p>
+enable or leave disabled raw history, passive moderation, server-rules review,
+voice transcription, and the dashboard community/automation modules. New
+high-impact dashboard modules are off by default; existing safe features remain
+enabled for compatibility. Configuration changes are attributed to the
+dashboard session and retained in an audit trail.</p>
 <p>Administrators remain responsible for the actions they approve through
 <code>/act</code> and for staff review of moderation or rules findings.
-OpSef does not ban, kick, timeout, or delete messages because a model said
-so. Staff buttons and confirmation previews do.</p>
+OpSef does not ban, kick, timeout, or delete messages merely because a model
+said so. Staff buttons and confirmation previews control model-proposed
+actions. Deterministic rules explicitly configured by administrators (for
+example an account-age autoban or banned-phrase automod rule) are a separate
+automation path.</p>
 
 <h2>7. Third-party services</h2>
 <p>Using OpSef means Discord delivers your content to the bot, and the bot
@@ -227,6 +235,12 @@ turns, or audit rows if another feature saves them.</p>
 <tr><td>interactions</td><td>Kind of interaction, author, guild, time (counts, not full text)</td><td>As you use features</td></tr>
 <tr><td>guild_settings</td><td>Persona, lurk, swear level, allowed channels, history/moderation/rules/STT flags, retention days, log channel ids, optional reply-language default</td><td>When administrators configure the server</td></tr>
 <tr><td>action_audit</td><td>Actor id, scope, action type, target id, parameters (JSON, capped), status, result, times</td><td>On confirmed <code>/act</code> and similar gated actions</td></tr>
+<tr><td>assistant_action_history</td><td>Actor/scope/channel ids, confirmed action and result, redacted parameters, and an exact inverse when safely reversible</td><td>After a confirmed assistant action, so <code>assistant undo</code> can propose a rollback</td></tr>
+<tr><td>module_settings</td><td>Per-server module enabled flags and bounded JSON settings, updater id and time</td><td>When an authenticated dashboard operator saves a module</td></tr>
+<tr><td>dashboard_audit</td><td>Server id, dashboard actor label, module/action, limited detail and time</td><td>For dashboard configuration changes; retained under the same content-retention cleanup</td></tr>
+<tr><td>community_records</td><td>Typed records for reminders, highlights, tags, warnings, tickets, forms/access links/submissions, giveaways, feed/starboard state and similar enabled workflows</td><td>Only when the corresponding module is enabled and someone uses it</td></tr>
+<tr><td>afk_statuses / afk_notes</td><td>Server/user ids, AFK reason, prior nickname, notification preference, and notes deliberately left by members</td><td>While AFK is enabled; status and delivered notes are removed on return</td></tr>
+<tr><td>user_levels / daily_claims</td><td>Per-server XP, level, message count, XP cooldown, daily claim time and streak</td><td>When Levels/Economy is enabled and used</td></tr>
 <tr><td>dynamic_blocks</td><td>Blocked user id, source (manual/ToS/other), reason, category, SHA-256 prefix of evidence, guild/channel ids, strike notes, last 10 history events</td><td>On ToS hard-block or operator block</td></tr>
 <tr><td>user flags (kv)</td><td>ToS version accepted and when; reject time; strike counters; emergency-block flag; DM-block flag; freaky-mode flag; reply-language preference; per-guild STT consent flags</td><td>As those features are used</td></tr>
 <tr><td>economy_accounts / work_cooldowns</td><td>Toy currency balance and work timestamps</td><td>If you use those commands</td></tr>
@@ -275,6 +289,13 @@ consent.</li>
 <li><strong><code>/say</code> TTS</strong> sends the text you asked the bot
 to speak to the configured TTS provider and plays audio. It does not require
 STT consent.</li>
+<li><strong>Dashboard modules</strong> that can moderate, delete, post feeds,
+or change roles are off by default. If an administrator enables them, the bot
+can inspect live message/member/voice
+events for deterministic filters, send notifications, change configured roles
+or channel permissions, and store the bounded workflow records listed above.
+Public forms accept the answers a visitor submits; member-only forms use an
+expiring link issued to that Discord user. Form submissions are rate-limited.</li>
 </ul>
 <p>Opt-out for a scope revokes consent and deletes raw <code>server_messages</code>
 for you in that scope. Explicit memories are left until you export or
@@ -309,6 +330,12 @@ an optional server default). Incoming language is also detected on-box with
 list and no language is set, a translation/reply model may be called.</li>
 <li><strong>Safety / rules models</strong>: classifier prompts, not
 open-ended control of the server.</li>
+<li><strong>Feeds and utilities</strong>: configured subreddit names and
+YouTube channel ids go to public Reddit/YouTube endpoints. Twitch and Kick use
+operator-supplied app credentials; TikTok uses a creator-authorized Display API
+token. Pokémon, iTunes, GitHub, joke, dog-image, and ISS commands send only the
+lookup term needed to their fixed public API endpoint. Integration responses
+are size-bounded and redirects are refused.</li>
 </ul>
 <p>Providers see IP addresses of this server, not your home IP, except that
 Cloudflare and Discord see client IPs on the public website and the Discord
@@ -325,6 +352,9 @@ older rows before the bot reports ready. Legacy raw history from older
 schema versions is purged on migrate.</li>
 <li>Feedback rows older than that retention window are also deleted on
 cleanup.</li>
+<li>Assistant action/undo history is exact-user and exact-scope, expires
+within the same 30-day retention window, and is included in privacy export
+and deletion.</li>
 <li>Memories, lessons, quotes, relationships, command specs, economy,
 consents, and guild settings stay until deleted or no longer needed to run
 the bot.</li>

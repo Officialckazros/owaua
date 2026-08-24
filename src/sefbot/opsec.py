@@ -4,6 +4,7 @@ from typing import Dict, List, Tuple
 from sefbot import db
 
 _WORK_COOLDOWN_SECONDS = 60
+WORK_REWARD_MIN, WORK_REWARD_MAX = 50, 499
 _POSITIONS = [
     "cashier",
     "janitor",
@@ -29,19 +30,26 @@ def get_leaderboard(limit: int = 10) -> List[Tuple[str, Dict[str, int]]]:
     return db.economy_leaderboard(limit)
 
 
-def work_cooldown_left(user_id: str) -> int:
+def work_cooldown_left(
+    user_id: str, cooldown_seconds: int = _WORK_COOLDOWN_SECONDS
+) -> int:
     row = db.conn().execute(
         "SELECT last_work FROM work_cooldowns WHERE user_id=?", (str(user_id),)
     ).fetchone()
     if not row:
         return 0
-    return max(0, int(_WORK_COOLDOWN_SECONDS - (db.now() - float(row["last_work"]))))
+    return max(0, int(cooldown_seconds - (db.now() - float(row["last_work"]))))
 
 
-def perform_work(user_id: str) -> Tuple[int, int, str]:
-    reward = _RNG.randint(50, 499)
+def perform_work(
+    user_id: str,
+    *,
+    cooldown_seconds: int = _WORK_COOLDOWN_SECONDS,
+    reward_multiplier: float = 1.0,
+) -> Tuple[int, int, str]:
+    reward = int(_RNG.randint(WORK_REWARD_MIN, WORK_REWARD_MAX) * reward_multiplier)
     position = _RNG.choice(_POSITIONS)
-    remaining, balance = db.economy_claim_work(user_id, reward, _WORK_COOLDOWN_SECONDS)
+    remaining, balance = db.economy_claim_work(user_id, reward, cooldown_seconds)
     return (0 if remaining else reward), balance, position
 
 

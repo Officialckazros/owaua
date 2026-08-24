@@ -29,6 +29,7 @@ from sefbot import (
     auditlog,
     brain,
     ckazros,
+    community,
     config,
     customcmds,
     db,
@@ -286,6 +287,91 @@ async def _propose_discord_action(
         view=view,
         ephemeral=True,
     )
+
+
+def _assistant_action_confirmation(
+    interaction: discord.Interaction,
+    proposal: dict,
+    *,
+    source: str = "slash-assistant",
+    undo_record_id: int | None = None,
+) -> InvokerConfirmation:
+    """Build and audit a generated assistant-action confirmation."""
+    correlation_id = uuid.uuid4().hex
+    action_name = actions.action_type(proposal) or "unknown"
+    audit_parameters = actions.audit_action_arguments(proposal)
+
+    async def _execute(confirmation: discord.Interaction) -> None:
+        inverse_seed = None
+        if confirmation.guild is None:
+            results = ["actions only work in a server"]
+        else:
+            try:
+                inverse_seed = await actions.prepare_inverse(
+                    proposal, confirmation.user, confirmation.guild,
+                    confirmation.channel,
+                )
+            except Exception:
+                _LOG.exception("could not capture assistant action undo state")
+            results = await actions.execute_all(
+                [proposal],
+                confirmation.user,
+                confirmation.guild,
+                confirmation.client,
+                confirmation.channel,
+                confirmed=True,
+            )
+        ok = actions.action_results_ok(results, proposal)
+        result = "\n".join(results) or "nothing was executed"
+        if ok and actions.is_state_changing(proposal):
+            try:
+                inverse = await actions.finalize_inverse(
+                    inverse_seed, confirmation.guild
+                )
+                db.record_assistant_action(
+                    actor_id=str(confirmation.user.id),
+                    scope_id=_guild_id(confirmation),
+                    channel_id=str(confirmation.channel_id)
+                    if confirmation.channel_id is not None else None,
+                    action=action_name,
+                    target_id=actions.action_target_id(proposal),
+                    parameters=audit_parameters,
+                    result=result,
+                    inverse=inverse,
+                    source_nonce=view.nonce,
+                    consumed_action_id=undo_record_id,
+                )
+            except Exception:
+                _LOG.exception("could not persist assistant action history")
+        db.record_action_audit(
+            nonce=view.nonce,
+            actor_id=str(confirmation.user.id),
+            scope_id=_guild_id(confirmation),
+            action=action_name,
+            target_id=actions.action_target_id(proposal),
+            parameters=audit_parameters,
+            source=source,
+            correlation_id=correlation_id,
+            status="completed" if ok else "failed",
+            result=result,
+        )
+        await confirmation.followup.send(
+            embed=embeds.ok(result) if ok else embeds.error(result), ephemeral=True
+        )
+
+    view = _confirmation(interaction, _execute)
+    db.record_action_audit(
+        nonce=view.nonce,
+        actor_id=str(interaction.user.id),
+        scope_id=_guild_id(interaction),
+        action=action_name,
+        target_id=actions.action_target_id(proposal),
+        parameters=audit_parameters,
+        source=source,
+        correlation_id=correlation_id,
+        status="pending",
+    )
+    return view
 
 
 def _has_manage_messages(interaction: discord.Interaction) -> bool:
@@ -580,6 +666,21 @@ async def _generate_reply(
         # Model classifications are advisory and can never globally block a user.
         print(f"[tos] advisory model flag ignored for enforcement ({author})")
 
+    proposals = actions.assistant_proposals(data.get("actions")) if assistant else []
+    requested_action = assistant and actions.looks_like_action_request(query)
+    if proposals and guild is not None:
+        response = (
+            f"Ready to `{actions.preview_action(proposals[0])}`. Nothing has changed "
+            "yet; use Confirm below to execute it."
+        )
+    elif requested_action and guild is None:
+        response = "Discord actions only work inside a server; nothing was changed."
+    elif requested_action and not proposals:
+        response = (
+            "I couldn't resolve that into one safe Discord action, so nothing was "
+            "changed. Mention the exact user, role, or channel and try again."
+        )
+
     brain.persist_memories(data.get("memories"), author, guild_id)
     brain.apply_relationship(data, author, guild_id)
     brain.apply_quotes(data, guild_id, author)
@@ -601,7 +702,66 @@ async def _generate_reply(
         embeds.add_support_resources(embed)
     if search_sources:
         embeds.add_sources(embed, search_sources)
-    return embed, response
+    return embed, response, proposals
+
+
+class _InteractionChannel:
+    """Make a deferred slash response look like the current message channel."""
+
+    def __init__(self, interaction: discord.Interaction) -> None:
+        self._interaction = interaction
+        self._channel = interaction.channel
+
+    def __getattr__(self, name: str):
+        if self._channel is None:
+            raise AttributeError(name)
+        return getattr(self._channel, name)
+
+    async def send(self, *args, **kwargs):
+        return await self._interaction.followup.send(*args, wait=True, **kwargs)
+
+
+class _InteractionMessage:
+    """Small Discord message adapter for the shared community command runtime."""
+
+    def __init__(
+        self,
+        interaction: discord.Interaction,
+        mentions: list[discord.Member] | None = None,
+    ) -> None:
+        self.guild = interaction.guild
+        self.author = interaction.user
+        self.channel = _InteractionChannel(interaction)
+        self.mentions = list(mentions or [])
+        self.id = interaction.id
+        self.jump_url = ""
+        self.content = ""
+
+
+async def _run_community_command(
+    interaction: discord.Interaction,
+    name: str,
+    argument: str = "",
+    *,
+    mentions: list[discord.Member] | None = None,
+) -> None:
+    if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+        await interaction.response.send_message(
+            embed=embeds.error("this command is available inside a server."),
+            ephemeral=True,
+        )
+        return
+    await interaction.response.defer(thinking=True)
+    handled = await community.handle_prefix_command(
+        _InteractionMessage(interaction, mentions), name, argument
+    )
+    if not handled:
+        await interaction.followup.send(
+            embed=embeds.error(
+                "this module is disabled. Enable it in the SefBot dashboard first."
+            ),
+            ephemeral=True,
+        )
 
 
 class _BlockingTree(app_commands.CommandTree):
@@ -765,7 +925,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         elif not q:
             q = "hey"
         await interaction.response.defer(thinking=True)
-        embed, response = await _generate_reply(
+        embed, response, _proposals = await _generate_reply(
             interaction, q, file_notes=file_notes
         )
         sent = await interaction.followup.send(embed=embed, wait=True)
@@ -1110,7 +1270,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
 
     @tree.command(
         name="assistant",
-        description="One-shot helpful mode for this request only (roles, clear answers).",
+        description="Helpful answers and confirmed actions; say 'undo' to revert the last one.",
     )
     @app_commands.describe(
         request="what you want done — this reply only is assistant mode",
@@ -1148,11 +1308,54 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         if brain.assistant_mode_on(author):
             brain.set_assistant_mode(author, False)
         db.log_interaction("assistant", author, guild_id)
+        if actions.is_undo_request(req):
+            await interaction.response.defer(thinking=True, ephemeral=True)
+            previous = db.latest_assistant_action(author, guild_id)
+            if previous is None:
+                await interaction.followup.send(
+                    embed=embeds.error(
+                        "I don't have a previous confirmed assistant action to revert "
+                        "in this server."
+                    ),
+                    ephemeral=True,
+                )
+                return
+            proposals = actions.assistant_proposals([previous.get("inverse")])
+            if not proposals:
+                await interaction.followup.send(
+                    embed=embeds.error(
+                        f"The last confirmed action was `{previous['action']}`, but it "
+                        "cannot be safely reversed automatically."
+                    ),
+                    ephemeral=True,
+                )
+                return
+            proposal = proposals[0]
+            view = _assistant_action_confirmation(
+                interaction, proposal, undo_record_id=int(previous["id"])
+            )
+            await interaction.followup.send(
+                embed=embeds.say(
+                    f"Ready to revert `{previous['action']}` with "
+                    f"`{actions.preview_action(proposal)}`. Nothing has changed yet; "
+                    "use Confirm below.",
+                    title="assistant · revert",
+                ),
+                view=view,
+                ephemeral=True,
+            )
+            return
         await interaction.response.defer(thinking=True)
-        embed, response = await _generate_reply(
+        embed, response, proposals = await _generate_reply(
             interaction, req, force_assistant=True, file_notes=file_notes
         )
-        await interaction.followup.send(embed=embed)
+        view = (
+            _assistant_action_confirmation(interaction, proposals[0])
+            if proposals else None
+        )
+        await interaction.followup.send(
+            embed=embed, view=view, ephemeral=bool(view)
+        )
 
     @tree.command(
         name="ckazros",
@@ -1175,10 +1378,18 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             return
         db.log_interaction("ckazros", author, _guild_id(interaction))
         await interaction.response.defer(thinking=True)
-        embed, _response = await _generate_reply(
+        embed, _response, proposals = await _generate_reply(
             interaction, result.query, force_assistant=True, owner_command=True
         )
-        await interaction.followup.send(embed=embed)
+        view = (
+            _assistant_action_confirmation(
+                interaction, proposals[0], source="slash-ckazros"
+            )
+            if proposals else None
+        )
+        await interaction.followup.send(
+            embed=embed, view=view, ephemeral=bool(view)
+        )
 
     async def _language_autocomplete(
         interaction: discord.Interaction, current: str
@@ -3162,7 +3373,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             )
             return
         q = (prompt or "").strip() or "Please read, summarize, and explain the key points in this attached text file."
-        embed, response = await _generate_reply(
+        embed, response, _proposals = await _generate_reply(
             interaction, q, file_notes=file_notes
         )
         sent = await interaction.followup.send(embed=embed, wait=True)
@@ -3388,5 +3599,244 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             ),
             ephemeral=True,
         )
+
+    @tree.command(name="afk", description="Set or manage an AFK status.")
+    @app_commands.describe(
+        action="set, list, note, or clear",
+        reason="AFK reason or note text",
+        user="AFK member receiving a note or moderator clear",
+    )
+    async def afk_cmd(
+        interaction: discord.Interaction,
+        action: Literal["set", "list", "note", "clear"] = "set",
+        reason: Optional[str] = None,
+        user: Optional[discord.Member] = None,
+    ):
+        mentions = [user] if user else []
+        if action == "set":
+            argument = reason or "AFK"
+        elif action == "list":
+            argument = "list"
+        elif action == "note":
+            argument = f"note {user.mention if user else ''} {reason or 'Left you a note.'}"
+        else:
+            argument = f"clear {user.mention if user else ''}"
+        await _run_community_command(
+            interaction, "afk", argument.strip(), mentions=mentions
+        )
+
+    @tree.command(name="remind", description="Set a personal timed reminder.")
+    @app_commands.describe(duration="such as 30m, 2h, or 1d", text="reminder text")
+    async def remind_cmd(
+        interaction: discord.Interaction, duration: str, text: str
+    ):
+        await _run_community_command(interaction, "remind", f"{duration} {text}")
+
+    @tree.command(name="highlight", description="Manage highlighted phrases.")
+    @app_commands.describe(action="add, delete, or list", phrase="phrase to manage")
+    async def highlight_cmd(
+        interaction: discord.Interaction,
+        action: Literal["add", "delete", "list"] = "list",
+        phrase: Optional[str] = None,
+    ):
+        await _run_community_command(
+            interaction, "highlight", f"{action} {phrase or ''}".strip()
+        )
+
+    @tree.command(name="tag", description="Create, show, edit, delete, or list tags.")
+    @app_commands.describe(
+        action="show, create, edit, delete, or list",
+        name="tag name",
+        content="tag content when creating or editing",
+    )
+    async def tag_cmd(
+        interaction: discord.Interaction,
+        action: Literal["show", "create", "edit", "delete", "list"],
+        name: Optional[str] = None,
+        content: Optional[str] = None,
+    ):
+        if action == "show":
+            argument = name or ""
+        elif action == "list":
+            argument = "list"
+        else:
+            argument = f"{action} {name or ''} {content or ''}".strip()
+        await _run_community_command(interaction, "tag", argument)
+
+    economy_group = app_commands.Group(
+        name="economy", description="Coins, cards, decks, and battles."
+    )
+
+    @economy_group.command(name="wallet", description="Show a coin and gem balance.")
+    async def economy_wallet(
+        interaction: discord.Interaction, user: Optional[discord.Member] = None
+    ):
+        await _run_community_command(
+            interaction,
+            "wallet",
+            user.mention if user else "",
+            mentions=[user] if user else [],
+        )
+
+    @economy_group.command(name="pay", description="Transfer coins to another member.")
+    async def economy_pay(
+        interaction: discord.Interaction, user: discord.Member, amount: int
+    ):
+        await _run_community_command(
+            interaction, "pay", f"{user.mention} {amount}", mentions=[user]
+        )
+
+    @economy_group.command(name="pack", description="Buy and open a three-card pack.")
+    async def economy_pack(interaction: discord.Interaction):
+        await _run_community_command(interaction, "pack")
+
+    @economy_group.command(name="cards", description="List your card collection.")
+    async def economy_cards(interaction: discord.Interaction):
+        await _run_community_command(interaction, "cards")
+
+    @economy_group.command(name="fuse", description="Fuse two duplicate cards.")
+    async def economy_fuse(interaction: discord.Interaction, card_name: str):
+        await _run_community_command(interaction, "fuse", card_name)
+
+    @economy_group.command(name="deck", description="View or set your battle deck.")
+    async def economy_deck(
+        interaction: discord.Interaction,
+        action: Literal["view", "set"] = "view",
+        card_ids: Optional[str] = None,
+    ):
+        argument = f"set {card_ids or ''}".strip() if action == "set" else ""
+        await _run_community_command(interaction, "deck", argument)
+
+    @economy_group.command(name="battle", description="Challenge another member's deck.")
+    async def economy_battle(
+        interaction: discord.Interaction, user: discord.Member
+    ):
+        await _run_community_command(
+            interaction, "battle", user.mention, mentions=[user]
+        )
+
+    tree.add_command(economy_group)
+
+    @tree.command(name="announce", description="Post a server announcement.")
+    async def announce_cmd(interaction: discord.Interaction, message: str):
+        await _run_community_command(interaction, "announce", message)
+
+    @tree.command(name="giveaway", description="Create, end, or reroll a giveaway.")
+    async def giveaway_cmd(
+        interaction: discord.Interaction,
+        action: Literal["create", "end", "reroll"],
+        duration_or_message_id: str,
+        winners: int = 1,
+        prize: Optional[str] = None,
+    ):
+        if action == "create":
+            argument = (
+                f"create {duration_or_message_id} | {winners} | "
+                f"{prize or 'Mystery prize'}"
+            )
+        else:
+            argument = f"{action} {duration_or_message_id}"
+        await _run_community_command(interaction, "giveaway", argument)
+
+    @tree.command(name="ticket", description="Open, close, or resolve a support ticket.")
+    async def ticket_cmd(
+        interaction: discord.Interaction,
+        action: Literal["open", "close", "resolve"],
+        subject: Optional[str] = None,
+    ):
+        await _run_community_command(
+            interaction, "ticket", f"{action} {subject or ''}".strip()
+        )
+
+    @tree.command(name="form", description="Open a configured server form.")
+    async def form_cmd(
+        interaction: discord.Interaction, slug: Optional[str] = None
+    ):
+        await _run_community_command(interaction, "form", slug or "")
+
+    @tree.command(name="ranks", description="List, join, or leave a self-assignable rank.")
+    async def ranks_cmd(
+        interaction: discord.Interaction,
+        action: Literal["list", "join", "leave"] = "list",
+        name: Optional[str] = None,
+    ):
+        await _run_community_command(
+            interaction, "ranks", f"{action} {name or ''}".strip()
+        )
+
+    fun_group = app_commands.Group(
+        name="fun", description="Games, media, polls, and information."
+    )
+
+    @fun_group.command(name="coinflip", description="Flip a coin.")
+    async def fun_coinflip(interaction: discord.Interaction):
+        await _run_community_command(interaction, "coinflip")
+
+    @fun_group.command(name="dice", description="Roll a die.")
+    async def fun_dice(interaction: discord.Interaction, sides: int = 6):
+        await _run_community_command(interaction, "dice", str(sides))
+
+    @fun_group.command(name="rps", description="Play rock-paper-scissors.")
+    async def fun_rps(
+        interaction: discord.Interaction,
+        choice: Literal["rock", "paper", "scissors"],
+    ):
+        await _run_community_command(interaction, "rps", choice)
+
+    @fun_group.command(name="poll", description="Create a reaction poll.")
+    async def fun_poll(
+        interaction: discord.Interaction, question: str, options: str
+    ):
+        await _run_community_command(
+            interaction, "poll", f"{question} | {options}"
+        )
+
+    @fun_group.command(name="cat", description="Show a cat.")
+    async def fun_cat(interaction: discord.Interaction):
+        await _run_community_command(interaction, "cat")
+
+    @fun_group.command(name="dog", description="Show a dog.")
+    async def fun_dog(interaction: discord.Interaction):
+        await _run_community_command(interaction, "dog")
+
+    @fun_group.command(name="pug", description="Show a pug.")
+    async def fun_pug(interaction: discord.Interaction):
+        await _run_community_command(interaction, "pug")
+
+    @fun_group.command(name="dadjoke", description="Tell a dad joke.")
+    async def fun_dadjoke(interaction: discord.Interaction):
+        await _run_community_command(interaction, "dadjoke")
+
+    @fun_group.command(name="pokemon", description="Look up a Pokémon.")
+    async def fun_pokemon(interaction: discord.Interaction, name: str):
+        await _run_community_command(interaction, "pokemon", name)
+
+    @fun_group.command(name="itunes", description="Look up a song on iTunes.")
+    async def fun_itunes(interaction: discord.Interaction, query: str):
+        await _run_community_command(interaction, "itunes", query)
+
+    @fun_group.command(name="github", description="Look up a GitHub repository.")
+    async def fun_github(interaction: discord.Interaction, repository: str):
+        await _run_community_command(interaction, "github", repository)
+
+    @fun_group.command(name="iss", description="Show the current ISS position.")
+    async def fun_iss(interaction: discord.Interaction):
+        await _run_community_command(interaction, "iss")
+
+    @fun_group.command(name="distance", description="Calculate great-circle distance.")
+    async def fun_distance(
+        interaction: discord.Interaction,
+        latitude_1: float,
+        longitude_1: float,
+        latitude_2: float,
+        longitude_2: float,
+    ):
+        await _run_community_command(
+            interaction,
+            "distance",
+            f"{latitude_1}, {longitude_1}, {latitude_2}, {longitude_2}",
+        )
+
+    tree.add_command(fun_group)
 
     return tree

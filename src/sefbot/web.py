@@ -26,6 +26,12 @@ from typing import Final, TypeAlias
 
 from aiohttp import web
 
+from sefbot.dashboard import (
+    DASHBOARD_PREFIX,
+    DashboardAuthConfig,
+    GuildProvider,
+    attach_dashboard_routes,
+)
 from sefbot.legal import privacy_inner, terms_inner
 from sefbot.sites import (
     SITE_FLAG,
@@ -130,6 +136,20 @@ def _html_response(content: str) -> web.Response:
     return web.Response(text=content, content_type="text/html", charset="utf-8")
 
 
+def _apply_dashboard_headers(response: web.StreamResponse) -> None:
+    response.headers.setdefault("Cache-Control", "no-store")
+    response.headers.setdefault("X-Robots-Tag", "noindex, nofollow")
+    response.headers.setdefault(
+        "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+    )
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
+        "form-action 'self'; object-src 'none'; img-src 'self' data:; "
+        "style-src 'self'; script-src 'self'; connect-src 'self'",
+    )
+
+
 def _valid_bind_host(host: str) -> bool:
     try:
         ipaddress.ip_address(host)
@@ -168,6 +188,12 @@ async def _site_fallback(
     try:
         return await handler(request)
     except web.HTTPNotFound:
+        if (
+            request.path == DASHBOARD_PREFIX
+            or request.path.startswith(DASHBOARD_PREFIX + "/")
+            or request.path.startswith("/forms/")
+        ):
+            raise
         sites_root = request.app.get("sites_root")
         if not isinstance(sites_root, Path) or not sites_root.is_dir():
             raise
@@ -182,6 +208,15 @@ async def _security_headers(
     try:
         response = await handler(request)
     except web.HTTPException as error:
+        if (
+            request.path == DASHBOARD_PREFIX
+            or request.path.startswith(DASHBOARD_PREFIX + "/")
+            or request.path.startswith("/forms/")
+        ):
+            # Preserve Set-Cookie on login/logout redirects. Rebuilding an
+            # HTTPException as a Response would discard its cookie jar.
+            _apply_dashboard_headers(error)
+            raise
         response = web.Response(
             status=error.status,
             reason=error.reason,
@@ -193,6 +228,15 @@ async def _security_headers(
             return response
     if request.get(SITE_FLAG):
         apply_site_headers(response, request.path)
+        return response
+    if (
+        request.path == DASHBOARD_PREFIX
+        or request.path.startswith(DASHBOARD_PREFIX + "/")
+        or request.path.startswith("/forms/")
+    ):
+        # Dashboard responses set a route-specific CSP that allows only their
+        # same-origin stylesheet, script and API calls.
+        _apply_dashboard_headers(response)
         return response
     response.headers["Content-Security-Policy"] = (
         "default-src 'none'; base-uri 'none'; form-action 'none'; "
@@ -250,6 +294,9 @@ def create_app(
     privacy_contact: str,
     readiness: ReadinessProvider | None = None,
     sites_root: str | os.PathLike[str] | None = None,
+    dashboard_token: str | None = None,
+    dashboard_auth: DashboardAuthConfig | None = None,
+    guild_provider: GuildProvider | None = None,
 ) -> web.Application:
     """Create the HTTP application without starting a listening socket."""
 
@@ -269,7 +316,7 @@ def create_app(
         raise WebConfigurationError("readiness provider must be callable")
     app = web.Application(
         middlewares=[_security_headers, _site_fallback],
-        client_max_size=MAX_REQUEST_BYTES,
+        client_max_size=300_000,
     )
 
     async def landing(_request: web.Request) -> web.Response:
@@ -313,6 +360,12 @@ def create_app(
     app.router.add_get("/opsef-privacy.html", redirect_privacy)
     app.router.add_get("/healthz", health)
     app.router.add_get("/readyz", ready)
+    attach_dashboard_routes(
+        app,
+        access_token=dashboard_token,
+        guild_provider=guild_provider,
+        auth_config=dashboard_auth,
+    )
     attach_site_routes(app, resolve_sites_root(sites_root))
     return app
 
@@ -327,6 +380,9 @@ class WebService:
         readiness: ReadinessProvider,
         host: str = DEFAULT_HOST,
         port: int = DEFAULT_PORT,
+        dashboard_token: str | None = None,
+        dashboard_auth: DashboardAuthConfig | None = None,
+        guild_provider: GuildProvider | None = None,
     ) -> None:
         try:
             normalized_port = int(port)
@@ -336,7 +392,11 @@ class WebService:
             raise WebConfigurationError("web port must be between 1 and 65535")
         normalized_host = _normalize_bind_host(host)
         self._app = create_app(
-            privacy_contact=privacy_contact, readiness=readiness
+            privacy_contact=privacy_contact,
+            readiness=readiness,
+            dashboard_token=dashboard_token,
+            dashboard_auth=dashboard_auth,
+            guild_provider=guild_provider,
         )
         self._host = normalized_host
         self._port = normalized_port
@@ -382,7 +442,20 @@ def _environment_port() -> int:
 def main() -> None:
     try:
         contact = os.getenv("SEFBOT_PRIVACY_CONTACT", "")
-        app = create_app(privacy_contact=contact)
+        app = create_app(
+            privacy_contact=contact,
+            dashboard_token=os.getenv("SEFBOT_DASHBOARD_TOKEN"),
+            dashboard_auth=DashboardAuthConfig(
+                public_url=os.getenv("SEFBOT_DASHBOARD_PUBLIC_URL", ""),
+                session_secret=os.getenv("SEFBOT_DASHBOARD_SESSION_SECRET", ""),
+                firebase_api_key=os.getenv("SEFBOT_FIREBASE_API_KEY", ""),
+                firebase_auth_domain=os.getenv("SEFBOT_FIREBASE_AUTH_DOMAIN", ""),
+                firebase_project_id=os.getenv("SEFBOT_FIREBASE_PROJECT_ID", ""),
+                firebase_app_id=os.getenv("SEFBOT_FIREBASE_APP_ID", ""),
+                discord_client_id=os.getenv("SEFBOT_DISCORD_CLIENT_ID", ""),
+                discord_client_secret=os.getenv("SEFBOT_DISCORD_CLIENT_SECRET", ""),
+            ),
+        )
         port = _environment_port()
         host = _normalize_bind_host(os.getenv("SEFBOT_WEB_HOST", DEFAULT_HOST))
     except WebConfigurationError as error:
