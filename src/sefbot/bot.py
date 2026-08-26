@@ -21,6 +21,7 @@ import discord
 from sefbot import (
     actions,
     ai,
+    ai_workflows,
     archive,
     auditlog,
     blocked,
@@ -1715,6 +1716,9 @@ async def _handle_command(message, body, guild_id, author, *, prefix: str | None
         "sec": _cmd_cybersec,
         "infosec": _cmd_cybersec,
         "ask": _cmd_ask,
+        "ai": _cmd_ai,
+        "aichannel": _cmd_ai_channel,
+        "channelai": _cmd_ai_channel,
         "assistant": _cmd_assistant,
         "assist": _cmd_assistant,
         "ckazros": _cmd_ckazros,
@@ -1862,6 +1866,8 @@ async def _cmd_help(message, arg, guild_id, author):
         f"**utilities** `{p}coinflip` `{p}dice` `{p}rps` `{p}poll` `{p}cat` `{p}dog` `{p}pug` `{p}dadjoke` `{p}pokemon` `{p}itunes` `{p}github` `{p}iss` `{p}distance`\n"
         f"**boosters** `{p}booster` `{p}boostperks` `{p}boosterrole <#hex> [name]` — tracking, roles, channels and rewards\n"
         f"**ask** `{p}ask <question>` — ask the DeepSeek V4 Flash model directly\n"
+        f"**AI toolkit** `{p}ai <workflow> [text]` — 21 read-only workflows; reply to a message or attach text too\n"
+        f"**channel AI** `{p}aichannel summarize|actions|notes|decisions|sentiment|triage` — recent-channel intelligence\n"
         f"**learn** `{p}cybersec <topic>` (smartest model) · `{p}search <query>`\n"
         f"**music** `{p}music <song name>` — returns a validated search/watch link\n"
         f"**nsfw** `{p}nsfw <character_tag> [1-10]` — Rule34 images; age-restricted channels only\n"
@@ -2587,6 +2593,168 @@ async def _cmd_ask(message, arg, guild_id, author):
     text = brain.scrub_ai_output(text, assistant=True)
     await _send(message.channel, embeds.say(text, title="ask"),
                 user_msg=q, bot_msg=text, author=author)
+
+
+async def _workflow_source_from_message(message, source: str, max_chars: int) -> str:
+    """Resolve explicit text, a text attachment, or a replied-to message."""
+    parts = [str(source or "").strip()]
+    file_notes = await textfiles.extract_message_text_files(
+        message, max_chars_per_file=max_chars
+    )
+    if file_notes:
+        parts.append(file_notes)
+    if not any(parts) and getattr(message, "reference", None):
+        parent = getattr(message.reference, "resolved", None)
+        if not isinstance(parent, discord.Message) and message.reference.message_id:
+            try:
+                parent = await message.channel.fetch_message(message.reference.message_id)
+            except (discord.Forbidden, discord.HTTPException):
+                parent = None
+        if isinstance(parent, discord.Message):
+            if (
+                message.guild is not None
+                and not getattr(parent.author, "bot", False)
+                and not db.privacy_opted_in(
+                    str(parent.author.id),
+                    scope_key(guild_id=message.guild.id, user_id=message.author.id),
+                )
+            ):
+                raise PermissionError(
+                    "that message's author has not opted in to AI processing here"
+                )
+            parts.append(parent.content or "")
+    return "\n\n".join(part for part in parts if part).strip()[:max_chars]
+
+
+async def _cmd_ai(message, arg, guild_id, author):
+    task, instruction, source = ai_workflows.split_prefix_request(arg)
+    p = _prefix_for_scope(guild_id)
+    if task is None:
+        body = (
+            f"usage: `{p}ai <workflow> [text]` or reply/attach a text file. "
+            f"For a separate instruction use `{p}ai rewrite professional | text`.\n\n"
+            + ai_workflows.workflow_list(include_staff=_message_is_mod(message))
+        )
+        await _send(message.channel, embeds.say(body, title="AI toolkit"), feedback=False)
+        return
+    is_staff = _message_is_mod(message)
+    max_chars = ai_workflows.max_input_chars(guild_id)
+    try:
+        source = await _workflow_source_from_message(message, source, max_chars)
+    except PermissionError as exc:
+        await _send(message.channel, embeds.error(str(exc)), feedback=False)
+        return
+    if not source:
+        await _send(
+            message.channel,
+            embeds.error("give me text, attach a text file, or reply to a message."),
+            feedback=False,
+        )
+        return
+    db.log_interaction(f"ai_{task}", author, guild_id)
+    async with message.channel.typing():
+        try:
+            result = await ai_workflows.run_workflow(
+                guild_id,
+                task,
+                source,
+                extra_instruction=instruction,
+                is_staff=is_staff,
+            )
+        except (ValueError, PermissionError, RuntimeError) as exc:
+            await _send(message.channel, embeds.error(str(exc)), feedback=False)
+            return
+        except Exception as exc:
+            await _send(
+                message.channel,
+                embeds.error(f"AI workflow failed: {ai.friendly_error(exc)}"),
+                feedback=False,
+            )
+            return
+    embed = embeds.add_sources(embeds.say(result.text, title=f"AI · {result.label}"), list(result.sources))
+    await _send(
+        message.channel,
+        embed,
+        user_msg=f"ai {task}",
+        bot_msg=result.text,
+        author=author,
+    )
+
+
+def _message_is_mod(message) -> bool:
+    if message.guild is None or not isinstance(message.author, discord.Member):
+        return False
+    permissions = message.author.guild_permissions
+    return bool(
+        message.guild.owner_id == message.author.id
+        or permissions.manage_guild
+        or permissions.administrator
+    )
+
+
+async def _cmd_ai_channel(message, arg, guild_id, author):
+    task_raw, _, instruction = str(arg or "").strip().partition(" ")
+    task = ai_workflows.normalize_task(task_raw or "summarize")
+    p = _prefix_for_scope(guild_id)
+    if message.guild is None:
+        await _send(message.channel, embeds.error("channel AI only works in a server."), feedback=False)
+        return
+    if not db.guild_settings(guild_id).get("history_enabled", False):
+        await _send(
+            message.channel,
+            embeds.error("channel AI requires server history storage to be enabled."),
+            feedback=False,
+        )
+        return
+    if task not in ai_workflows.CHANNEL_WORKFLOWS:
+        options = ", ".join(f"`{name}`" for name in ai_workflows.CHANNEL_WORKFLOWS)
+        await _send(message.channel, embeds.error(f"usage: `{p}aichannel <mode>` — {options}"), feedback=False)
+        return
+    is_staff = _message_is_mod(message)
+    if task == "moderation_triage" and not is_staff:
+        await _send(message.channel, embeds.error("moderation triage requires Manage Server."), feedback=False)
+        return
+    limit = ai_workflows.channel_context_limit(guild_id)
+    try:
+        recent = [item async for item in message.channel.history(limit=limit, before=message)]
+    except (discord.Forbidden, discord.HTTPException, AttributeError):
+        await _send(message.channel, embeds.error("I couldn't read this channel's recent history."), feedback=False)
+        return
+    recent.reverse()
+    recent = [
+        item for item in recent
+        if getattr(item.author, "bot", False)
+        or db.privacy_opted_in(str(item.author.id), guild_id)
+    ]
+    source = ai_workflows.format_channel_messages(
+        recent, ai_workflows.max_input_chars(guild_id)
+    )
+    if not source:
+        await _send(message.channel, embeds.error("there are no readable recent messages here."), feedback=False)
+        return
+    db.log_interaction(f"ai_channel_{task}", author, guild_id)
+    async with message.channel.typing():
+        try:
+            result = await ai_workflows.run_workflow(
+                guild_id,
+                task,
+                source,
+                extra_instruction=instruction,
+                is_staff=is_staff,
+            )
+        except (ValueError, PermissionError, RuntimeError) as exc:
+            await _send(message.channel, embeds.error(str(exc)), feedback=False)
+            return
+        except Exception as exc:
+            await _send(message.channel, embeds.error(f"channel AI failed: {ai.friendly_error(exc)}"), feedback=False)
+            return
+    await _send(
+        message.channel,
+        embeds.say(result.text, title=f"channel AI · {result.label}"),
+        user_msg=f"channel ai {task}",
+        bot_msg=result.text,
+        author=author,
+    )
 
 
 async def _cmd_assistant(message, arg, guild_id, author):

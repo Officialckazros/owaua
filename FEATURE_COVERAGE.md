@@ -13,6 +13,7 @@ scanner failures fail closed without blocking the sender.
 
 | Module | Coverage | Notes |
 | --- | --- | --- |
+| AI Workflow Toolkit | Core live | 21 read-only text/file/replied-message workflows, consent-aware channel intelligence, private message context actions, grounded fact-check sources, advisory-only staff triage, typed dashboard controls, bounded input/output, and model-link defanging. |
 | AFK | Core live | Status, nickname marker, mention reason, notes, return delivery, list and moderator clear. |
 | Action Log | Core live | Message, member, role, channel, emoji and voice events with per-type channels and ignores. |
 | Announcements / Welcome / Onboarding | Core live | Join, leave, ban, channel and DM messages; rules acknowledgement, starter-channel guidance, opt-in role menus, and delayed help follow-up. Generated welcome images are not. |

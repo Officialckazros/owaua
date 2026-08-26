@@ -11,6 +11,7 @@ os.environ.setdefault("PYTHON_DOTENV_DISABLED", "1")
 os.environ.setdefault("DISCORD_TOKEN", "test-token")
 
 import discord
+from discord import app_commands
 
 from sefbot import config, slash
 
@@ -34,6 +35,7 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("language", self.commands)
         self.assertIn("lang", self.commands)
         self.assertIn("mode", self.commands)
+        self.assertEqual(len(self.commands), 100)
 
     def test_nsfw_command_is_discord_marked_guild_only_and_count_bounded(self) -> None:
         command = self.commands["nsfw"]
@@ -103,6 +105,26 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
                 for name in attachment_names:
                     self.assertIn(name, parameters)
                     self.assertIs(parameters[name].type, discord.AppCommandOptionType.attachment)
+
+    def test_ai_workflows_extend_existing_commands_without_exceeding_discord_limit(self) -> None:
+        ask = {parameter.name: parameter for parameter in self.commands["ask"].parameters}
+        workflows = [choice.value for choice in ask["workflow"].choices]
+        self.assertEqual(len(workflows), 21)
+        self.assertIn("fact_check", workflows)
+        self.assertIn("moderation_triage", workflows)
+
+        recap = {parameter.name: parameter for parameter in self.commands["recap"].parameters}
+        recap_modes = [choice.value for choice in recap["mode"].choices]
+        self.assertIn("action_items", recap_modes)
+        self.assertIn("moderation_triage", recap_modes)
+
+        menu_names = {
+            command.name
+            for command in self.tree.get_commands()
+            if isinstance(command, app_commands.ContextMenu)
+        }
+        self.assertIn("AI: Summarize", menu_names)
+        self.assertIn("AI: Fact-check", menu_names)
 
     async def test_alias_callbacks_forward_once_to_the_original_command_callback(self) -> None:
         # alias, original, arguments supplied to alias, arguments expected by original

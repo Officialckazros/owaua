@@ -26,6 +26,7 @@ from discord import app_commands
 from sefbot import (
     actions,
     ai,
+    ai_workflows,
     archive,
     auditlog,
     brain,
@@ -964,6 +965,85 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
+    async def _workflow_reply(
+        interaction: discord.Interaction,
+        task: str,
+        source: str,
+        *,
+        instruction: str = "",
+        private: bool = True,
+    ) -> None:
+        scope_id = _guild_id(interaction)
+        try:
+            result = await ai_workflows.run_workflow(
+                scope_id,
+                task,
+                source,
+                extra_instruction=instruction,
+                is_staff=_is_mod(interaction),
+            )
+        except (ValueError, PermissionError, RuntimeError) as exc:
+            await interaction.followup.send(embed=embeds.error(str(exc)), ephemeral=True)
+            return
+        except Exception as exc:
+            await interaction.followup.send(
+                embed=embeds.error(f"AI workflow failed: {ai.friendly_error(exc)}"),
+                ephemeral=True,
+            )
+            return
+        db.log_interaction(f"ai_{result.task}", str(interaction.user.id), scope_id)
+        embed = embeds.add_sources(
+            embeds.say(result.text, title=f"AI · {result.label}"),
+            list(result.sources),
+        )
+        sent = await interaction.followup.send(embed=embed, ephemeral=private, wait=True)
+        if not private and sent is not None and _track is not None:
+            _track(sent.id, f"ai {result.task}", result.text, str(interaction.user.id))
+
+    async def _message_workflow(
+        interaction: discord.Interaction,
+        message: discord.Message,
+        task: str,
+    ) -> None:
+        if (
+            interaction.guild is not None
+            and not getattr(message.author, "bot", False)
+            and not db.privacy_opted_in(
+                str(message.author.id), _guild_id(interaction)
+            )
+        ):
+            await interaction.response.send_message(
+                embed=embeds.error(
+                    "that message's author has not opted in to AI processing here."
+                ),
+                ephemeral=True,
+            )
+            return
+        source = str(message.content or "").strip()
+        if not source:
+            await interaction.response.send_message(
+                embed=embeds.error("that message has no readable text."), ephemeral=True
+            )
+            return
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        await _workflow_reply(interaction, task, source, private=True)
+
+    @tree.context_menu(name="AI: Summarize")
+    async def ai_summarize_menu(interaction: discord.Interaction, message: discord.Message):
+        await _message_workflow(interaction, message, "summarize")
+
+    @tree.context_menu(name="AI: Explain")
+    async def ai_explain_menu(interaction: discord.Interaction, message: discord.Message):
+        await _message_workflow(interaction, message, "explain")
+
+    @tree.context_menu(name="AI: Action items")
+    async def ai_actions_menu(interaction: discord.Interaction, message: discord.Message):
+        await _message_workflow(interaction, message, "action_items")
+
+    @tree.context_menu(name="AI: Fact-check")
+    async def ai_fact_check_menu(interaction: discord.Interaction, message: discord.Message):
+        await _message_workflow(interaction, message, "fact_check")
+
     @tree.command(name="teach", description="Teach SefBot a fact to remember.")
     @app_commands.describe(fact="the fact", about="whom it's about (optional; default: a server fact)")
     @anywhere
@@ -1702,11 +1782,14 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         ]
         await interaction.followup.send(embeds=results)
 
-    @tree.command(name="ask", description="Ask the LLM directly — one-shot, no persona, no chaos.")
+    @tree.command(name="ask", description="Ask directly or run one of 21 read-only AI workflows.")
     @app_commands.describe(
         question="what to ask",
         mode="reasoning = best model (GPT OSS 120B), fast = Groq GPT-OSS 20B",
         attachment="optional .txt file attachment to read",
+        workflow="optional summary, rewrite, analysis, study, extraction or fact-check workflow",
+        instruction="optional tone, language, audience, categories or formatting direction",
+        private="show the result only to you",
     )
     @_cooldown(1, 5)
     @anywhere
@@ -1715,6 +1798,15 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         question: Optional[str] = None,
         mode: Literal["reasoning", "fast"] = "reasoning",
         attachment: Optional[discord.Attachment] = None,
+        workflow: Optional[Literal[
+            "summarize", "explain", "simplify", "rewrite", "proofread",
+            "expand", "translate", "brainstorm", "outline", "action_items",
+            "meeting_notes", "decisions", "study_guide", "quiz", "pros_cons",
+            "sentiment", "classify", "extract_data", "reply_draft",
+            "fact_check", "moderation_triage",
+        ]] = None,
+        instruction: Optional[str] = None,
+        private: bool = False,
     ):
         file_notes = ""
         if attachment is not None:
@@ -1725,6 +1817,25 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 )
                 return
             file_notes = await textfiles.read_attachment_text(attachment) or ""
+        source = "\n\n".join(
+            part for part in ((question or "").strip(), file_notes) if part
+        ).strip()
+        if workflow:
+            if not source:
+                await interaction.response.send_message(
+                    embed=embeds.error("provide source text or attach a text file."),
+                    ephemeral=True,
+                )
+                return
+            await interaction.response.defer(thinking=True, ephemeral=private)
+            await _workflow_reply(
+                interaction,
+                workflow,
+                source,
+                instruction=instruction or "",
+                private=private,
+            )
+            return
         q = (question or "").strip()
         if not q and file_notes:
             q = "Please read, summarize, and explain the attached text file."
@@ -1741,7 +1852,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             return
         fast = (mode or "").lower() == "fast"
         db.log_interaction("ask", str(interaction.user.id), _guild_id(interaction))
-        await interaction.response.defer(thinking=True)
+        await interaction.response.defer(thinking=True, ephemeral=private)
         system = multilingual.apply_to_system(
             "You are a helpful, direct assistant. Answer the user's question clearly "
             "and concisely. No emoji. "
@@ -1805,7 +1916,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 await interaction.followup.send(embed=embeds.error("deepseek: " + ai.friendly_error(e)))
                 return
         text = brain.scrub_ai_output(text, assistant=True)
-        await interaction.followup.send(embed=embeds.say(text, title=f"ask · {mode}"))
+        await interaction.followup.send(
+            embed=embeds.say(text, title=f"ask · {mode}"), ephemeral=private
+        )
 
     @tree.command(name="models", description="Alias for /model.")
     @app_commands.describe(choice="which model to use (empty = show current)")
@@ -2100,15 +2213,49 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             embed=embeds.say(body, title="rivalries"), ephemeral=True
         )
 
-    @tree.command(name="recap", description="Write a savage recap of recent messages.")
-    @app_commands.describe(scope="day or week")
+    @tree.command(name="recap", description="Recap or analyze consented recent channel messages.")
+    @app_commands.describe(
+        scope="day or week",
+        mode="savage recap, summary, actions, notes, decisions, sentiment or staff triage",
+        instruction="optional focus or formatting direction",
+        private="show only to you",
+    )
     @anywhere
-    async def recap_cmd(interaction: discord.Interaction, scope: str = "day"):
-        await interaction.response.defer(thinking=True)
+    async def recap_cmd(
+        interaction: discord.Interaction,
+        scope: str = "day",
+        mode: Literal[
+            "savage", "summarize", "action_items", "meeting_notes",
+            "decisions", "sentiment", "moderation_triage",
+        ] = "savage",
+        instruction: Optional[str] = None,
+        private: bool = False,
+    ):
+        if mode == "moderation_triage" and not _is_mod(interaction):
+            await interaction.response.send_message(
+                embed=embeds.error("moderation triage requires Manage Server."),
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer(thinking=True, ephemeral=private)
         which = (scope or "day").strip().lower()
         ctx = await _channel_context(interaction)
         if not ctx:
-            await interaction.followup.send(embed=embeds.say("nothing to recap."))
+            await interaction.followup.send(
+                embed=embeds.say(
+                    "nothing consented to analyze. Server history must be enabled and members must opt in."
+                ),
+                ephemeral=private,
+            )
+            return
+        if mode != "savage":
+            await _workflow_reply(
+                interaction,
+                mode,
+                ctx,
+                instruction=instruction or "",
+                private=private,
+            )
             return
         span = "week" if which.startswith("week") else "day"
         system = (
@@ -2122,7 +2269,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             await interaction.followup.send(embed=embeds.error(f"recap failed: {e}"))
             return
         text = brain.scrub_ai_output(text)
-        await interaction.followup.send(embed=embeds.say(text, title=f"{span} recap"))
+        await interaction.followup.send(
+            embed=embeds.say(text, title=f"{span} recap"), ephemeral=private
+        )
 
     @tree.command(name="reflect", description="Have SefBot reflect/learn from recent interactions.")
     @anywhere
@@ -3145,6 +3294,8 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             "`/userinfo` — your own scoped activity; moderators can inspect current-guild users\n"
             "`/server` — moderator-only aggregate server report\n"
             "`/chat` — talk to me (react up/down on my reply to teach me)\n"
+            "`/ask workflow:<type>` — 21 read-only workflows for summaries, rewriting, analysis, study, drafts and grounded fact checks\n"
+            "Message menu `Apps` — summarize, explain, extract action items or fact-check one message\n"
             "`/assistant` — one-shot helpful mode (roles etc.); normal chat stays chaotic\n"
             "`/ckazros` — owner-only do-anything; standing orders (e.g. speak Hebrew) stick\n"
             "`/language` — set the language I reply in (`/language hebrew`)\n"

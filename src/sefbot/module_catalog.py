@@ -355,6 +355,54 @@ SERVER_SETTINGS: Final[dict[str, dict]] = {
         "kind": "boolean",
         "default": False,
     },
+    "ai_workflows_enabled": {
+        "label": "AI workflow toolkit",
+        "description": "Enable read-only AI summaries, rewrites, analysis, study tools, reply drafts and grounded fact checks.",
+        "kind": "boolean",
+        "default": True,
+    },
+    "ai_default_tone": {
+        "label": "AI workflow detail",
+        "description": "Default response depth for the AI workflow toolkit.",
+        "kind": "choice",
+        "default": "balanced",
+        "choices": ["concise", "balanced", "detailed"],
+    },
+    "ai_default_language": {
+        "label": "AI workflow language",
+        "description": "Optional output language for AI workflows. Empty follows the source or request.",
+        "kind": "text",
+        "default": "",
+        "max_length": 80,
+    },
+    "ai_max_input_chars": {
+        "label": "AI workflow input limit",
+        "description": "Maximum characters accepted by one AI workflow request.",
+        "kind": "integer",
+        "default": 12000,
+        "minimum": 1000,
+        "maximum": 20000,
+    },
+    "ai_channel_context_messages": {
+        "label": "AI channel context messages",
+        "description": "Maximum recent messages considered by channel/thread intelligence.",
+        "kind": "integer",
+        "default": 30,
+        "minimum": 5,
+        "maximum": 100,
+    },
+    "ai_fact_check_search": {
+        "label": "Grounded AI fact checking",
+        "description": "Allow the fact-check workflow to retrieve current web results and show validated source links.",
+        "kind": "boolean",
+        "default": True,
+    },
+    "ai_staff_triage": {
+        "label": "AI staff triage",
+        "description": "Allow Manage Server members to request advisory moderation triage. It never enforces automatically.",
+        "kind": "boolean",
+        "default": True,
+    },
 }
 
 
