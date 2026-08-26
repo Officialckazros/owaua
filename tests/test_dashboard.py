@@ -288,6 +288,59 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(rejected.status, 403)
 
+    async def test_structured_module_configuration_round_trip(self):
+        cookie, csrf = await self._login()
+        headers = {
+            "Cookie": cookie,
+            "X-CSRF-Token": csrf,
+            "Content-Type": "application/json",
+        }
+        rules = [
+            {
+                "enabled": True,
+                "channel_id": "20",
+                "match": "all",
+                "delay_seconds": 15,
+                "filters": [
+                    {"kind": "includes_text", "value": "temporary"},
+                ],
+            }
+        ]
+        response = await self.client.put(
+            "/dashboard/api/guild/123456789012345678/module/auto_delete",
+            headers=headers,
+            json={"enabled": True, "settings": {"rules": rules}},
+        )
+        self.assertEqual(response.status, 200, await response.text())
+        result = await response.json()
+        self.assertEqual(result["settings"]["rules"], rules)
+        self.assertEqual(
+            db.module_config("guild:123456789012345678", "auto_delete")["settings"]["rules"],
+            rules,
+        )
+
+    async def test_module_editor_replaces_raw_json_with_typed_controls(self):
+        script = await (await self.client.get("/dashboard/assets/app.js")).text()
+        self.assertNotIn('data-type="json"', script)
+        self.assertNotIn("Structured JSON", script)
+        for feature in (
+            "structuredTemplates",
+            "structuredEditor",
+            "readStructuredNode",
+            "data-add-list",
+            "data-add-field",
+            "data-change-kind",
+        ):
+            self.assertIn(feature, script)
+        for preset in (
+            '"auto_delete.rules"',
+            '"forms.forms"',
+            '"reaction_roles.menus"',
+            '"tickets.panels"',
+            '"welcome.role_choices"',
+        ):
+            self.assertIn(preset, script)
+
     async def test_booster_workspace_exposes_records_settings_and_actions(self):
         cookie, csrf = await self._login()
         auth_headers = {"Cookie": cookie}
