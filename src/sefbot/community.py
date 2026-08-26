@@ -581,9 +581,6 @@ _LOG_KIND_SETTINGS: Final = {
     "reaction": "reaction_events",
     "command": "command_events",
 }
-_LOG_KIND_CHANNELS: Final = {
-    kind: f"{kind}_channel_id" for kind in _LOG_KIND_SETTINGS
-}
 _AUDIT_KIND_PREFIXES: Final = {
     "channel": "channel",
     "overwrite": "channel",
@@ -722,7 +719,6 @@ async def _log(
     details: list[str] | None = None,
     event_id: object = None,
     color: int | None = None,
-    audit_source: bool = False,
 ):
     config = _cfg(guild, "action_log")
     if not config["enabled"]:
@@ -749,12 +745,7 @@ async def _log(
         category_id = getattr(channel, "category_id", None)
         if category_id is not None and str(category_id) in _ids(settings.get("ignored_category_ids")):
             return
-    key = _LOG_KIND_CHANNELS.get(kind, "default_channel_id")
-    destination = (
-        _channel(guild, settings.get(key))
-        or (_channel(guild, settings.get("audit_channel_id")) if audit_source else None)
-        or _channel(guild, settings.get("default_channel_id"))
-    )
+    destination = _channel(guild, settings.get("channel_id"))
     if destination is None:
         return
     palette = {
@@ -1626,7 +1617,6 @@ async def audit_entry_log(entry: discord.AuditLogEntry) -> None:
         details=_audit_extra_lines(extra),
         event_id=entry.id,
         color=color,
-        audit_source=True,
     )
 
 

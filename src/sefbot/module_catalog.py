@@ -34,11 +34,8 @@ MODULES: Final[dict[str, dict]] = {
     "afk": _module("AFK", "Community", "Away statuses, notes, return alerts and nickname markers.", {
         "nickname_prefix": "[AFK]", "ignored_channel_ids": [], "enhanced_cards": True,
     }),
-    "action_log": _module("Action Log", "Safety", "Comprehensive actor-attributed audit, message, member, role, channel, thread, server, reaction and voice events.", {
-        "default_channel_id": "", "audit_channel_id": "", "message_channel_id": "",
-        "member_channel_id": "", "moderation_channel_id": "", "voice_channel_id": "",
-        "role_channel_id": "", "channel_channel_id": "", "thread_channel_id": "",
-        "server_channel_id": "", "reaction_channel_id": "", "command_channel_id": "",
+    "action_log": _module("Action Log", "Safety", "Choose one global destination and the actor-attributed audit, message, member, role, channel, thread, server, reaction and voice events to send there.", {
+        "channel_id": "",
         "audit_events": True, "message_events": True, "member_events": True,
         "moderation_events": True, "voice_events": True, "role_events": True,
         "channel_events": True, "thread_events": True, "server_events": True,
@@ -488,6 +485,16 @@ def merge_settings(name: str, value: object) -> dict:
     defaults = default_settings(name)
     if not isinstance(value, dict):
         return defaults
+    if name == "action_log" and not value.get("channel_id"):
+        legacy_destinations = (
+            "default_channel_id", "audit_channel_id", "message_channel_id",
+            "member_channel_id", "moderation_channel_id", "voice_channel_id",
+            "role_channel_id", "channel_channel_id", "thread_channel_id",
+            "server_channel_id", "reaction_channel_id", "command_channel_id",
+        )
+        migrated = next((value.get(key) for key in legacy_destinations if value.get(key)), "")
+        if migrated:
+            value = {**value, "channel_id": migrated}
     if len(value) > 200:
         raise ValueError("too many settings")
     for key, candidate in value.items():

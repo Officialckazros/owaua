@@ -403,7 +403,7 @@ const structuredTemplates={
 const fixedStructuredObjects=new Set(["welcome.embed"]);
 const moduleEditorGroups={
   action_log:[
-    {title:"Destinations",keys:["default_channel_id","audit_channel_id","message_channel_id","member_channel_id","moderation_channel_id","voice_channel_id","role_channel_id","channel_channel_id","thread_channel_id","server_channel_id","reaction_channel_id","command_channel_id"]},
+    {title:"Global destination",keys:["channel_id"]},
     {title:"Event coverage",keys:["audit_events","message_events","member_events","moderation_events","voice_events","role_events","channel_events","thread_events","server_events","reaction_events","command_events"]},
     {title:"Log detail",keys:["include_message_content","include_attachments","include_audit_changes","include_reasons","include_ids","include_timestamps","include_bot_events","include_voice_state_changes","bulk_delete_sample_size","show_account_age","show_avatars"]},
     {title:"Exclusions",keys:["ignored_channel_ids","ignored_category_ids","ignored_role_ids","ignored_user_ids"]},

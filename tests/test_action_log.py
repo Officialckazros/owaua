@@ -5,7 +5,7 @@ from unittest import mock
 import discord
 
 from sefbot import community, config, db
-from sefbot.module_catalog import MODULES
+from sefbot.module_catalog import MODULES, merge_settings
 
 
 class _Channel:
@@ -44,7 +44,7 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
         config.DB_PATH = ":memory:"
         self.guild = _Guild()
         self.settings = dict(MODULES["action_log"]["settings"])
-        self.settings["default_channel_id"] = str(self.guild.log_channel.id)
+        self.settings["channel_id"] = str(self.guild.log_channel.id)
         db.module_config_set(
             str(self.guild.id),
             "action_log",
@@ -230,6 +230,10 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
 
     def test_catalog_exposes_complete_typed_logging_controls(self):
         settings = MODULES["action_log"]["settings"]
+        self.assertEqual(settings["channel_id"], "")
+        self.assertFalse(any(
+            key.endswith("_channel_id") for key in settings if key != "channel_id"
+        ))
         for key in (
             "audit_events", "message_events", "member_events", "moderation_events",
             "voice_events", "role_events", "channel_events", "thread_events",
@@ -244,6 +248,15 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
         safe = community._log_content("@everyone **fake audit field**")
         self.assertNotIn("@everyone", safe)
         self.assertIn(r"\*\*fake audit field\*\*", safe)
+
+    def test_legacy_destination_migrates_to_global_channel(self):
+        settings = merge_settings(
+            "action_log",
+            {"message_channel_id": "20", "voice_channel_id": "21"},
+        )
+
+        self.assertEqual(settings["channel_id"], "20")
+        self.assertNotIn("message_channel_id", settings)
 
 
 if __name__ == "__main__":

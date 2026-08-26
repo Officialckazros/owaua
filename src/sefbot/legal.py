@@ -248,7 +248,7 @@ events. Depending on that server's dashboard choices, these can include actor
 and target ids, roles, channel activity, reasons, before/after values, edited or
 deleted message text, attachment links, reactions, command use, voice-state
 changes, and bounded samples from bulk deletions. These embeds are sent back to
-the administrator-selected Discord channels and are not copied into a separate
+the administrator-selected Discord log channel and are not copied into a separate
 OpSef SQLite action-log table. Discord controls how long those channel messages
 remain. Administrators can disable event families, message content, attachment
 links, audit changes, bot events, or individual channels, roles and users.</p>
