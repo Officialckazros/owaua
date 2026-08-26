@@ -327,6 +327,8 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             "structuredTemplates",
             "structuredEditor",
             "readStructuredNode",
+            "moduleEditorGroups",
+            "groupedModuleFields",
             "data-add-list",
             "data-add-field",
             "data-change-kind",
@@ -422,7 +424,10 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(invalid_action.status, 400)
 
     async def test_dedicated_booster_page_covers_every_catalog_setting_once(self):
-        group_bodies = re.findall(r"keys:\[([^\]]*)\]", _JS)
+        booster_groups = _JS.split("const boosterGroups=[", 1)[1].split(
+            "const collectionSchemas=", 1
+        )[0]
+        group_bodies = re.findall(r"keys:\[([^\]]*)\]", booster_groups)
         grouped_keys = [
             key
             for body in group_bodies

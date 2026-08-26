@@ -15,7 +15,7 @@ scanner failures fail closed without blocking the sender.
 | --- | --- | --- |
 | AI Workflow Toolkit | Core live | 21 read-only text/file/replied-message workflows, consent-aware channel intelligence, private message context actions, grounded fact-check sources, advisory-only staff triage, typed dashboard controls, bounded input/output, and model-link defanging. |
 | AFK | Core live | Status, nickname marker, mention reason, notes, return delivery, list and moderator clear. |
-| Action Log | Core live | Message, member, role, channel, emoji and voice events with per-type channels and ignores. |
+| Action Log | Core live | All Discord audit action types with actor, target, reason, before/after values and event IDs; cached/uncached single and bulk deletes; messages, members, moderation, roles, channels, threads, server settings, invites, webhooks, integrations, emoji/stickers/soundboard, scheduled/stage events, reactions/poll votes, commands/interactions and full voice-state changes. Typed dashboard routing, detail/privacy switches and channel/category/role/user exclusions are live. |
 | Announcements / Welcome / Onboarding | Core live | Join, leave, ban, channel and DM messages; rules acknowledgement, starter-channel guidance, opt-in role menus, and delayed help follow-up. Generated welcome images are not. |
 | Auto Delete / Auto Message / Auto Purge | Core live | Bounded filters and schedules; pins are preserved. |
 | Autoban / Automod | Core live | Deterministic rules, deletes, warnings, timeout/ban and logs. Complex Dyno rule chaining remains narrower. |
@@ -23,7 +23,7 @@ scanner failures fail closed without blocking the sender.
 | Booster Perks | Core live | Durable current/all-time tracking, existing-booster import, randomized greetings, automatic/personal/level/age roles, gifts, private channels, mention reactions, emoji restrictions, statistic voice channels, event logs and manager correction. Discord does not expose reliable partial boost removals, so those require the explicit correction command. |
 | Custom Commands | Partial | Existing prompt-defined commands are live; multi-destination response chains and full Dyno variable syntax are not. |
 | Economy, Cards and Battles | Partial | Coins, daily/work/pay, packs, collection, fusion, decks and direct PvP are live. Matchmaking, seasons, arenas, gems shop and Battle Pass are not. |
-| Forms | Core live | Builder schema, public/member links, validation, submissions and Discord automation are live. The dashboard uses bounded JSON rather than a drag-and-drop builder. |
+| Forms | Core live | Builder schema, public/member links, validation, submissions and Discord automation are live. The dashboard uses bounded nested visual controls with repeatable form and field rows. |
 | Fun | Core live | Coin, dice, RPS, media/info lookups, polls, coordinate distance, and credentialed Rule34 image lookup restricted to Discord age-restricted channels. |
 | Giveaways | Partial | Timed reaction entries, winner selection and reroll are live. Button/referral/daily entry modes and the public giveaway site are not. |
 | Highlights / Levels / Reminders | Core live | Phrase DMs, XP/rewards/multipliers/leaderboards and timed reminders. |

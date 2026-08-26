@@ -34,11 +34,21 @@ MODULES: Final[dict[str, dict]] = {
     "afk": _module("AFK", "Community", "Away statuses, notes, return alerts and nickname markers.", {
         "nickname_prefix": "[AFK]", "ignored_channel_ids": [], "enhanced_cards": True,
     }),
-    "action_log": _module("Action Log", "Safety", "Message, member, role, channel, emoji and voice audit events.", {
-        "default_channel_id": "", "message_channel_id": "", "member_channel_id": "",
-        "moderation_channel_id": "", "voice_channel_id": "", "ignored_channel_ids": [],
-        "ignored_category_ids": [], "ignored_role_ids": [], "show_account_age": True,
-        "show_avatars": True,
+    "action_log": _module("Action Log", "Safety", "Comprehensive actor-attributed audit, message, member, role, channel, thread, server, reaction and voice events.", {
+        "default_channel_id": "", "audit_channel_id": "", "message_channel_id": "",
+        "member_channel_id": "", "moderation_channel_id": "", "voice_channel_id": "",
+        "role_channel_id": "", "channel_channel_id": "", "thread_channel_id": "",
+        "server_channel_id": "", "reaction_channel_id": "", "command_channel_id": "",
+        "audit_events": True, "message_events": True, "member_events": True,
+        "moderation_events": True, "voice_events": True, "role_events": True,
+        "channel_events": True, "thread_events": True, "server_events": True,
+        "reaction_events": True, "command_events": True, "include_message_content": True,
+        "include_attachments": True, "include_audit_changes": True,
+        "include_reasons": True, "include_ids": True, "include_timestamps": True,
+        "include_bot_events": True, "include_voice_state_changes": True,
+        "bulk_delete_sample_size": 20, "ignored_channel_ids": [],
+        "ignored_category_ids": [], "ignored_role_ids": [], "ignored_user_ids": [],
+        "show_account_age": True, "show_avatars": True,
     }),
     "announcements": _module("Announcements", "Community", "Join, leave, ban and manual announcements.", {
         "channel_id": "", "join_message": "Welcome {user.mention} to **{server.name}**!",

@@ -827,6 +827,7 @@ async def _lurk_tick():
 @client.event
 async def on_raw_reaction_add(payload):
     await community.raw_reaction(client, payload)
+    await community.reaction_event(client, payload, added=True)
     if payload.user_id == client.user.id or payload.message_id not in _recent:
         return
     if config.is_blocked(payload.user_id):
@@ -1026,18 +1027,31 @@ async def on_member_update(before: discord.Member, after: discord.Member):
             detail += "\nAdded: " + ", ".join(added)
         if removed:
             detail += "\nRemoved: " + ", ".join(removed)
-        _start_message_task(
-            community.event_log(after.guild, "member", "Member roles updated", detail)
-        )
+        _start_message_task(community.gateway_event_log(
+            after.guild, "role", "Member roles updated", detail,
+            audit_backed=True, actor=after, target=after,
+        ))
     if before.timed_out_until != after.timed_out_until:
-        _start_message_task(
-            community.event_log(
-                after.guild,
-                "moderation",
-                "Member timeout updated",
-                f"{after.mention} (`{after.id}`): {after.timed_out_until or 'cleared'}",
-            )
-        )
+        _start_message_task(community.gateway_event_log(
+            after.guild, "moderation", "Member timeout updated",
+            f"{after.mention} (`{after.id}`): {after.timed_out_until or 'cleared'}",
+            audit_backed=True, target=after,
+        ))
+    member_changes = []
+    for attribute, name in (
+        ("nick", "Nickname"), ("pending", "Membership screening"),
+        ("premium_since", "Boosting since"), ("avatar", "Server avatar"),
+        ("flags", "Member flags"),
+    ):
+        old, new = getattr(before, attribute, None), getattr(after, attribute, None)
+        if old != new:
+            member_changes.append(f"**{name}:** {old or 'Not set'} → {new or 'Not set'}")
+    if member_changes:
+        _start_message_task(community.gateway_event_log(
+            after.guild, "member", "Member profile updated",
+            f"{after.mention} (`{after.id}`) changed.",
+            target=after, changes=member_changes,
+        ))
 
 
 @client.event
@@ -1058,8 +1072,9 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
 
 @client.event
 async def on_member_unban(guild: discord.Guild, user: discord.User):
-    await community.event_log(
-        guild, "moderation", "Member unbanned", f"{user} (`{user.id}`) was unbanned."
+    await community.gateway_event_log(
+        guild, "moderation", "Member unbanned", f"{user} (`{user.id}`) was unbanned.",
+        audit_backed=True, target=user,
     )
 
 
@@ -1115,6 +1130,8 @@ async def on_message(message: discord.Message):
     command_name = ""
     if content.startswith(prefix):
         command_name = content[len(prefix):].strip().split(maxsplit=1)[0].lower()
+        if message.guild is not None and command_name:
+            _start_message_task(community.command_event(message, command_name, content))
     privacy_commands = {
         "privacy", "privacypolicy", "tos", "terms", "termsofservice",
         "help", "about", "status",
@@ -1224,27 +1241,38 @@ async def on_message(message: discord.Message):
 
 
 @client.event
+async def on_interaction(interaction: discord.Interaction):
+    await community.interaction_event(interaction)
+
+
+@client.event
 async def on_message_edit(before: discord.Message, after: discord.Message):
     if after.guild is not None and archive.enabled_guild(after.guild.id):
         _start_message_task(archive.store_live_message(after, edited=True))
-    if after.author.bot or before.content == after.content or after.guild is None:
+    if before.content == after.content or after.guild is None:
         return
-    scope_id = Scope.guild(after.guild.id).key
-    if not archive.enabled_guild(after.guild.id):
-        db.record_server_message(
-            str(after.id),
-            scope_id,
-            after.guild.name,
-            str(after.channel.id),
-            getattr(after.channel, "name", "unknown"),
-            str(after.author.id),
-            getattr(after.author, "name", str(after.author.id)),
-            getattr(after.author, "display_name", str(after.author.id)),
-            after.content or "",
-        )
-    _start_message_task(moderation.safety_check(after))
-    _start_message_task(rules.check_message(client, after))
+    if not after.author.bot:
+        scope_id = Scope.guild(after.guild.id).key
+        if not archive.enabled_guild(after.guild.id):
+            db.record_server_message(
+                str(after.id),
+                scope_id,
+                after.guild.name,
+                str(after.channel.id),
+                getattr(after.channel, "name", "unknown"),
+                str(after.author.id),
+                getattr(after.author, "name", str(after.author.id)),
+                getattr(after.author, "display_name", str(after.author.id)),
+                after.content or "",
+            )
+        _start_message_task(moderation.safety_check(after))
+        _start_message_task(rules.check_message(client, after))
     _start_message_task(community.message_edit(before, after))
+
+
+@client.event
+async def on_raw_message_edit(payload: discord.RawMessageUpdateEvent):
+    await community.raw_message_edit(client, payload)
 
 
 @client.event
@@ -1253,53 +1281,67 @@ async def on_message_delete(message: discord.Message):
 
 
 @client.event
+async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
+    await community.raw_message_delete(client, payload)
+
+
+@client.event
 async def on_bulk_message_delete(messages: list[discord.Message]):
-    first = next((message for message in messages if message.guild), None)
-    if first and first.guild:
-        await community.event_log(
-            first.guild,
-            "message",
-            "Bulk message deletion",
-            f"Deleted **{len(messages)}** messages in {first.channel.mention}.",
-            channel=first.channel,
-        )
+    # The raw event always fires and owns complete/partial cache handling.
+    return None
+
+
+@client.event
+async def on_raw_bulk_message_delete(payload: discord.RawBulkMessageDeleteEvent):
+    await community.raw_bulk_message_delete(client, payload)
 
 
 @client.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     await community.raw_reaction(client, payload, added=False)
+    await community.reaction_event(client, payload, added=False)
+
+
+@client.event
+async def on_raw_poll_vote_add(payload: discord.RawPollVoteActionEvent):
+    await community.poll_vote_event(client, payload, added=True)
+
+
+@client.event
+async def on_raw_poll_vote_remove(payload: discord.RawPollVoteActionEvent):
+    await community.poll_vote_event(client, payload, added=False)
 
 
 @client.event
 async def on_guild_role_create(role: discord.Role):
-    await community.event_log(role.guild, "default", "Role created", f"{role.mention} (`{role.id}`) was created.")
+    await community.gateway_event_log(role.guild, "role", "Role created", f"{role.mention} (`{role.id}`) was created.", audit_backed=True, target=role)
 
 
 @client.event
 async def on_guild_role_delete(role: discord.Role):
-    await community.event_log(role.guild, "default", "Role deleted", f"**{role.name}** (`{role.id}`) was deleted.")
+    await community.gateway_event_log(role.guild, "role", "Role deleted", f"**{role.name}** (`{role.id}`) was deleted.", audit_backed=True, target=role)
 
 
 @client.event
 async def on_guild_role_update(before: discord.Role, after: discord.Role):
-    await community.event_log(after.guild, "default", "Role updated", f"**{before.name}** → **{after.name}** (`{after.id}`).")
+    await community.gateway_event_log(after.guild, "role", "Role updated", f"**{before.name}** → **{after.name}** (`{after.id}`).", audit_backed=True, target=after)
 
 
 @client.event
 async def on_guild_channel_create(channel: discord.abc.GuildChannel):
-    await community.event_log(channel.guild, "default", "Channel created", f"**{channel.name}** (`{channel.id}`) was created.", channel=channel)
+    await community.gateway_event_log(channel.guild, "channel", "Channel created", f"**{channel.name}** (`{channel.id}`) was created.", channel=channel, audit_backed=True, target=channel)
 
 
 @client.event
 async def on_guild_channel_delete(channel: discord.abc.GuildChannel):
-    await community.event_log(channel.guild, "default", "Channel deleted", f"**{channel.name}** (`{channel.id}`) was deleted.")
+    await community.gateway_event_log(channel.guild, "channel", "Channel deleted", f"**{channel.name}** (`{channel.id}`) was deleted.", audit_backed=True, target=channel)
 
 
 @client.event
 async def on_guild_channel_update(
     before: discord.abc.GuildChannel, after: discord.abc.GuildChannel
 ):
-    await community.event_log(after.guild, "default", "Channel updated", f"**{before.name}** → **{after.name}** (`{after.id}`); permissions or settings changed.", channel=after)
+    await community.gateway_event_log(after.guild, "channel", "Channel updated", f"**{before.name}** → **{after.name}** (`{after.id}`); permissions or settings changed.", channel=after, audit_backed=True, target=after)
 
 
 @client.event
@@ -1320,7 +1362,208 @@ async def on_guild_emojis_update(
         ) if part
     )
     if detail:
-        await community.event_log(guild, "default", "Emoji update", detail)
+        await community.gateway_event_log(guild, "server", "Emoji update", detail, audit_backed=True)
+
+
+@client.event
+async def on_audit_log_entry_create(entry: discord.AuditLogEntry):
+    await community.audit_entry_log(entry)
+
+
+@client.event
+async def on_guild_update(before: discord.Guild, after: discord.Guild):
+    changes = []
+    for attribute, title in (
+        ("name", "Name"), ("description", "Description"), ("verification_level", "Verification"),
+        ("explicit_content_filter", "Content filter"), ("default_notifications", "Notifications"),
+        ("afk_timeout", "AFK timeout"), ("preferred_locale", "Preferred locale"),
+        ("premium_tier", "Boost tier"), ("premium_subscription_count", "Boost count"),
+    ):
+        old, new = getattr(before, attribute, None), getattr(after, attribute, None)
+        if old != new:
+            changes.append(f"**{title}:** {old or 'Not set'} → {new or 'Not set'}")
+    if changes:
+        await community.gateway_event_log(
+            after, "server", "Server settings updated", f"**{after.name}** was updated.",
+            audit_backed=True, target=after, changes=changes,
+        )
+
+
+@client.event
+async def on_guild_stickers_update(guild, before, after):
+    before_map = {item.id: item.name for item in before}
+    after_map = {item.id: item.name for item in after}
+    created = [name for item_id, name in after_map.items() if item_id not in before_map]
+    deleted = [name for item_id, name in before_map.items() if item_id not in after_map]
+    renamed = [f"{before_map[item_id]} → {after_map[item_id]}" for item_id in before_map.keys() & after_map.keys() if before_map[item_id] != after_map[item_id]]
+    detail = "\n".join(filter(None, (
+        "Created: " + ", ".join(created) if created else "",
+        "Deleted: " + ", ".join(deleted) if deleted else "",
+        "Renamed: " + ", ".join(renamed) if renamed else "",
+    )))
+    if detail:
+        await community.gateway_event_log(guild, "server", "Sticker update", detail, audit_backed=True)
+
+
+@client.event
+async def on_invite_create(invite: discord.Invite):
+    if invite.guild:
+        await community.gateway_event_log(
+            invite.guild, "server", "Invite created",
+            f"Invite **{invite.code}** was created for {invite.channel.mention if invite.channel else 'an unknown channel'}.",
+            channel=invite.channel, audit_backed=True, actor=invite.inviter, target=invite.channel,
+        )
+
+
+@client.event
+async def on_invite_delete(invite: discord.Invite):
+    if invite.guild:
+        await community.gateway_event_log(
+            invite.guild, "server", "Invite deleted", f"Invite **{invite.code}** was deleted.",
+            channel=invite.channel, audit_backed=True, target=invite.channel,
+        )
+
+
+@client.event
+async def on_webhooks_update(channel: discord.abc.GuildChannel):
+    await community.gateway_event_log(
+        channel.guild, "server", "Webhooks updated",
+        f"Webhooks changed in {channel.mention} (`{channel.id}`).",
+        channel=channel, audit_backed=True, target=channel,
+    )
+
+
+@client.event
+async def on_integration_create(integration: discord.Integration):
+    await community.gateway_event_log(
+        integration.guild, "server", "Integration created",
+        f"**{integration.name}** (`{integration.id}`) was created.",
+        audit_backed=True, target=integration,
+    )
+
+
+@client.event
+async def on_integration_update(integration: discord.Integration):
+    await community.gateway_event_log(
+        integration.guild, "server", "Integration updated",
+        f"**{integration.name}** (`{integration.id}`) was updated.",
+        audit_backed=True, target=integration,
+    )
+
+
+@client.event
+async def on_raw_integration_delete(payload: discord.RawIntegrationDeleteEvent):
+    guild = client.get_guild(payload.guild_id)
+    if guild:
+        await community.gateway_event_log(
+            guild, "server", "Integration deleted",
+            f"Integration `{payload.integration_id}` was deleted.", audit_backed=True,
+            target=discord.Object(id=payload.integration_id),
+        )
+
+
+@client.event
+async def on_thread_create(thread: discord.Thread):
+    await community.gateway_event_log(
+        thread.guild, "thread", "Thread created", f"{thread.mention} (`{thread.id}`) was created.",
+        channel=thread, audit_backed=True, target=thread,
+    )
+
+
+@client.event
+async def on_thread_delete(thread: discord.Thread):
+    await community.gateway_event_log(
+        thread.guild, "thread", "Thread deleted", f"**{thread.name}** (`{thread.id}`) was deleted.",
+        audit_backed=True, target=thread,
+    )
+
+
+@client.event
+async def on_thread_update(before: discord.Thread, after: discord.Thread):
+    changes = []
+    for attribute, title in (
+        ("name", "Name"), ("archived", "Archived"), ("locked", "Locked"),
+        ("slowmode_delay", "Slowmode"), ("auto_archive_duration", "Auto archive"),
+    ):
+        old, new = getattr(before, attribute, None), getattr(after, attribute, None)
+        if old != new:
+            changes.append(f"**{title}:** {old} → {new}")
+    if changes:
+        await community.gateway_event_log(
+            after.guild, "thread", "Thread updated", f"{after.mention} (`{after.id}`) was updated.",
+            channel=after, audit_backed=True, target=after, changes=changes,
+        )
+
+
+@client.event
+async def on_thread_member_join(member: discord.ThreadMember):
+    thread = member.thread
+    actor = thread.guild.get_member(member.id) or discord.Object(id=member.id)
+    await community.event_log(
+        thread.guild, "thread", "Thread member joined",
+        f"{getattr(actor, 'mention', f'`{member.id}`')} joined {thread.mention}.",
+        channel=thread, actor=actor, target=thread, event_id=thread.id,
+    )
+
+
+@client.event
+async def on_thread_member_remove(member: discord.ThreadMember):
+    thread = member.thread
+    actor = thread.guild.get_member(member.id) or discord.Object(id=member.id)
+    await community.event_log(
+        thread.guild, "thread", "Thread member left",
+        f"{getattr(actor, 'mention', f'`{member.id}`')} left {thread.mention}.",
+        channel=thread, actor=actor, target=thread, event_id=thread.id,
+    )
+
+
+@client.event
+async def on_guild_scheduled_event_create(event: discord.ScheduledEvent):
+    await community.gateway_event_log(event.guild, "server", "Scheduled event created", f"**{event.name}** (`{event.id}`) was created.", audit_backed=True, target=event)
+
+
+@client.event
+async def on_guild_scheduled_event_update(before: discord.ScheduledEvent, after: discord.ScheduledEvent):
+    await community.gateway_event_log(after.guild, "server", "Scheduled event updated", f"**{before.name}** → **{after.name}** (`{after.id}`).", audit_backed=True, target=after)
+
+
+@client.event
+async def on_guild_scheduled_event_delete(event: discord.ScheduledEvent):
+    await community.gateway_event_log(event.guild, "server", "Scheduled event deleted", f"**{event.name}** (`{event.id}`) was deleted.", audit_backed=True, target=event)
+
+
+@client.event
+async def on_guild_scheduled_event_user_add(event: discord.ScheduledEvent, user: discord.User):
+    await community.event_log(event.guild, "member", "Scheduled event RSVP added", f"{user.mention} subscribed to **{event.name}**.", actor=user, target=event)
+
+
+@client.event
+async def on_guild_scheduled_event_user_remove(event: discord.ScheduledEvent, user: discord.User):
+    await community.event_log(event.guild, "member", "Scheduled event RSVP removed", f"{user.mention} unsubscribed from **{event.name}**.", actor=user, target=event)
+
+
+@client.event
+async def on_stage_instance_create(stage: discord.StageInstance):
+    await community.gateway_event_log(stage.guild, "voice", "Stage created", f"A stage started in {stage.channel.mention}.", channel=stage.channel, audit_backed=True, target=stage.channel)
+
+
+@client.event
+async def on_stage_instance_update(before: discord.StageInstance, after: discord.StageInstance):
+    await community.gateway_event_log(after.guild, "voice", "Stage updated", f"The stage in {after.channel.mention} was updated.", channel=after.channel, audit_backed=True, target=after.channel)
+
+
+@client.event
+async def on_stage_instance_delete(stage: discord.StageInstance):
+    await community.gateway_event_log(stage.guild, "voice", "Stage deleted", f"The stage in {stage.channel.mention} ended.", channel=stage.channel, audit_backed=True, target=stage.channel)
+
+
+@client.event
+async def on_guild_channel_pins_update(channel, last_pin):
+    await community.gateway_event_log(
+        channel.guild, "message", "Pinned messages updated",
+        f"Pins changed in {channel.mention}. Last pin: {last_pin or 'Not available'}.",
+        channel=channel, audit_backed=True, target=channel,
+    )
 
 
 def _strip_mention(text: str) -> str:

@@ -568,24 +568,231 @@ def _ignored(message: discord.Message, settings: dict) -> bool:
     return bool(_member_roles(message.author) & _ids(settings.get("ignored_role_ids")))
 
 
-async def _log(guild: discord.Guild, kind: str, title: str, description: str, *, channel=None):
+_LOG_KIND_SETTINGS: Final = {
+    "audit": "audit_events",
+    "message": "message_events",
+    "member": "member_events",
+    "moderation": "moderation_events",
+    "voice": "voice_events",
+    "role": "role_events",
+    "channel": "channel_events",
+    "thread": "thread_events",
+    "server": "server_events",
+    "reaction": "reaction_events",
+    "command": "command_events",
+}
+_LOG_KIND_CHANNELS: Final = {
+    kind: f"{kind}_channel_id" for kind in _LOG_KIND_SETTINGS
+}
+_AUDIT_KIND_PREFIXES: Final = {
+    "channel": "channel",
+    "overwrite": "channel",
+    "role": "role",
+    "thread": "thread",
+    "message": "message",
+    "member": "member",
+    "kick": "moderation",
+    "ban": "moderation",
+    "unban": "moderation",
+    "automod": "moderation",
+    "guild": "server",
+    "invite": "server",
+    "webhook": "server",
+    "integration": "server",
+    "emoji": "server",
+    "sticker": "server",
+    "scheduled": "server",
+    "stage": "voice",
+    "soundboard": "server",
+    "onboarding": "server",
+    "home": "server",
+    "creator": "server",
+    "app": "server",
+    "bot": "server",
+}
+_AUDIT_SKIP_ACTIONS: Final = frozenset({"message_delete", "message_bulk_delete"})
+
+
+def _log_value(value: object, *, limit: int = 350) -> str:
+    """Render Discord audit values without dumping reprs or unbounded payloads."""
+    if value is None:
+        text = "Not set"
+    elif isinstance(value, bool):
+        text = "Yes" if value else "No"
+    elif isinstance(value, (list, tuple, set)):
+        text = ", ".join(_log_value(item, limit=80) for item in list(value)[:20]) or "None"
+    elif isinstance(value, dict):
+        pairs = list(value.items())[:20]
+        text = ", ".join(f"{key}: {_log_value(item, limit=80)}" for key, item in pairs) or "None"
+    else:
+        object_id = getattr(value, "id", None)
+        mention = getattr(value, "mention", None)
+        name = getattr(value, "display_name", None) or getattr(value, "name", None)
+        if mention:
+            text = str(mention)
+        elif name:
+            text = str(name)
+        else:
+            text = str(value)
+        if object_id is not None and str(object_id) not in text:
+            text += f" (`{object_id}`)"
+    text = embeds.de_emoji(text).replace("```", "''' ")
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _reaction_label(value: object) -> str:
+    raw = str(value or "")
+    clean = embeds.de_emoji(raw).strip()
+    if clean:
+        return clean[:100]
+    codepoints = " ".join(f"U+{ord(char):04X}" for char in raw[:8])
+    return f"Unicode reaction ({codepoints or 'unknown'})"
+
+
+def _log_content(value: object, *, limit: int = 1500) -> str:
+    """Make untrusted message text visibly data and prevent mention/markdown spoofing."""
+    text = str(value or "")
+    text = "".join(char if char in "\n\t" or ord(char) >= 32 else " " for char in text)
+    text = discord.utils.escape_mentions(discord.utils.escape_markdown(text))
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _audit_change_lines(entry: discord.AuditLogEntry, *, maximum: int = 18) -> list[str]:
+    try:
+        before = dict(entry.before)
+        after = dict(entry.after)
+    except (AttributeError, TypeError, ValueError):
+        return []
+    lines: list[str] = []
+    for key in list(dict.fromkeys([*before, *after]))[:maximum]:
+        old, new = before.get(key), after.get(key)
+        if old == new:
+            continue
+        lines.append(
+            f"**{key.replace('_', ' ').title()}:** {_log_value(old)} → {_log_value(new)}"
+        )
+    return lines
+
+
+def _audit_extra_lines(extra: object) -> list[str]:
+    if extra is None:
+        return []
+    values = getattr(extra, "__dict__", {})
+    return [
+        f"**{str(key).replace('_', ' ').title()}:** {_log_value(value)}"
+        for key, value in list(values.items())[:10]
+        if not str(key).startswith("_")
+    ]
+
+
+def _audit_kind(action_name: str) -> str:
+    if action_name in {
+        "member_prune", "member_move", "member_disconnect", "member_role_update",
+    }:
+        return "moderation"
+    prefix = action_name.split("_", 1)[0]
+    return _AUDIT_KIND_PREFIXES.get(prefix, "audit")
+
+
+def _audit_stream_available(guild: discord.Guild) -> bool:
+    settings = _cfg(guild, "action_log")["settings"]
+    me = getattr(guild, "me", None)
+    permissions = getattr(me, "guild_permissions", None)
+    return bool(
+        settings.get("audit_events", True)
+        and permissions
+        and (
+            getattr(permissions, "view_audit_log", False)
+            or getattr(permissions, "administrator", False)
+        )
+    )
+
+
+async def _log(
+    guild: discord.Guild,
+    kind: str,
+    title: str,
+    description: str,
+    *,
+    channel=None,
+    actor=None,
+    target=None,
+    reason: str | None = None,
+    changes: list[str] | None = None,
+    details: list[str] | None = None,
+    event_id: object = None,
+    color: int | None = None,
+    audit_source: bool = False,
+):
     config = _cfg(guild, "action_log")
     if not config["enabled"]:
         return
     settings = config["settings"]
+    event_setting = _LOG_KIND_SETTINGS.get(kind)
+    if event_setting and not settings.get(event_setting, True):
+        return
+    if actor is not None:
+        if not settings.get("include_bot_events", True) and getattr(actor, "bot", False):
+            return
+        if str(getattr(actor, "id", "")) in _ids(settings.get("ignored_user_ids")):
+            return
+        if _member_roles(actor) & _ids(settings.get("ignored_role_ids")):
+            return
+    if target is not None:
+        if str(getattr(target, "id", "")) in _ids(settings.get("ignored_user_ids")):
+            return
+        if _member_roles(target) & _ids(settings.get("ignored_role_ids")):
+            return
     if channel is not None:
         if str(getattr(channel, "id", "")) in _ids(settings.get("ignored_channel_ids")):
             return
         category_id = getattr(channel, "category_id", None)
         if category_id is not None and str(category_id) in _ids(settings.get("ignored_category_ids")):
             return
-    key = {
-        "message": "message_channel_id", "member": "member_channel_id",
-        "moderation": "moderation_channel_id", "voice": "voice_channel_id",
-    }.get(kind, "default_channel_id")
-    target = _channel(guild, settings.get(key)) or _channel(guild, settings.get("default_channel_id"))
-    if target:
-        await _safe_send(target, embed=embeds.say(description[:3900], title=title))
+    key = _LOG_KIND_CHANNELS.get(kind, "default_channel_id")
+    destination = (
+        _channel(guild, settings.get(key))
+        or (_channel(guild, settings.get("audit_channel_id")) if audit_source else None)
+        or _channel(guild, settings.get("default_channel_id"))
+    )
+    if destination is None:
+        return
+    palette = {
+        "message": 0x5865F2, "member": 0x57F287, "moderation": 0xED4245,
+        "voice": 0x9B59B6, "role": 0xFEE75C, "channel": 0x3498DB,
+        "thread": 0x1ABC9C, "server": 0xE67E22, "reaction": 0xEB459E,
+        "audit": 0x95A5A6, "command": 0x5865F2,
+    }
+    embed = discord.Embed(
+        title=embeds.de_emoji(title)[:256],
+        description=embeds.de_emoji(description)[:4096],
+        color=color if color is not None else palette.get(kind, 0x95A5A6),
+        timestamp=discord.utils.utcnow() if settings.get("include_timestamps", True) else None,
+    )
+    if actor is not None:
+        actor_name = getattr(actor, "display_name", None) or getattr(actor, "name", None) or str(actor)
+        actor_id = getattr(actor, "id", None)
+        actor_value = _log_value(actor)
+        if settings.get("include_ids", True) and actor_id is not None and str(actor_id) not in actor_value:
+            actor_value += f" (`{actor_id}`)"
+        embed.add_field(name="Actor", value=actor_value[:1024], inline=True)
+        avatar = getattr(getattr(actor, "display_avatar", None), "url", None)
+        if settings.get("show_avatars", True) and avatar:
+            embed.set_author(name=embeds.de_emoji(str(actor_name))[:256], icon_url=str(avatar))
+    if target is not None:
+        target_value = _log_value(target)
+        embed.add_field(name="Target", value=target_value[:1024], inline=True)
+    if reason and settings.get("include_reasons", True):
+        embed.add_field(name="Reason", value=embeds.de_emoji(_log_content(reason, limit=1024)), inline=False)
+    if changes and settings.get("include_audit_changes", True):
+        embed.add_field(name="Changes", value="\n".join(changes)[:1024], inline=False)
+    if details:
+        embed.add_field(name="Details", value="\n".join(details)[:1024], inline=False)
+    footer = [kind.replace("_", " ").title()]
+    if settings.get("include_ids", True) and event_id is not None:
+        footer.append(f"Event ID: {event_id}")
+    embed.set_footer(text=" • ".join(footer)[:2048])
+    await _safe_send(destination, embed=embeds.fit_total(embed))
 
 
 async def _handle_afk(message: discord.Message) -> None:
@@ -933,7 +1140,14 @@ async def member_join(member: discord.Member) -> None:
         target = _channel(guild, announce["settings"].get("channel_id"))
         if target:
             await _safe_send(target, _render(announce["settings"].get("join_message"), member=member, guild=guild, channel=target))
-    await _log(guild, "member", "Member joined", f"{member.mention} (`{member.id}`) joined. Account created {discord.utils.format_dt(member.created_at, style='R')}.")
+    action_settings = _cfg(guild, "action_log")["settings"]
+    join_description = f"{member.mention} (`{member.id}`) joined."
+    if action_settings.get("show_account_age", True):
+        join_description += f" Account created {discord.utils.format_dt(member.created_at, style='R')}."
+    await _log(
+        guild, "member", "Member joined", join_description,
+        actor=member, target=member, event_id=member.id,
+    )
 
 
 async def member_remove(member: discord.Member) -> None:
@@ -943,7 +1157,22 @@ async def member_remove(member: discord.Member) -> None:
         target = _channel(member.guild, announce["settings"].get("channel_id"))
         if target:
             await _safe_send(target, _render(announce["settings"].get("leave_message"), member=member, guild=member.guild, channel=target))
-    await _log(member.guild, "member", "Member left", f"{member} (`{member.id}`) left the server.")
+    if _audit_stream_available(member.guild):
+        await asyncio.sleep(0.4)
+        try:
+            async for entry in member.guild.audit_logs(limit=8):
+                if abs((discord.utils.utcnow() - entry.created_at).total_seconds()) > 15:
+                    continue
+                if entry.action not in {discord.AuditLogAction.kick, discord.AuditLogAction.ban}:
+                    continue
+                if str(getattr(entry.target, "id", "")) == str(member.id):
+                    return
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+    await _log(
+        member.guild, "member", "Member left", f"{member} (`{member.id}`) left the server.",
+        actor=member, target=member, event_id=member.id,
+    )
 
 
 async def member_ban(guild: discord.Guild, user: discord.User | discord.Member) -> None:
@@ -952,19 +1181,184 @@ async def member_ban(guild: discord.Guild, user: discord.User | discord.Member) 
         target = _channel(guild, announce["settings"].get("channel_id"))
         if target:
             await _safe_send(target, _render(announce["settings"].get("ban_message"), member=user, guild=guild, channel=target))
-    await _log(guild, "moderation", "Member banned", f"{user} (`{user.id}`) was banned.")
+    await gateway_event_log(
+        guild, "moderation", "Member banned", f"{user} (`{user.id}`) was banned.",
+        audit_backed=True, target=user,
+    )
 
 
 async def message_delete(message: discord.Message) -> None:
-    if message.guild and not message.author.bot:
-        content = (message.content or "(no text)")[:1500]
-        files = "\n".join(a.url for a in message.attachments[:10])
-        await _log(message.guild, "message", "Message deleted", f"**Author:** {message.author} (`{message.author.id}`)\n**Channel:** {message.channel.mention}\n**Content:** {content}" + (f"\n**Files:**\n{files}" if files else ""), channel=message.channel)
+    if message.guild is None:
+        return
+    settings = _cfg(message.guild, "action_log")["settings"]
+    if not settings.get("include_bot_events", True) and message.author.bot:
+        return
+    if str(message.author.id) in _ids(settings.get("ignored_user_ids")):
+        return
+    if _member_roles(message.author) & _ids(settings.get("ignored_role_ids")):
+        return
+    entry = await recent_audit_entry(
+        message.guild,
+        discord.AuditLogAction.message_delete,
+        channel_id=getattr(message.channel, "id", None),
+        target_id=getattr(message.author, "id", None),
+    )
+    lines = [
+        f"**Author:** {_log_value(message.author)}",
+        f"**Channel:** {_log_value(message.channel)}",
+    ]
+    if settings.get("include_message_content", True):
+        lines.append(f"**Content:** {_log_content(message.content or '(no text)')}")
+    if settings.get("include_attachments", True) and message.attachments:
+        files = "\n".join(str(attachment.url) for attachment in message.attachments[:10])
+        lines.append(f"**Files:**\n{files}")
+    await _log(
+        message.guild,
+        "message",
+        "Message deleted",
+        "\n".join(lines),
+        channel=message.channel,
+        actor=getattr(entry, "user", None) or message.author,
+        target=message.author,
+        reason=getattr(entry, "reason", None),
+        details=_audit_extra_lines(getattr(entry, "extra", None)) if entry else None,
+        event_id=getattr(entry, "id", None) or message.id,
+    )
+
+
+async def bulk_message_delete(messages: list[discord.Message]) -> None:
+    first = next((message for message in messages if message.guild), None)
+    if first is None or first.guild is None:
+        return
+    settings = _cfg(first.guild, "action_log")["settings"]
+    entry = await recent_audit_entry(
+        first.guild,
+        discord.AuditLogAction.message_bulk_delete,
+        channel_id=getattr(first.channel, "id", None),
+    )
+    authors: dict[str, int] = defaultdict(int)
+    for message in messages:
+        authors[_log_value(message.author, limit=100)] += 1
+    lines = [
+        f"Deleted **{len(messages)}** messages in {_log_value(first.channel)}.",
+        "**Authors:** " + ", ".join(f"{name}: {count}" for name, count in list(authors.items())[:20]),
+    ]
+    sample_size = max(0, min(50, int(settings.get("bulk_delete_sample_size") or 0)))
+    if settings.get("include_message_content", True) and sample_size:
+        samples = []
+        for message in messages[:sample_size]:
+            content = _log_content(message.content or "(attachment/no text)", limit=140).replace("\n", " ")
+            samples.append(f"• {_log_value(message.author, limit=60)}: {content}")
+        if samples:
+            lines.append("**Sample:**\n" + "\n".join(samples))
+    await _log(
+        first.guild,
+        "message",
+        "Bulk message deletion",
+        "\n".join(lines)[:3900],
+        channel=first.channel,
+        actor=getattr(entry, "user", None),
+        target=first.channel,
+        reason=getattr(entry, "reason", None),
+        details=_audit_extra_lines(getattr(entry, "extra", None)) if entry else None,
+        event_id=getattr(entry, "id", None),
+        color=0xED4245,
+    )
+
+
+async def raw_message_delete(client: discord.Client, payload: discord.RawMessageDeleteEvent) -> None:
+    if payload.guild_id is None or payload.cached_message is not None:
+        return
+    guild = client.get_guild(payload.guild_id)
+    if guild is None:
+        return
+    channel = guild.get_channel_or_thread(payload.channel_id)
+    entry = await recent_audit_entry(
+        guild, discord.AuditLogAction.message_delete, channel_id=payload.channel_id,
+    )
+    await _log(
+        guild, "message", "Uncached message deleted",
+        f"Message `{payload.message_id}` was deleted in {_log_value(channel or payload.channel_id)}. Its content was not present in Discord's local cache.",
+        channel=channel, actor=getattr(entry, "user", None), target=channel,
+        reason=getattr(entry, "reason", None), event_id=getattr(entry, "id", None) or payload.message_id,
+        color=0xED4245,
+    )
+
+
+async def raw_bulk_message_delete(
+    client: discord.Client,
+    payload: discord.RawBulkMessageDeleteEvent,
+) -> None:
+    if payload.guild_id is None:
+        return
+    if len(payload.cached_messages) == len(payload.message_ids):
+        await bulk_message_delete(list(payload.cached_messages))
+        return
+    guild = client.get_guild(payload.guild_id)
+    if guild is None:
+        return
+    channel = guild.get_channel_or_thread(payload.channel_id)
+    entry = await recent_audit_entry(
+        guild, discord.AuditLogAction.message_bulk_delete, channel_id=payload.channel_id,
+    )
+    missing = len(payload.message_ids) - len(payload.cached_messages)
+    description = (
+        f"Deleted **{len(payload.message_ids)}** messages in {_log_value(channel or payload.channel_id)}. "
+        f"**{missing}** message(s) were not cached, so their content was unavailable."
+    )
+    settings = _cfg(guild, "action_log")["settings"]
+    sample_size = max(0, min(50, int(settings.get("bulk_delete_sample_size") or 0)))
+    if settings.get("include_message_content", True) and sample_size:
+        samples = [
+            f"• {_log_value(message.author, limit=60)}: {_log_content(message.content or '(attachment/no text)', limit=140).replace(chr(10), ' ')}"
+            for message in list(payload.cached_messages)[:sample_size]
+        ]
+        if samples:
+            description += "\n**Cached sample:**\n" + "\n".join(samples)
+    await _log(
+        guild, "message", "Bulk message deletion", description,
+        channel=channel, actor=getattr(entry, "user", None), target=channel,
+        reason=getattr(entry, "reason", None),
+        details=_audit_extra_lines(getattr(entry, "extra", None)) if entry else None,
+        event_id=getattr(entry, "id", None), color=0xED4245,
+    )
+
+
+async def raw_message_edit(client: discord.Client, payload: discord.RawMessageUpdateEvent) -> None:
+    if payload.guild_id is None or payload.cached_message is not None:
+        return
+    guild = client.get_guild(payload.guild_id)
+    if guild is None:
+        return
+    channel = guild.get_channel_or_thread(payload.channel_id)
+    settings = _cfg(guild, "action_log")["settings"]
+    description = f"Message `{payload.message_id}` was edited in {_log_value(channel or payload.channel_id)}."
+    content = payload.data.get("content")
+    if settings.get("include_message_content", True) and isinstance(content, str):
+        description += f"\n**New content:** {_log_content(content)}"
+    await _log(
+        guild, "message", "Uncached message edited", description,
+        channel=channel, target=channel, event_id=payload.message_id,
+    )
 
 
 async def message_edit(before: discord.Message, after: discord.Message) -> None:
-    if after.guild and not after.author.bot and before.content != after.content:
-        await _log(after.guild, "message", "Message edited", f"**Author:** {after.author} (`{after.author.id}`)\n**Channel:** {after.channel.mention}\n**Before:** {(before.content or '(empty)')[:1000]}\n**After:** {(after.content or '(empty)')[:1000]}\n[Jump to message]({after.jump_url})", channel=after.channel)
+    if after.guild is None or before.content == after.content:
+        return
+    settings = _cfg(after.guild, "action_log")["settings"]
+    if not settings.get("include_bot_events", True) and after.author.bot:
+        return
+    lines = [f"**Author:** {_log_value(after.author)}", f"**Channel:** {_log_value(after.channel)}"]
+    if settings.get("include_message_content", True):
+        lines.extend((
+            f"**Before:** {_log_content(before.content or '(empty)', limit=1000)}",
+            f"**After:** {_log_content(after.content or '(empty)', limit=1000)}",
+        ))
+    lines.append(f"[Jump to message]({after.jump_url})")
+    await _log(
+        after.guild, "message", "Message edited", "\n".join(lines),
+        channel=after.channel, actor=after.author, target=after.channel, event_id=after.id,
+    )
 
 
 async def voice_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState) -> None:
@@ -976,7 +1370,25 @@ async def voice_update(member: discord.Member, before: discord.VoiceState, after
             text = f"{member.mention} joined **{after.channel.name}**."
         else:
             text = f"{member.mention} left **{before.channel.name}**."
-        await _log(guild, "voice", "Voice activity", text)
+        await _log(guild, "voice", "Voice channel changed", text, actor=member, target=after.channel or before.channel)
+    settings = _cfg(guild, "action_log")["settings"]
+    if settings.get("include_voice_state_changes", True):
+        labels = {
+            "self_mute": "Self mute", "self_deaf": "Self deafen",
+            "mute": "Server mute", "deaf": "Server deafen",
+            "self_stream": "Screen share", "self_video": "Camera",
+            "suppress": "Stage suppression", "requested_to_speak_at": "Requested to speak",
+        }
+        changed = []
+        for attribute, label_text in labels.items():
+            old, new = getattr(before, attribute, None), getattr(after, attribute, None)
+            if old != new:
+                changed.append(f"**{label_text}:** {_log_value(old)} → {_log_value(new)}")
+        if changed:
+            await _log(
+                guild, "voice", "Voice state updated", f"Voice state changed for {member.mention}.",
+                actor=member, target=after.channel or before.channel, changes=changed,
+            )
     config = _cfg(guild, "voice_text")
     if not config["enabled"]:
         return
@@ -1014,7 +1426,7 @@ async def raw_reaction(
     *,
     added: bool = True,
 ) -> None:
-    if payload.guild_id is None or client.user is None or payload.user_id == client.user.id:
+    if payload.guild_id is None or client.user is None:
         return
     guild = client.get_guild(payload.guild_id)
     if guild is None:
@@ -1064,6 +1476,81 @@ async def raw_reaction(
         db.community_record_create("starboard", _scope(guild), {"starboard_message_id": str(posted.id), "stars": reaction_obj.count}, record_key=str(message.id))
 
 
+async def reaction_event(
+    client: discord.Client,
+    payload: discord.RawReactionActionEvent,
+    *,
+    added: bool,
+) -> None:
+    if payload.guild_id is None or client.user is None or payload.user_id == client.user.id:
+        return
+    guild = client.get_guild(payload.guild_id)
+    if guild is None:
+        return
+    actor = guild.get_member(payload.user_id) or discord.Object(id=payload.user_id)
+    channel = guild.get_channel_or_thread(payload.channel_id)
+    verb = "added" if added else "removed"
+    await _log(
+        guild,
+        "reaction",
+        f"Reaction {verb}",
+        f"{_log_value(actor)} {verb} **{_reaction_label(payload.emoji)}** on message `{payload.message_id}` in {_log_value(channel or payload.channel_id)}.",
+        channel=channel,
+        actor=actor,
+        target=channel,
+        event_id=payload.message_id,
+    )
+
+
+async def poll_vote_event(
+    client: discord.Client,
+    payload: discord.RawPollVoteActionEvent,
+    *,
+    added: bool,
+) -> None:
+    if payload.guild_id is None:
+        return
+    guild = client.get_guild(payload.guild_id)
+    if guild is None:
+        return
+    actor = guild.get_member(payload.user_id) or discord.Object(id=payload.user_id)
+    channel = guild.get_channel_or_thread(payload.channel_id)
+    verb = "added" if added else "removed"
+    await _log(
+        guild, "reaction", f"Poll vote {verb}",
+        f"{_log_value(actor)} {verb} a vote for answer `{payload.answer_id}` on message `{payload.message_id}` in {_log_value(channel or payload.channel_id)}.",
+        channel=channel, actor=actor, target=channel, event_id=payload.message_id,
+    )
+
+
+async def command_event(message: discord.Message, name: str, content: str) -> None:
+    if message.guild is None or not name:
+        return
+    settings = _cfg(message.guild, "action_log")["settings"]
+    description = f"{_log_value(message.author)} invoked prefix command **{name[:100]}** in {_log_value(message.channel)}."
+    if settings.get("include_message_content", True):
+        description += f"\n**Input:** {_log_content(content)}"
+    await _log(
+        message.guild, "command", "Prefix command invoked", description,
+        channel=message.channel, actor=message.author, target=message.channel,
+        event_id=message.id,
+    )
+
+
+async def interaction_event(interaction: discord.Interaction) -> None:
+    if interaction.guild is None:
+        return
+    data = interaction.data if isinstance(interaction.data, dict) else {}
+    interaction_type = getattr(interaction.type, "name", str(interaction.type))
+    name = str(data.get("name") or data.get("custom_id") or interaction_type)[:100]
+    await _log(
+        interaction.guild, "command", "Discord interaction received",
+        f"{_log_value(interaction.user)} used **{interaction_type.replace('_', ' ')}** `{name}` in {_log_value(interaction.channel)}.",
+        channel=interaction.channel, actor=interaction.user, target=interaction.channel,
+        event_id=interaction.id,
+    )
+
+
 async def event_log(
     guild: discord.Guild,
     kind: str,
@@ -1071,8 +1558,110 @@ async def event_log(
     description: str,
     *,
     channel=None,
+    actor=None,
+    target=None,
+    reason: str | None = None,
+    changes: list[str] | None = None,
+    details: list[str] | None = None,
+    event_id: object = None,
+    color: int | None = None,
 ) -> None:
-    await _log(guild, kind, title, description, channel=channel)
+    await _log(
+        guild, kind, title, description, channel=channel, actor=actor, target=target,
+        reason=reason, changes=changes, details=details, event_id=event_id, color=color,
+    )
+
+
+async def gateway_event_log(
+    guild: discord.Guild,
+    kind: str,
+    title: str,
+    description: str,
+    *,
+    audit_backed: bool = False,
+    **kwargs,
+) -> None:
+    """Log a gateway event unless Discord's richer audit stream owns it."""
+    if audit_backed and _audit_stream_available(guild):
+        return
+    await event_log(guild, kind, title, description, **kwargs)
+
+
+async def audit_entry_log(entry: discord.AuditLogEntry) -> None:
+    """Log every Discord administrative action exposed by the audit gateway."""
+    action_name = str(getattr(entry.action, "name", entry.action) or "unknown_action")
+    if action_name in _AUDIT_SKIP_ACTIONS:
+        return
+    config = _cfg(entry.guild, "action_log")
+    if not config["enabled"] or not config["settings"].get("audit_events", True):
+        return
+    kind = _audit_kind(action_name)
+    action_title = action_name.replace("_", " ").title()
+    actor = getattr(entry, "user", None)
+    target = getattr(entry, "target", None)
+    extra = getattr(entry, "extra", None)
+    channel = getattr(extra, "channel", None)
+    if channel is None and isinstance(target, (discord.abc.GuildChannel, discord.Thread)):
+        channel = target
+    category = getattr(entry.action, "category", None)
+    color = {
+        discord.AuditLogActionCategory.create: 0x57F287,
+        discord.AuditLogActionCategory.delete: 0xED4245,
+        discord.AuditLogActionCategory.update: 0xFEE75C,
+    }.get(category, None)
+    description = f"{_log_value(actor or 'Discord')} performed **{action_title}**"
+    if target is not None:
+        description += f" on {_log_value(target)}"
+    description += "."
+    await _log(
+        entry.guild,
+        kind,
+        action_title,
+        description,
+        channel=channel,
+        actor=actor,
+        target=target,
+        reason=getattr(entry, "reason", None),
+        changes=_audit_change_lines(entry),
+        details=_audit_extra_lines(extra),
+        event_id=entry.id,
+        color=color,
+        audit_source=True,
+    )
+
+
+async def recent_audit_entry(
+    guild: discord.Guild,
+    action: discord.AuditLogAction,
+    *,
+    channel_id: object = None,
+    target_id: object = None,
+) -> discord.AuditLogEntry | None:
+    """Resolve a recent delete actor without duplicating the audit-stream event."""
+    if not _audit_stream_available(guild):
+        return None
+    await asyncio.sleep(0.4)
+    now = discord.utils.utcnow()
+    try:
+        async for entry in guild.audit_logs(limit=8, action=action):
+            if abs((now - entry.created_at).total_seconds()) > 15:
+                continue
+            entry_target = getattr(entry, "target", None)
+            extra = getattr(entry, "extra", None)
+            extra_channel = getattr(extra, "channel", None)
+            if target_id is not None and str(getattr(entry_target, "id", "")) != str(target_id):
+                continue
+            if channel_id is not None:
+                possible = {
+                    str(getattr(entry_target, "id", "")),
+                    str(getattr(extra_channel, "id", "")),
+                }
+                if str(channel_id) not in possible:
+                    continue
+            return entry
+    except (discord.Forbidden, discord.HTTPException):
+        return None
+    return None
 
 
 def _parse_duration(value: str) -> int | None:

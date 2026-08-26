@@ -242,6 +242,16 @@ relevant permissions. If you are a server member, the bot may also read up
 to 25 role names, your top role, join date, and account creation date to
 build a speaker profile for the model. Attachments you include can be
 downloaded. Voice features read voice-state (who is in which channel).</p>
+<p>If a server administrator enables Action Log, the bot can send private
+Discord log-channel embeds for server audit entries and observed gateway
+events. Depending on that server's dashboard choices, these can include actor
+and target ids, roles, channel activity, reasons, before/after values, edited or
+deleted message text, attachment links, reactions, command use, voice-state
+changes, and bounded samples from bulk deletions. These embeds are sent back to
+the administrator-selected Discord channels and are not copied into a separate
+OpSef SQLite action-log table. Discord controls how long those channel messages
+remain. Administrators can disable event families, message content, attachment
+links, audit changes, bot events, or individual channels, roles and users.</p>
 <p>When the malware-scanner module is enabled, the bot inspects every attachment
 it receives in that server or DM before normal bot processing. The bytes are
 written to an owner-only temporary file. A file is excluded as media only when
