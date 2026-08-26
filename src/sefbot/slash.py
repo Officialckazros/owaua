@@ -593,6 +593,11 @@ async def _generate_reply(
     if file_notes:
         user_turn += f"\n\n[attached text file(s)]\n{file_notes}"
 
+    memory_task = asyncio.create_task(
+        brain.safely_learn_from_turn(query, author, guild_id),
+        name=f"memory:{author}:{guild_id}",
+    )
+
     try:
         data = await ai.structured(
             system, [{"role": "user", "content": user_turn}], tier="smart",
@@ -606,6 +611,7 @@ async def _generate_reply(
             ),
         )
     except Exception as e:
+        await memory_task
         return embeds.error(ai.friendly_error(e)), None
 
     if not data or not str(data.get("response", "")).strip():
@@ -647,6 +653,7 @@ async def _generate_reply(
                 ),
             )
         except Exception as e:
+            await memory_task
             return embeds.error(ai.friendly_error(e)), None
         data = {"response": text}
 
@@ -705,6 +712,7 @@ async def _generate_reply(
     else:
         proposals = []
 
+    await memory_task
     brain.persist_memories(data.get("memories"), author, guild_id)
     brain.apply_relationship(data, author, guild_id)
     brain.apply_quotes(data, guild_id, author)

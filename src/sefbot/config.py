@@ -317,11 +317,12 @@ def is_blocked(user_id) -> bool:
 
 
 REFLECT_BATCH = _int("SEFBOT_REFLECT_BATCH", 15)
-MEMORY_TOPK = _int("SEFBOT_MEMORY_TOPK", 10)
+MEMORY_TOPK = _int("SEFBOT_MEMORY_TOPK", 24)
+MEMORY_EXTRACT_PER_TURN = _int("SEFBOT_MEMORY_EXTRACT_PER_TURN", 4)
 KB_TOPK = _int("SEFBOT_KB_TOPK", 6)
 CHANNEL_CONTEXT = _int("SEFBOT_CHANNEL_CONTEXT", 10)
-CONVO_TURNS = _int("SEFBOT_CONVO_TURNS", 8)
-MEMORY_SOFT_CAP = _int("SEFBOT_MEMORY_SOFT_CAP", 40)
+CONVO_TURNS = _int("SEFBOT_CONVO_TURNS", 20)
+MEMORY_SOFT_CAP = _int("SEFBOT_MEMORY_SOFT_CAP", 200)
 # Guilds in this explicit allowlist keep a text-only, permanent archive.  This
 # is intentionally deployment configuration rather than a dashboard toggle:
 # enabling it changes the guild's privacy and retention contract.

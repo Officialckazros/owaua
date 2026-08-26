@@ -280,7 +280,7 @@ an OpSef acceptance record.</p>
 <tr><td>tos_acceptance_challenges</td><td>A keyed token value, Discord user id, legal version, creation and expiry times</td><td>When Discord creates a single-use acceptance button; deleted on use or after 15 minutes</td></tr>
 <tr><td>tos_acceptances</td><td>Discord user id, legal version, accepted/review/rejected status, keyed network token, timestamps, and a short risk code when review is required</td><td>When the web acceptance form is submitted or the operator resolves a review</td></tr>
 <tr><td>server_messages</td><td>Message id, guild/channel ids and names, user id, username, display name, text content, optional bad-word flags, time</td><td>Under the ordinary dual consent gate, or for accessible text in an explicitly configured archival guild</td></tr>
-<tr><td>conversations</td><td>Short user/bot turns, truncated to 1500 characters, kept to about 8 turns each way</td><td>Same dual gate as raw history</td></tr>
+<tr><td>conversations</td><td>Short user/bot turns, truncated to 1500 characters, kept to about 20 turns each way by default</td><td>Same dual gate as raw history</td></tr>
 <tr><td>memories</td><td>Facts about a subject (your id or "server"), author id, guild/scope, importance, timestamps</td><td>When the bot or a moderator saves a memory; scoped to that guild or DM</td></tr>
 <tr><td>lessons</td><td>Short style/behavior notes distilled from feedback, with a scope id</td><td>When enough feedback exists and distillation runs; these are guild-level, not owned by one user</td></tr>
 <tr><td>feedback</td><td>Your message, the bot reply, thumbs up/down or a correction note, your id, scope</td><td>When you rate a reply</td></tr>

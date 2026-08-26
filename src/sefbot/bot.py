@@ -1723,6 +1723,14 @@ async def _chat(
     if file_notes:
         user_turn += f"\n\n[attached text file(s)]\n{file_notes}"
 
+    # Run memory distillation beside the response call. It has its own bounded
+    # extractor, so a provider fallback that drops the response JSON's optional
+    # memories field cannot erase this turn from long-term memory.
+    memory_task = asyncio.create_task(
+        brain.safely_learn_from_turn(query, author, guild_id),
+        name=f"memory:{author}:{guild_id}",
+    )
+
     freaky = brain.freaky_turn(
         author, channel_nsfw=channel_nsfw, assistant=assistant
     )
@@ -1748,6 +1756,7 @@ async def _chat(
                 ),
             )
         except Exception as e:
+            await memory_task
             await _send(message.channel, embeds.error(ai.friendly_error(e)), feedback=False, reference=message)
             return
 
@@ -1794,6 +1803,7 @@ async def _chat(
                     ),
                 )
             except Exception as e:
+                await memory_task
                 await _send(message.channel, embeds.error(ai.friendly_error(e)), feedback=False, reference=message)
                 return
         data = {"response": text}
@@ -1852,6 +1862,7 @@ async def _chat(
     else:
         proposals = []
 
+    await memory_task
     brain.persist_memories(data.get("memories"), author, guild_id)
     brain.apply_relationship(data, author, guild_id)
     brain.apply_quotes(data, guild_id, author)
