@@ -110,6 +110,23 @@ async def _fresh_private_staff_channel(
     return current if _private_staff_channel(current, guild, current_bot) else None
 
 
+async def private_staff_log_channel(
+    guild: discord.Guild, *, preferred_id: str = ""
+) -> Optional[discord.TextChannel]:
+    """Resolve and revalidate a private incident channel for deterministic safety tools."""
+    channel = None
+    if str(preferred_id or "").strip().isdigit():
+        channel = guild.get_channel(int(preferred_id))
+        if channel is not None and not _private_staff_channel(channel, guild):
+            log.warning("refusing public or unwritable incident channel %s", preferred_id)
+            channel = None
+    if channel is None:
+        channel = _mod_log_channel(guild)
+    if channel is None:
+        return None
+    return await _fresh_private_staff_channel(guild, channel)
+
+
 @dataclass(frozen=True)
 class ModerationReview:
     guild_id: int

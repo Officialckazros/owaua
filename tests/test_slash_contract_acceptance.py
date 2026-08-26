@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 os.environ.setdefault("PYTHON_DOTENV_DISABLED", "1")
@@ -32,6 +33,28 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("act", self.commands)
         self.assertIn("language", self.commands)
         self.assertIn("lang", self.commands)
+        self.assertIn("mode", self.commands)
+
+    def test_nsfw_command_is_discord_marked_guild_only_and_count_bounded(self) -> None:
+        command = self.commands["nsfw"]
+        parameters = {parameter.name: parameter for parameter in command.parameters}
+        self.assertTrue(command.nsfw)
+        self.assertTrue(command.guild_only)
+        self.assertEqual(parameters["amount"].min_value, 1)
+        self.assertEqual(parameters["amount"].max_value, 10)
+
+    async def test_nsfw_command_rechecks_the_live_channel_flag(self) -> None:
+        command = self.commands["nsfw"]
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(id=991_234_567),
+            channel=SimpleNamespace(is_nsfw=lambda: False, parent=None),
+            response=SimpleNamespace(send_message=mock.AsyncMock()),
+        )
+        slash._last_uses.clear()
+        with mock.patch.object(slash.rule34, "search", mock.AsyncMock()) as search:
+            await command.callback(interaction, "kit_gameoverse", 1)
+        search.assert_not_awaited()
+        interaction.response.send_message.assert_awaited_once()
 
     def test_dead_groq_llama_ids_remap_to_gpt_oss(self) -> None:
         self.assertEqual(

@@ -23,11 +23,13 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
-from sefbot import config
+from sefbot import config, profile_search
+from sefbot.module_catalog import default_server_settings, merge_server_settings
 from sefbot.scope import is_dm_scope, is_guild_scope
 
-LATEST_SCHEMA_VERSION = 6
+LATEST_SCHEMA_VERSION = 9
 MAX_RETENTION_DAYS = 30
+_TOS_NETWORK_RETENTION_SECONDS = MAX_RETENTION_DAYS * 86_400
 _db_lock = threading.RLock()
 
 
@@ -194,12 +196,40 @@ CREATE TABLE IF NOT EXISTS server_messages (
     bad_words_found  TEXT,
     created          REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS guild_archive_channels (
+    guild_id        TEXT NOT NULL,
+    channel_id      TEXT NOT NULL,
+    channel_name    TEXT,
+    last_message_id TEXT,
+    messages_seen   INTEGER NOT NULL DEFAULT 0,
+    complete        INTEGER NOT NULL DEFAULT 0,
+    last_error      TEXT,
+    updated         REAL NOT NULL,
+    PRIMARY KEY (guild_id, channel_id)
+);
 CREATE TABLE IF NOT EXISTS privacy_consents (
     user_id    TEXT NOT NULL,
     scope_id   TEXT NOT NULL,
     opted_in   INTEGER NOT NULL DEFAULT 0,
     updated    REAL NOT NULL,
     PRIMARY KEY (user_id, scope_id)
+);
+CREATE TABLE IF NOT EXISTS tos_acceptance_challenges (
+    token_hash TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL,
+    version    TEXT NOT NULL,
+    expires_at REAL NOT NULL,
+    created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tos_acceptances (
+    user_id         TEXT PRIMARY KEY,
+    version         TEXT NOT NULL,
+    status          TEXT NOT NULL CHECK(status IN ('accepted', 'review', 'rejected')),
+    network_hash    TEXT NOT NULL DEFAULT '',
+    network_seen_at REAL,
+    risk_code       TEXT NOT NULL DEFAULT '',
+    submitted_at    REAL NOT NULL,
+    reviewed_at     REAL
 );
 CREATE TABLE IF NOT EXISTS action_audit (
     nonce          TEXT PRIMARY KEY,
@@ -291,6 +321,33 @@ CREATE TABLE IF NOT EXISTS module_settings (
     actor_id  TEXT,
     PRIMARY KEY (guild_id, module)
 );
+CREATE TABLE IF NOT EXISTS swear_jar_counts (
+    guild_id TEXT NOT NULL,
+    user_id  TEXT NOT NULL,
+    count    INTEGER NOT NULL DEFAULT 0 CHECK(count >= 0),
+    updated  REAL NOT NULL,
+    PRIMARY KEY (guild_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS booster_members (
+    guild_id        TEXT NOT NULL,
+    user_id         TEXT NOT NULL,
+    current_boosts  INTEGER NOT NULL DEFAULT 0 CHECK(current_boosts >= 0),
+    all_time_boosts INTEGER NOT NULL DEFAULT 0 CHECK(all_time_boosts >= 0),
+    active          INTEGER NOT NULL DEFAULT 0 CHECK(active IN (0, 1)),
+    first_boosted   REAL,
+    last_boosted    REAL,
+    stopped         REAL,
+    last_source     TEXT NOT NULL DEFAULT '',
+    updated         REAL NOT NULL,
+    PRIMARY KEY (guild_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS booster_events (
+    guild_id  TEXT NOT NULL,
+    event_id  TEXT NOT NULL,
+    user_id   TEXT NOT NULL,
+    created   REAL NOT NULL,
+    PRIMARY KEY (guild_id, event_id)
+);
 CREATE TABLE IF NOT EXISTS dashboard_audit (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id   TEXT NOT NULL,
@@ -337,10 +394,23 @@ CREATE INDEX IF NOT EXISTS idx_msg_guild_user ON server_messages(guild_id, user_
 CREATE INDEX IF NOT EXISTS idx_msg_user ON server_messages(user_id, created);
 CREATE INDEX IF NOT EXISTS idx_msg_bad ON server_messages(guild_id, has_bad_words);
 CREATE INDEX IF NOT EXISTS idx_msg_created ON server_messages(created);
+CREATE INDEX IF NOT EXISTS idx_tos_challenge_user
+    ON tos_acceptance_challenges(user_id, expires_at);
+CREATE INDEX IF NOT EXISTS idx_tos_acceptance_network
+    ON tos_acceptances(network_hash, network_seen_at);
+CREATE INDEX IF NOT EXISTS idx_tos_acceptance_review
+    ON tos_acceptances(status, submitted_at);
+CREATE INDEX IF NOT EXISTS idx_archive_updated
+    ON guild_archive_channels(guild_id, updated DESC);
 CREATE INDEX IF NOT EXISTS idx_cli_active_heartbeat
     ON cli_active_conversations(heartbeat);
 CREATE INDEX IF NOT EXISTS idx_levels_guild_xp ON user_levels(guild_id, xp DESC);
 CREATE INDEX IF NOT EXISTS idx_module_settings_guild ON module_settings(guild_id);
+CREATE INDEX IF NOT EXISTS idx_swear_jar_user ON swear_jar_counts(user_id);
+CREATE INDEX IF NOT EXISTS idx_booster_members_active
+    ON booster_members(guild_id, active, updated DESC);
+CREATE INDEX IF NOT EXISTS idx_booster_members_user ON booster_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_booster_events_created ON booster_events(created);
 CREATE INDEX IF NOT EXISTS idx_dashboard_audit_guild
     ON dashboard_audit(guild_id, created DESC);
 CREATE INDEX IF NOT EXISTS idx_community_records_lookup
@@ -549,6 +619,35 @@ def _migrate(c: sqlite3.Connection) -> None:
             c.execute("CREATE INDEX IF NOT EXISTS idx_feedback_scope ON feedback(scope_id,author)")
             c.execute("DROP TABLE IF EXISTS user_geo")
             c.execute("DROP TABLE IF EXISTS geo_tokens")
+            if version < 8:
+                c.execute(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS server_messages_fts "
+                    "USING fts5(content, content='server_messages', content_rowid='id', "
+                    "tokenize='unicode61')"
+                )
+                c.execute(
+                    "CREATE TRIGGER IF NOT EXISTS server_messages_fts_insert "
+                    "AFTER INSERT ON server_messages BEGIN "
+                    "INSERT INTO server_messages_fts(rowid,content) "
+                    "VALUES (new.id,new.content); END"
+                )
+                c.execute(
+                    "CREATE TRIGGER IF NOT EXISTS server_messages_fts_delete "
+                    "AFTER DELETE ON server_messages BEGIN "
+                    "INSERT INTO server_messages_fts(server_messages_fts,rowid,content) "
+                    "VALUES ('delete',old.id,old.content); END"
+                )
+                c.execute(
+                    "CREATE TRIGGER IF NOT EXISTS server_messages_fts_update "
+                    "AFTER UPDATE OF content ON server_messages BEGIN "
+                    "INSERT INTO server_messages_fts(server_messages_fts,rowid,content) "
+                    "VALUES ('delete',old.id,old.content); "
+                    "INSERT INTO server_messages_fts(rowid,content) "
+                    "VALUES (new.id,new.content); END"
+                )
+                c.execute(
+                    "INSERT INTO server_messages_fts(server_messages_fts) VALUES('rebuild')"
+                )
             c.execute(f"PRAGMA user_version={LATEST_SCHEMA_VERSION}")
             c.commit()
             c.execute("PRAGMA optimize")
@@ -765,6 +864,44 @@ def dynamic_block_apply(
                     blocked_at, timestamp,
                 ),
             )
+
+            # A prepared alt may have accepted the Terms before this account
+            # was blocked. Hold every recently matching accepted account for
+            # owner review at the block boundary, regardless of account age.
+            network = c.execute(
+                "SELECT network_hash FROM tos_acceptances WHERE user_id=? "
+                "AND network_hash!='' AND network_seen_at>=?",
+                (uid, timestamp - _TOS_NETWORK_RETENTION_SECONDS),
+            ).fetchone()
+            if network is not None:
+                peers = c.execute(
+                    "SELECT user_id FROM tos_acceptances WHERE user_id!=? "
+                    "AND status='accepted' AND network_hash=? AND network_seen_at>=?",
+                    (
+                        uid,
+                        str(network["network_hash"]),
+                        timestamp - _TOS_NETWORK_RETENTION_SECONDS,
+                    ),
+                ).fetchall()
+                peer_ids = [str(peer["user_id"]) for peer in peers]
+                if peer_ids:
+                    c.executemany(
+                        "UPDATE tos_acceptances SET status='review',"
+                        "risk_code='blocked_network_match',submitted_at=?,reviewed_at=NULL "
+                        "WHERE user_id=?",
+                        [(timestamp, peer_id) for peer_id in peer_ids],
+                    )
+                    for peer_id in peer_ids:
+                        c.execute(
+                            "INSERT INTO kv(key,value) VALUES(?,?) "
+                            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                            (f"uf:{peer_id}:tos_accepted", ""),
+                        )
+                        c.execute(
+                            "INSERT INTO kv(key,value) VALUES(?,?) "
+                            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                            (f"uf:{peer_id}:tos_review_pending", "1"),
+                        )
             c.commit()
             return newly_blocked
         except Exception:
@@ -1074,25 +1211,16 @@ def mood_nudge(guild_id: str, dv: float) -> None:
     mood_set(guild_id, d.get("label", "neutral"), d.get("intensity", 0.4), v)
 
 
-_DEFAULT_GUILD = {
-    "persona": "",
-    "lurk": False,
-    "lurk_channel": "",
-    "swear_level": "full",
-    "allowed_channels": [],
-    "smart_always": True,
-    "history_enabled": False,
-    "moderation_enabled": False,
-    "rules_enabled": False,
-    "voice_transcription_enabled": False,
-    "approval_channel": "",
-    "modlog_channel": "",
-    "retention_days": MAX_RETENTION_DAYS,
-    "language": "",
-}
+_DEFAULT_GUILD = default_server_settings()
+
+
+def _guild_settings_key(guild_id: str) -> str:
+    raw = str(guild_id).strip()
+    return f"guild:{raw}" if raw.isdigit() else raw
 
 
 def guild_settings(guild_id: str) -> dict:
+    guild_id = _guild_settings_key(guild_id)
     hit = _gs_cache.get(guild_id)
     if hit is not None and time.time() - hit[0] < _GS_TTL:
         return dict(hit[1])
@@ -1103,7 +1231,7 @@ def guild_settings(guild_id: str) -> dict:
         d = dict(_DEFAULT_GUILD)
     else:
         try:
-            d = {**_DEFAULT_GUILD, **json.loads(row["data"])}
+            d = merge_server_settings(json.loads(row["data"]))
         except (ValueError, TypeError):
             d = dict(_DEFAULT_GUILD)
     _gs_cache[guild_id] = (time.time(), d)
@@ -1111,16 +1239,59 @@ def guild_settings(guild_id: str) -> dict:
 
 
 def guild_settings_set(guild_id: str, **patch) -> dict:
-    cur = guild_settings(guild_id)
-    cur.update(patch)
-    conn().execute(
-        "INSERT INTO guild_settings(guild_id,data) VALUES(?,?) "
-        "ON CONFLICT(guild_id) DO UPDATE SET data=excluded.data",
-        (guild_id, json.dumps(cur)),
-    )
-    conn().commit()
+    guild_id = _guild_settings_key(guild_id)
+    cur = merge_server_settings({**guild_settings(guild_id), **patch})
+    c = conn()
+    with _db_lock:
+        c.execute(
+            "INSERT INTO guild_settings(guild_id,data) VALUES(?,?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET data=excluded.data",
+            (guild_id, json.dumps(cur)),
+        )
+        c.commit()
     _gs_cache[guild_id] = (time.time(), dict(cur))
     return cur
+
+
+def dashboard_guild_settings_set(
+    guild_id: str, settings: dict, *, actor_id: str
+) -> dict:
+    """Validate, persist and audit one complete dashboard settings update."""
+    gid = _guild_settings_key(guild_id)
+    previous = guild_settings(gid)
+    clean = merge_server_settings(settings)
+    changed = sorted(key for key, value in clean.items() if previous.get(key) != value)
+    payload = json.dumps(clean, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    if len(payload.encode("utf-8")) > 32_000:
+        raise ValueError("server configuration is too large")
+    timestamp = now()
+    c = conn()
+    with _db_lock:
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            c.execute(
+                "INSERT INTO guild_settings(guild_id,data) VALUES(?,?) "
+                "ON CONFLICT(guild_id) DO UPDATE SET data=excluded.data",
+                (gid, payload),
+            )
+            c.execute(
+                "INSERT INTO dashboard_audit(guild_id,actor_id,action,module,detail,created) "
+                "VALUES(?,?,?,?,?,?)",
+                (
+                    gid,
+                    str(actor_id)[:100],
+                    "settings.updated",
+                    "server_settings",
+                    json.dumps({"changed": changed}, sort_keys=True),
+                    timestamp,
+                ),
+            )
+            c.commit()
+        except Exception:
+            c.rollback()
+            raise
+    _gs_cache[gid] = (time.time(), dict(clean))
+    return clean
 
 
 def module_config(guild_id: str, module: str) -> dict:
@@ -1222,6 +1393,302 @@ def dashboard_audit_list(guild_id: str, limit: int = 100) -> list[dict]:
         item["detail"] = _json_dict(item.get("detail"))
         output.append(item)
     return output
+
+
+def dashboard_audit_record(
+    guild_id: str,
+    *,
+    actor_id: str,
+    action: str,
+    module: str = "",
+    detail: dict | None = None,
+) -> None:
+    """Append one bounded dashboard action to the server audit trail."""
+    gid = _guild_settings_key(guild_id)
+    if not is_guild_scope(gid):
+        raise ValueError("a guild scope is required")
+    payload = json.dumps(detail if isinstance(detail, dict) else {}, sort_keys=True)
+    if len(payload.encode("utf-8")) > 16_000:
+        raise ValueError("audit detail is too large")
+    conn().execute(
+        "INSERT INTO dashboard_audit(guild_id,actor_id,action,module,detail,created) "
+        "VALUES(?,?,?,?,?,?)",
+        (gid, str(actor_id)[:100], str(action)[:100], str(module)[:80], payload, now()),
+    )
+    conn().commit()
+
+
+def swear_jar_count(guild_id: str, user_id: str) -> int:
+    """Return one member's server-scoped swear total."""
+    gid = _guild_settings_key(guild_id)
+    uid = str(user_id).strip()
+    if not is_guild_scope(gid) or not uid.isdigit():
+        return 0
+    row = conn().execute(
+        "SELECT count FROM swear_jar_counts WHERE guild_id=? AND user_id=?",
+        (gid, uid),
+    ).fetchone()
+    return max(0, int(row["count"])) if row else 0
+
+
+def swear_jar_increment(guild_id: str, user_id: str, amount: int) -> int:
+    """Atomically add a bounded amount and return the new server total."""
+    gid = _guild_settings_key(guild_id)
+    uid = str(user_id).strip()
+    increment = max(0, min(100, int(amount)))
+    if not is_guild_scope(gid) or not uid.isdigit() or increment == 0:
+        return swear_jar_count(gid, uid)
+
+    maximum = 9_223_372_036_854_775_807
+    c = conn()
+    with _db_lock:
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            c.execute(
+                "INSERT INTO swear_jar_counts(guild_id,user_id,count,updated) "
+                "VALUES(?,?,?,?) ON CONFLICT(guild_id,user_id) DO UPDATE SET "
+                "count=CASE WHEN swear_jar_counts.count>=?-excluded.count THEN ? "
+                "ELSE swear_jar_counts.count+excluded.count END,"
+                "updated=excluded.updated",
+                (gid, uid, increment, now(), maximum, maximum),
+            )
+            row = c.execute(
+                "SELECT count FROM swear_jar_counts WHERE guild_id=? AND user_id=?",
+                (gid, uid),
+            ).fetchone()
+            c.commit()
+        except Exception:
+            c.rollback()
+            raise
+    return max(0, int(row["count"])) if row else 0
+
+
+def _booster_row(row) -> dict:
+    if row is None:
+        return {
+            "guild_id": "", "user_id": "", "current_boosts": 0,
+            "all_time_boosts": 0, "active": False, "first_boosted": None,
+            "last_boosted": None, "stopped": None, "last_source": "", "updated": 0.0,
+        }
+    item = dict(row)
+    item["current_boosts"] = max(0, int(item.get("current_boosts") or 0))
+    item["all_time_boosts"] = max(item["current_boosts"], int(item.get("all_time_boosts") or 0))
+    item["active"] = bool(item.get("active"))
+    return item
+
+
+def booster_member(guild_id: str, user_id: str) -> dict:
+    """Return the durable boost record for one server member."""
+    gid = _guild_settings_key(guild_id)
+    uid = str(user_id).strip()
+    if not is_guild_scope(gid) or not uid.isdigit():
+        return _booster_row(None)
+    row = conn().execute(
+        "SELECT * FROM booster_members WHERE guild_id=? AND user_id=?", (gid, uid)
+    ).fetchone()
+    result = _booster_row(row)
+    result["guild_id"], result["user_id"] = gid, uid
+    return result
+
+
+def booster_members(guild_id: str, *, active: bool | None = None, limit: int = 1000) -> list[dict]:
+    """List current or historical boosters, newest activity first."""
+    gid = _guild_settings_key(guild_id)
+    if not is_guild_scope(gid):
+        return []
+    sql = "SELECT * FROM booster_members WHERE guild_id=?"
+    args: list[object] = [gid]
+    if active is not None:
+        sql += " AND active=?"
+        args.append(1 if active else 0)
+    sql += " ORDER BY updated DESC,user_id LIMIT ?"
+    args.append(max(1, min(10_000, int(limit))))
+    return [_booster_row(row) for row in conn().execute(sql, tuple(args)).fetchall()]
+
+
+def booster_stats(guild_id: str) -> dict[str, int]:
+    """Return current/all-time boost and booster totals for a server."""
+    gid = _guild_settings_key(guild_id)
+    if not is_guild_scope(gid):
+        return {"current_boosts": 0, "all_time_boosts": 0, "current_boosters": 0, "all_time_boosters": 0}
+    row = conn().execute(
+        "SELECT COALESCE(SUM(CASE WHEN active=1 THEN current_boosts ELSE 0 END),0) current_boosts,"
+        "COALESCE(SUM(all_time_boosts),0) all_time_boosts,"
+        "COALESCE(SUM(active),0) current_boosters,"
+        "COALESCE(SUM(CASE WHEN all_time_boosts>0 THEN 1 ELSE 0 END),0) all_time_boosters "
+        "FROM booster_members WHERE guild_id=?", (gid,),
+    ).fetchone()
+    return {name: max(0, int(row[name] or 0)) for name in (
+        "current_boosts", "all_time_boosts", "current_boosters", "all_time_boosters"
+    )}
+
+
+def booster_record_sync(
+    guild_id: str, user_id: str, *, boosted_since: float | None = None, source: str = "sync"
+) -> tuple[dict, bool]:
+    """Mark a member active. Returns the record and whether this was a new boost period."""
+    gid, uid = _guild_settings_key(guild_id), str(user_id).strip()
+    if not is_guild_scope(gid) or not uid.isdigit():
+        raise ValueError("a guild scope and numeric user id are required")
+    timestamp = now()
+    started_at = min(timestamp, float(boosted_since)) if boosted_since else timestamp
+    c = conn()
+    with _db_lock:
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            old = c.execute(
+                "SELECT * FROM booster_members WHERE guild_id=? AND user_id=?", (gid, uid)
+            ).fetchone()
+            started = old is None or not bool(old["active"])
+            if old is None:
+                c.execute(
+                    "INSERT INTO booster_members(guild_id,user_id,current_boosts,all_time_boosts,"
+                    "active,first_boosted,last_boosted,stopped,last_source,updated) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (gid, uid, 1, 1, 1, started_at, timestamp, None, str(source)[:30], timestamp),
+                )
+            elif started:
+                c.execute(
+                    "UPDATE booster_members SET current_boosts=1,all_time_boosts=all_time_boosts+1,"
+                    "active=1,first_boosted=COALESCE(first_boosted,?),last_boosted=?,stopped=NULL,"
+                    "last_source=?,updated=? WHERE guild_id=? AND user_id=?",
+                    (started_at, timestamp, str(source)[:30], timestamp, gid, uid),
+                )
+            else:
+                c.execute(
+                    "UPDATE booster_members SET current_boosts=MAX(1,current_boosts),active=1,"
+                    "first_boosted=COALESCE(first_boosted,?),stopped=NULL,last_source=?,updated=? "
+                    "WHERE guild_id=? AND user_id=?",
+                    (started_at, str(source)[:30], timestamp, gid, uid),
+                )
+            row = c.execute(
+                "SELECT * FROM booster_members WHERE guild_id=? AND user_id=?", (gid, uid)
+            ).fetchone()
+            c.commit()
+        except Exception:
+            c.rollback()
+            raise
+    return _booster_row(row), started
+
+
+def booster_record_event(guild_id: str, user_id: str, event_id: str) -> tuple[dict, bool]:
+    """Record a Discord boost system message once and increment the member count."""
+    gid, uid = _guild_settings_key(guild_id), str(user_id).strip()
+    eid = str(event_id).strip()[:200]
+    if not is_guild_scope(gid) or not uid.isdigit() or not eid:
+        raise ValueError("guild, user and event ids are required")
+    timestamp = now()
+    c = conn()
+    with _db_lock:
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            inserted = c.execute(
+                "INSERT OR IGNORE INTO booster_events(guild_id,event_id,user_id,created) VALUES(?,?,?,?)",
+                (gid, eid, uid, timestamp),
+            ).rowcount > 0
+            if not inserted:
+                row = c.execute(
+                    "SELECT * FROM booster_members WHERE guild_id=? AND user_id=?", (gid, uid)
+                ).fetchone()
+                c.commit()
+                return _booster_row(row), False
+            old = c.execute(
+                "SELECT * FROM booster_members WHERE guild_id=? AND user_id=?", (gid, uid)
+            ).fetchone()
+            # Gateway order is not stable: a premium_since update can arrive seconds before
+            # the matching system message. Count that pair once, while later messages are boosts.
+            paired_sync = bool(
+                old and old["active"] and old["last_source"] in {"sync", "member", "import"}
+                and timestamp - float(old["updated"] or 0) <= 30
+            )
+            if old is None:
+                c.execute(
+                    "INSERT INTO booster_members(guild_id,user_id,current_boosts,all_time_boosts,active,"
+                    "first_boosted,last_boosted,stopped,last_source,updated) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (gid, uid, 1, 1, 1, timestamp, timestamp, None, "system", timestamp),
+                )
+            elif paired_sync:
+                c.execute(
+                    "UPDATE booster_members SET last_source='system',last_boosted=?,updated=? "
+                    "WHERE guild_id=? AND user_id=?", (timestamp, timestamp, gid, uid),
+                )
+            else:
+                c.execute(
+                    "UPDATE booster_members SET current_boosts=CASE WHEN active=1 THEN current_boosts+1 ELSE 1 END,"
+                    "all_time_boosts=all_time_boosts+1,active=1,first_boosted=COALESCE(first_boosted,?),"
+                    "last_boosted=?,stopped=NULL,last_source='system',updated=? WHERE guild_id=? AND user_id=?",
+                    (timestamp, timestamp, timestamp, gid, uid),
+                )
+            row = c.execute(
+                "SELECT * FROM booster_members WHERE guild_id=? AND user_id=?", (gid, uid)
+            ).fetchone()
+            c.commit()
+        except Exception:
+            c.rollback()
+            raise
+    return _booster_row(row), not paired_sync
+
+
+def booster_record_stop(guild_id: str, user_id: str) -> tuple[dict, bool]:
+    """Mark all boosts removed; Discord cannot expose partial boost removals."""
+    gid, uid = _guild_settings_key(guild_id), str(user_id).strip()
+    old = booster_member(gid, uid)
+    if not old["active"]:
+        return old, False
+    timestamp = now()
+    with _db_lock:
+        conn().execute(
+            "UPDATE booster_members SET current_boosts=0,active=0,stopped=?,last_source='member',updated=? "
+            "WHERE guild_id=? AND user_id=?", (timestamp, timestamp, gid, uid),
+        )
+        conn().commit()
+    return booster_member(gid, uid), True
+
+
+def booster_adjust(guild_id: str, user_id: str, delta: int) -> dict:
+    """Apply a manager correction to current and all-time recorded boosts."""
+    gid, uid = _guild_settings_key(guild_id), str(user_id).strip()
+    change = max(-10_000, min(10_000, int(delta)))
+    if not is_guild_scope(gid) or not uid.isdigit() or change == 0:
+        return booster_member(gid, uid)
+    timestamp = now()
+    c = conn()
+    with _db_lock:
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            old = c.execute(
+                "SELECT * FROM booster_members WHERE guild_id=? AND user_id=?", (gid, uid)
+            ).fetchone()
+            if old is None and change < 0:
+                c.commit()
+                return booster_member(gid, uid)
+            current = max(0, int(old["current_boosts"] if old else 0) + change)
+            lifetime = max(current, max(0, int(old["all_time_boosts"] if old else 0) + change))
+            first = old["first_boosted"] if old else (timestamp if current else None)
+            if old is None:
+                c.execute(
+                    "INSERT INTO booster_members(guild_id,user_id,current_boosts,all_time_boosts,active,"
+                    "first_boosted,last_boosted,stopped,last_source,updated) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (gid, uid, current, lifetime, int(current > 0), first,
+                     timestamp if current else None, None if current else timestamp, "manual", timestamp),
+                )
+            else:
+                c.execute(
+                    "UPDATE booster_members SET current_boosts=?,all_time_boosts=?,active=?,"
+                    "first_boosted=?,last_boosted=CASE WHEN ?>0 THEN ? ELSE last_boosted END,"
+                    "stopped=CASE WHEN ?>0 THEN NULL ELSE ? END,last_source='manual',updated=? "
+                    "WHERE guild_id=? AND user_id=?",
+                    (current, lifetime, int(current > 0), first, current, timestamp,
+                     current, timestamp, timestamp, gid, uid),
+                )
+            row = c.execute(
+                "SELECT * FROM booster_members WHERE guild_id=? AND user_id=?", (gid, uid)
+            ).fetchone()
+            c.commit()
+        except Exception:
+            c.rollback()
+            raise
+    return _booster_row(row)
 
 
 def community_record_create(
@@ -1507,6 +1974,22 @@ def relationship_top(guild_id: str, limit: int = 10, worst: bool = False) -> Lis
     return [dict(r) for r in rows]
 
 
+def relationships_for_user(user_id: str) -> List[dict]:
+    rows = conn().execute(
+        "SELECT * FROM relationships WHERE user_id=?",
+        (str(user_id),),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def memories_for_subject(subject: str) -> List[sqlite3.Row]:
+    subject = normalize_subject(subject)
+    return conn().execute(
+        "SELECT * FROM memories WHERE subject=?",
+        (subject,),
+    ).fetchall()
+
+
 def convo_add(user_id: str, guild_id: str, role: str, content: str) -> None:
     if not history_storage_allowed(str(user_id), str(guild_id)):
         return
@@ -1543,6 +2026,15 @@ def convo_clear(user_id: str, guild_id: str) -> int:
     )
     conn().commit()
     return cur.rowcount
+
+
+def convo_clear_user(user_id: str) -> int:
+    cur = conn().execute(
+        "DELETE FROM conversations WHERE user_id=?",
+        (str(user_id),),
+    )
+    conn().commit()
+    return max(0, int(cur.rowcount))
 
 
 def quote_add(guild_id: str, text: str, about: str = None, author: str = None) -> int:
@@ -2133,6 +2625,152 @@ def user_flag_int(user_id: str, key: str, default: int = 0) -> int:
         return default
 
 
+def tos_challenge_create(
+    user_id: str, token_hash: str, version: str, expires_at: float
+) -> None:
+    """Replace a user's pending web-acceptance challenge with a new one."""
+    uid = str(user_id)
+    c = conn()
+    with _db_lock:
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            c.execute("DELETE FROM tos_acceptance_challenges WHERE user_id=?", (uid,))
+            c.execute(
+                "INSERT INTO tos_acceptance_challenges"
+                "(token_hash,user_id,version,expires_at,created_at) VALUES(?,?,?,?,?)",
+                (str(token_hash), uid, str(version), float(expires_at), now()),
+            )
+            c.commit()
+        except Exception:
+            c.rollback()
+            raise
+
+
+def tos_challenge_consume(
+    token_hash: str, version: str, *, current_time: float | None = None
+) -> str | None:
+    """Atomically consume one unexpired challenge and return its Discord id."""
+    timestamp = now() if current_time is None else float(current_time)
+    c = conn()
+    with _db_lock:
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            row = c.execute(
+                "SELECT user_id,version,expires_at FROM tos_acceptance_challenges "
+                "WHERE token_hash=?",
+                (str(token_hash),),
+            ).fetchone()
+            c.execute(
+                "DELETE FROM tos_acceptance_challenges WHERE token_hash=?",
+                (str(token_hash),),
+            )
+            c.commit()
+        except Exception:
+            c.rollback()
+            raise
+    if (
+        row is None
+        or str(row["version"]) != str(version)
+        or float(row["expires_at"]) < timestamp
+    ):
+        return None
+    return str(row["user_id"])
+
+
+def tos_acceptance_set(
+    user_id: str,
+    version: str,
+    *,
+    status: str,
+    network_hash: str = "",
+    risk_code: str = "",
+    submitted_at: float | None = None,
+) -> None:
+    """Store the latest bounded ToS decision for one Discord account."""
+    if status not in {"accepted", "review", "rejected"}:
+        raise ValueError("invalid ToS acceptance status")
+    timestamp = now() if submitted_at is None else float(submitted_at)
+    normalized_network = str(network_hash or "")[:128]
+    c = conn()
+    c.execute(
+        "INSERT INTO tos_acceptances"
+        "(user_id,version,status,network_hash,network_seen_at,risk_code,"
+        "submitted_at,reviewed_at) VALUES(?,?,?,?,?,?,?,NULL) "
+        "ON CONFLICT(user_id) DO UPDATE SET "
+        "version=excluded.version,status=excluded.status,"
+        "network_hash=CASE WHEN excluded.network_hash!='' THEN excluded.network_hash "
+        "ELSE tos_acceptances.network_hash END,"
+        "network_seen_at=CASE WHEN excluded.network_hash!='' THEN excluded.network_seen_at "
+        "ELSE tos_acceptances.network_seen_at END,"
+        "risk_code=excluded.risk_code,submitted_at=excluded.submitted_at,reviewed_at=NULL",
+        (
+            str(user_id),
+            str(version),
+            status,
+            normalized_network,
+            timestamp if normalized_network else None,
+            str(risk_code or "")[:80],
+            timestamp,
+        ),
+    )
+    c.commit()
+
+
+def tos_acceptance_get(user_id: str) -> dict | None:
+    row = conn().execute(
+        "SELECT user_id,version,status,network_hash,network_seen_at,risk_code,"
+        "submitted_at,reviewed_at FROM tos_acceptances WHERE user_id=?",
+        (str(user_id),),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def tos_acceptance_network_users(network_hash: str, *, since: float) -> list[str]:
+    if not network_hash:
+        return []
+    rows = conn().execute(
+        "SELECT user_id FROM tos_acceptances WHERE network_hash=? "
+        "AND network_seen_at>=? ORDER BY network_seen_at DESC LIMIT 100",
+        (str(network_hash), float(since)),
+    ).fetchall()
+    return [str(row["user_id"]) for row in rows]
+
+
+def tos_acceptance_network_has_dynamic_block(
+    network_hash: str, *, since: float, exclude_user_id: str = ""
+) -> bool:
+    """Return whether a recent matching acceptance belongs to a live block."""
+    if not network_hash:
+        return False
+    row = conn().execute(
+        "SELECT 1 FROM tos_acceptances a "
+        "JOIN dynamic_blocks b ON b.user_id=a.user_id "
+        "WHERE a.network_hash=? AND a.network_seen_at>=? AND a.user_id!=? LIMIT 1",
+        (str(network_hash), float(since), str(exclude_user_id)),
+    ).fetchone()
+    return row is not None
+
+
+def tos_acceptance_reviews(limit: int = 100) -> list[dict]:
+    rows = conn().execute(
+        "SELECT user_id,version,status,risk_code,submitted_at FROM tos_acceptances "
+        "WHERE status='review' ORDER BY submitted_at ASC LIMIT ?",
+        (max(1, min(500, int(limit))),),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def tos_acceptance_allow(user_id: str, version: str) -> bool:
+    timestamp = now()
+    cur = conn().execute(
+        "UPDATE tos_acceptances SET status='accepted',version=?,risk_code='',"
+        "reviewed_at=? WHERE user_id=? AND status='review'",
+        (str(version), timestamp, str(user_id)),
+    )
+    conn().commit()
+    return int(cur.rowcount) > 0
+
+
 def privacy_opted_in(user_id: str, scope_id: str) -> bool:
     row = conn().execute(
         "SELECT opted_in FROM privacy_consents WHERE user_id=? AND scope_id=?",
@@ -2170,6 +2808,12 @@ def history_storage_allowed(user_id: str, scope_id: str) -> bool:
     if not is_guild_scope(scope_id):
         return False
     return bool(guild_settings(scope_id).get("history_enabled", False))
+
+
+def archive_scope_enabled(scope_id: str) -> bool:
+    """Return whether an exact guild scope has deployment-level archiving."""
+    value = str(scope_id or "")
+    return value.startswith("guild:") and value[6:] in config.ARCHIVE_GUILD_IDS
 
 
 def privacy_export(user_id: str) -> dict:
@@ -2233,6 +2877,13 @@ def privacy_export(user_id: str) -> dict:
             for metadata in [dynamic_block_get(uid)]
             if metadata is not None
         ],
+        "tos_acceptance": [
+            dict(r) for r in c.execute(
+                "SELECT user_id,version,status,network_hash,network_seen_at,risk_code,"
+                "submitted_at,reviewed_at FROM tos_acceptances WHERE user_id=?",
+                (uid,),
+            ).fetchall()
+        ],
         "assistant_actions": [
             dict(r) for r in c.execute(
                 "SELECT id,scope_id,channel_id,action,target_id,parameters,result,"
@@ -2256,6 +2907,19 @@ def privacy_export(user_id: str) -> dict:
                 (uid, uid),
             ).fetchall()
         ],
+        "swear_jar_counts": [
+            dict(r) for r in c.execute(
+                "SELECT guild_id,user_id,count,updated FROM swear_jar_counts "
+                "WHERE user_id=? ORDER BY guild_id",
+                (uid,),
+            ).fetchall()
+        ],
+        "booster_members": [
+            dict(r) for r in c.execute(
+                "SELECT * FROM booster_members WHERE user_id=? ORDER BY guild_id",
+                (uid,),
+            ).fetchall()
+        ],
     }
 
 
@@ -2271,12 +2935,15 @@ def privacy_delete_user(user_id: str) -> dict[str, int]:
         "interactions": ("DELETE FROM interactions WHERE author=?", (uid,)),
         "server_messages": ("DELETE FROM server_messages WHERE user_id=?", (uid,)),
         "privacy_consents": ("DELETE FROM privacy_consents WHERE user_id=?", (uid,)),
+        "tos_acceptance_challenges": (
+            "DELETE FROM tos_acceptance_challenges WHERE user_id=?", (uid,)
+        ),
+        "tos_acceptances": ("DELETE FROM tos_acceptances WHERE user_id=?", (uid,)),
         "commands": ("DELETE FROM commands WHERE author=?", (uid,)),
         "economy_accounts": ("DELETE FROM economy_accounts WHERE user_id=?", (uid,)),
         "work_cooldowns": ("DELETE FROM work_cooldowns WHERE user_id=?", (uid,)),
         "dm_contacts": ("DELETE FROM dm_contacts WHERE user_id=?", (uid,)),
         "cli_active_conversations": ("DELETE FROM cli_active_conversations WHERE user_id=?", (uid,)),
-        "dynamic_blocks": ("DELETE FROM dynamic_blocks WHERE user_id=?", (uid,)),
         "assistant_action_history": (
             "DELETE FROM assistant_action_history WHERE actor_id=?", (uid,)
         ),
@@ -2285,6 +2952,9 @@ def privacy_delete_user(user_id: str) -> dict[str, int]:
         "afk_notes": (
             "DELETE FROM afk_notes WHERE target_id=? OR author_id=?", (uid, uid)
         ),
+        "swear_jar_counts": ("DELETE FROM swear_jar_counts WHERE user_id=?", (uid,)),
+        "booster_members": ("DELETE FROM booster_members WHERE user_id=?", (uid,)),
+        "booster_events": ("DELETE FROM booster_events WHERE user_id=?", (uid,)),
     }
     counts: dict[str, int] = {}
     c = conn()
@@ -2294,6 +2964,40 @@ def privacy_delete_user(user_id: str) -> dict[str, int]:
             for table, (sql, args) in delete_queries.items():
                 cur = c.execute(sql, args)
                 counts[table] = max(0, int(cur.rowcount))
+            block_row = c.execute(
+                "SELECT metadata FROM dynamic_blocks WHERE user_id=?", (uid,)
+            ).fetchone()
+            block_metadata = _json_dict(block_row["metadata"]) if block_row else {}
+            preserve_malware_block = (
+                str(block_metadata.get("category") or "").lower() == "malware"
+                and str(block_metadata.get("trigger_source") or "").lower()
+                == "clamav_attachment"
+            )
+            if preserve_malware_block:
+                minimal_block = {
+                    "reason": "malware attachment detected",
+                    "category": "malware",
+                    "offending_text": str(block_metadata.get("offending_text") or "")[:100],
+                    "channel_id": "",
+                    "guild_id": "",
+                    "guild_name": "",
+                    "user_tag": "",
+                    "trigger_source": "clamav_attachment",
+                    "strikes_detail": "security block retained after privacy deletion",
+                    "history": [],
+                }
+                c.execute(
+                    "UPDATE dynamic_blocks SET metadata=?,updated_at=? WHERE user_id=?",
+                    (
+                        json.dumps(minimal_block, sort_keys=True, separators=(",", ":")),
+                        now(),
+                        uid,
+                    ),
+                )
+                counts["dynamic_blocks"] = 0
+            else:
+                cur = c.execute("DELETE FROM dynamic_blocks WHERE user_id=?", (uid,))
+                counts["dynamic_blocks"] = max(0, int(cur.rowcount))
             cur = c.execute("DELETE FROM kv WHERE key LIKE ?", (f"uf:{uid}:%",))
             counts["user_flags"] = max(0, int(cur.rowcount))
             c.commit()
@@ -2312,7 +3016,18 @@ def cleanup_expired_content(retention_days: int = MAX_RETENTION_DAYS) -> dict[st
     with _db_lock:
         try:
             c.execute("BEGIN IMMEDIATE")
-            cur = c.execute("DELETE FROM server_messages WHERE created<?", (cutoff,))
+            archive_scopes = tuple(
+                f"guild:{guild_id}" for guild_id in sorted(config.ARCHIVE_GUILD_IDS)
+            )
+            if archive_scopes:
+                placeholders = ",".join("?" for _ in archive_scopes)
+                cur = c.execute(
+                    f"DELETE FROM server_messages WHERE created<? "  # noqa: S608
+                    f"AND guild_id NOT IN ({placeholders})",
+                    (cutoff, *archive_scopes),
+                )
+            else:
+                cur = c.execute("DELETE FROM server_messages WHERE created<?", (cutoff,))
             counts["server_messages"] = max(0, int(cur.rowcount))
             cur = c.execute("DELETE FROM conversations WHERE created<?", (cutoff,))
             counts["conversations"] = max(0, int(cur.rowcount))
@@ -2324,6 +3039,23 @@ def cleanup_expired_content(retention_days: int = MAX_RETENTION_DAYS) -> dict[st
             counts["assistant_action_history"] = max(0, int(cur.rowcount))
             cur = c.execute("DELETE FROM dashboard_audit WHERE created<?", (cutoff,))
             counts["dashboard_audit"] = max(0, int(cur.rowcount))
+            cur = c.execute("DELETE FROM booster_events WHERE created<?", (cutoff,))
+            counts["booster_events"] = max(0, int(cur.rowcount))
+            cur = c.execute(
+                "DELETE FROM tos_acceptance_challenges WHERE expires_at<?", (now(),)
+            )
+            counts["tos_acceptance_challenges"] = max(0, int(cur.rowcount))
+            cur = c.execute(
+                "DELETE FROM tos_acceptances WHERE status!='accepted' AND submitted_at<?",
+                (cutoff,),
+            )
+            counts["tos_acceptance_reviews"] = max(0, int(cur.rowcount))
+            cur = c.execute(
+                "UPDATE tos_acceptances SET network_hash='',network_seen_at=NULL,risk_code='' "
+                "WHERE status='accepted' AND network_seen_at<?",
+                (cutoff,),
+            )
+            counts["tos_acceptance_networks_minimized"] = max(0, int(cur.rowcount))
             cur = c.execute(
                 "DELETE FROM community_records WHERE status!='active' AND updated<?",
                 (cutoff,),
@@ -2334,6 +3066,42 @@ def cleanup_expired_content(retention_days: int = MAX_RETENTION_DAYS) -> dict[st
                 (now() - 300.0,),
             )
             counts["cli_active_conversations"] = max(0, int(cur.rowcount))
+            c.commit()
+        except Exception:
+            c.rollback()
+            raise
+    return counts
+
+
+def cleanup_guild_content(guild_id: str, retention_days: int) -> dict[str, int]:
+    """Apply a guild's stricter retention window without touching other tenants."""
+    gid = _guild_settings_key(guild_id)
+    days = max(1, min(MAX_RETENTION_DAYS, int(retention_days)))
+    cutoff = now() - days * 86_400
+    statements = {
+        "server_messages": ("DELETE FROM server_messages WHERE guild_id=? AND created<?", (gid, cutoff)),
+        "conversations": ("DELETE FROM conversations WHERE guild_id=? AND created<?", (gid, cutoff)),
+        "feedback": ("DELETE FROM feedback WHERE scope_id=? AND created<?", (gid, cutoff)),
+        "assistant_action_history": (
+            "DELETE FROM assistant_action_history WHERE scope_id=? AND created<?",
+            (gid, cutoff),
+        ),
+        "dashboard_audit": ("DELETE FROM dashboard_audit WHERE guild_id=? AND created<?", (gid, cutoff)),
+        "community_records": (
+            "DELETE FROM community_records WHERE guild_id=? AND status!='active' AND updated<?",
+            (gid, cutoff),
+        ),
+    }
+    if archive_scope_enabled(gid):
+        statements.pop("server_messages")
+    counts: dict[str, int] = {}
+    c = conn()
+    with _db_lock:
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            for table, (sql, args) in statements.items():
+                cur = c.execute(sql, args)
+                counts[table] = max(0, int(cur.rowcount))
             c.commit()
         except Exception:
             c.rollback()
@@ -2768,17 +3536,54 @@ def record_server_message(
     username: str,
     display_name: str,
     content: str,
+    *,
+    force: bool = False,
+    created_at: float | None = None,
 ) -> None:
     if (
         not content
         or not user_id
         or not (is_guild_scope(guild_id) or is_dm_scope(guild_id))
-        or not history_storage_allowed(str(user_id), str(guild_id))
+        or (not force and not history_storage_allowed(str(user_id), str(guild_id)))
     ):
         return
-    has_bad, matches = detect_bad_words(content)
-    bad_str = json.dumps(matches) if has_bad else ""
     c = conn()
+    _record_server_message_row(
+        c,
+        message_id=message_id,
+        guild_id=guild_id,
+        guild_name=guild_name,
+        channel_id=channel_id,
+        channel_name=channel_name,
+        user_id=user_id,
+        username=username,
+        display_name=display_name,
+        content=content,
+        created_at=created_at,
+    )
+    c.commit()
+
+
+def _record_server_message_row(
+    c: sqlite3.Connection,
+    *,
+    message_id: str,
+    guild_id: str,
+    guild_name: str,
+    channel_id: str,
+    channel_name: str,
+    user_id: str,
+    username: str,
+    display_name: str,
+    content: str,
+    created_at: float | None,
+) -> None:
+    clean_content = str(content or "")[:2000]
+    if not clean_content:
+        return
+    has_bad, matches = detect_bad_words(clean_content)
+    bad_str = json.dumps(matches) if has_bad else ""
+    timestamp = _safe_timestamp(created_at, now()) if created_at is not None else now()
     c.execute(
         """
         INSERT INTO server_messages (
@@ -2795,11 +3600,186 @@ def record_server_message(
         (
             str(message_id), str(guild_id), str(guild_name or "DM/Unknown"),
             str(channel_id), str(channel_name or "unknown"), str(user_id),
-            str(username), str(display_name or username), str(content)[:2000],
-            1 if has_bad else 0, bad_str, now()
+            str(username), str(display_name or username), clean_content,
+            1 if has_bad else 0, bad_str, timestamp
         )
     )
-    c.commit()
+
+
+def record_archived_message_batch(
+    guild_id: str,
+    channel_id: str,
+    channel_name: str,
+    records: list[dict],
+    *,
+    last_message_id: str | None,
+    messages_seen: int | None = None,
+    complete: bool,
+    error: str | None = None,
+) -> int:
+    """Atomically upsert one text-only archive batch and advance its cursor."""
+    gid = str(guild_id)
+    if not archive_scope_enabled(gid):
+        raise ValueError("archive batch requires an allowlisted guild scope")
+    cid = str(channel_id)
+    saved = 0
+    c = conn()
+    with _db_lock:
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            for record in records:
+                content = str(record.get("content") or "")
+                if not content:
+                    c.execute(
+                        "DELETE FROM server_messages WHERE guild_id=? AND message_id=?",
+                        (gid, str(record["message_id"])),
+                    )
+                    continue
+                _record_server_message_row(
+                    c,
+                    message_id=str(record["message_id"]),
+                    guild_id=gid,
+                    guild_name=str(record.get("guild_name") or "Unknown"),
+                    channel_id=cid,
+                    channel_name=str(channel_name or "unknown"),
+                    user_id=str(record["user_id"]),
+                    username=str(record.get("username") or record["user_id"]),
+                    display_name=str(
+                        record.get("display_name")
+                        or record.get("username")
+                        or record["user_id"]
+                    ),
+                    content=content,
+                    created_at=record.get("created_at"),
+                )
+                saved += 1
+            c.execute(
+                "INSERT INTO guild_archive_channels("
+                "guild_id,channel_id,channel_name,last_message_id,messages_seen,"
+                "complete,last_error,updated) VALUES(?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(guild_id,channel_id) DO UPDATE SET "
+                "channel_name=excluded.channel_name,"
+                "last_message_id=COALESCE(excluded.last_message_id,"
+                "guild_archive_channels.last_message_id),"
+                "messages_seen=guild_archive_channels.messages_seen+excluded.messages_seen,"
+                "complete=excluded.complete,last_error=excluded.last_error,"
+                "updated=excluded.updated",
+                (
+                    gid,
+                    cid,
+                    str(channel_name or "unknown")[:100],
+                    str(last_message_id) if last_message_id else None,
+                    max(0, int(messages_seen if messages_seen is not None else len(records))),
+                    1 if complete else 0,
+                    str(error or "")[:500] or None,
+                    now(),
+                ),
+            )
+            c.commit()
+        except Exception:
+            c.rollback()
+            raise
+    return saved
+
+
+def archive_channel_cursor(guild_id: str, channel_id: str) -> dict | None:
+    row = conn().execute(
+        "SELECT * FROM guild_archive_channels WHERE guild_id=? AND channel_id=?",
+        (str(guild_id), str(channel_id)),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def archive_status(guild_id: str) -> dict:
+    gid = str(guild_id)
+    rows = conn().execute(
+        "SELECT channel_id,channel_name,last_message_id,messages_seen,complete,"
+        "last_error,updated FROM guild_archive_channels WHERE guild_id=? "
+        "ORDER BY channel_name,channel_id",
+        (gid,),
+    ).fetchall()
+    total = conn().execute(
+        "SELECT COUNT(*) FROM server_messages WHERE guild_id=?", (gid,)
+    ).fetchone()[0]
+    return {
+        "guild_id": gid,
+        "stored_messages": int(total),
+        "channels": [dict(row) for row in rows],
+        "complete_channels": sum(bool(row["complete"]) for row in rows),
+        "errors": sum(bool(row["last_error"]) for row in rows),
+    }
+
+
+def remove_archived_message(guild_id: str, message_id: str) -> bool:
+    """Remove a row whose edited content no longer contains archiveable text."""
+    gid = str(guild_id)
+    if not archive_scope_enabled(gid):
+        return False
+    cur = conn().execute(
+        "DELETE FROM server_messages WHERE guild_id=? AND message_id=?",
+        (gid, str(message_id)),
+    )
+    conn().commit()
+    return bool(cur.rowcount)
+
+
+def normalize_archived_message_text(guild_id: str, sanitizer) -> dict[str, int]:
+    """Rewrite legacy archive rows to the current text-only storage format."""
+    gid = str(guild_id)
+    if not archive_scope_enabled(gid):
+        raise ValueError("archive normalization requires an allowlisted guild scope")
+    updated = 0
+    deleted = 0
+    last_id = 0
+    c = conn()
+    while True:
+        rows = c.execute(
+            "SELECT id,content FROM server_messages "
+            "WHERE guild_id=? AND id>? ORDER BY id LIMIT 1000",
+            (gid, last_id),
+        ).fetchall()
+        if not rows:
+            break
+        last_id = int(rows[-1]["id"])
+        with _db_lock:
+            try:
+                c.execute("BEGIN IMMEDIATE")
+                for row in rows:
+                    original = str(row["content"] or "")
+                    clean = str(sanitizer(original) or "")
+                    if not clean:
+                        deleted += max(
+                            0,
+                            int(
+                                c.execute(
+                                    "DELETE FROM server_messages WHERE id=? AND guild_id=?",
+                                    (row["id"], gid),
+                                ).rowcount
+                            ),
+                        )
+                    elif clean != original:
+                        has_bad, matches = detect_bad_words(clean)
+                        updated += max(
+                            0,
+                            int(
+                                c.execute(
+                                    "UPDATE server_messages SET content=?,has_bad_words=?,"
+                                    "bad_words_found=? WHERE id=? AND guild_id=?",
+                                    (
+                                        clean,
+                                        1 if has_bad else 0,
+                                        json.dumps(matches) if has_bad else "",
+                                        row["id"],
+                                        gid,
+                                    ),
+                                ).rowcount
+                            ),
+                        )
+                c.commit()
+            except Exception:
+                c.rollback()
+                raise
+    return {"updated": updated, "deleted": deleted}
 
 
 _STOP_WORDS = {
@@ -2909,6 +3889,104 @@ def get_user_intelligence(user_id: str, guild_id: Optional[str] = None) -> dict:
         "channels": [{"channel_name": r["channel_name"] or "unknown", "n": r["n"]} for r in channels],
         "top_words": _top_words(word_rows, 20),
     }
+
+
+def search_user_messages(
+    user_id: str,
+    guild_id: str,
+    question: str,
+    limit: int = 40,
+) -> List[dict]:
+    """Retrieve question-relevant rows from a user's complete text archive."""
+    uid, gid = str(user_id), str(guild_id)
+    maximum = max(1, min(100, int(limit)))
+    terms = []
+    for term in _WORD.findall(str(question or "").lower()):
+        if term not in _STOP_WORDS and term not in terms:
+            terms.append(term)
+    profile_query = profile_search.is_location_question(question)
+    if profile_query:
+        terms.extend(term for term in profile_search.PROFILE_TERMS if term not in terms)
+    if not terms:
+        return []
+    if not profile_query:
+        terms = terms[:12]
+    match_query = " OR ".join(f'"{term}"' for term in terms)
+    candidate_limit = max(maximum * 10, 500) if profile_query else maximum
+    c = conn()
+    try:
+        rows = c.execute(
+            "SELECT m.message_id,m.channel_id,m.channel_name,m.content,m.created "
+            "FROM server_messages_fts AS f "
+            "JOIN server_messages AS m ON m.id=f.rowid "
+            "WHERE server_messages_fts MATCH ? AND m.user_id=? AND m.guild_id=? "
+            "ORDER BY bm25(server_messages_fts),m.created DESC LIMIT ?",
+            (match_query, uid, gid, candidate_limit),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        if profile_query:
+            rows = c.execute(
+                "SELECT message_id,channel_id,channel_name,content,created "
+                "FROM server_messages WHERE user_id=? AND guild_id=? "
+                "ORDER BY created DESC LIMIT ?",
+                (uid, gid, candidate_limit),
+            ).fetchall()
+            ranked = [dict(row) for row in rows]
+            ranked.sort(
+                key=lambda row: (
+                    profile_search.claim_score(str(row["content"])),
+                    float(row["created"]),
+                ),
+                reverse=True,
+            )
+            results = [
+                row for row in ranked if profile_search.claim_score(str(row["content"])) > 0
+            ][:maximum]
+            return _with_message_context(c, gid, results)
+        matches: dict[str, dict] = {}
+        for term in terms:
+            fallback_rows = c.execute(
+                "SELECT message_id,channel_id,channel_name,content,created "
+                "FROM server_messages WHERE user_id=? AND guild_id=? "
+                "AND LOWER(content) LIKE ? ORDER BY created DESC LIMIT ?",
+                (uid, gid, f"%{term}%", maximum),
+            ).fetchall()
+            for row in fallback_rows:
+                matches[str(row["message_id"])] = dict(row)
+        return sorted(
+            matches.values(), key=lambda row: float(row["created"]), reverse=True
+        )[:maximum]
+    results = [dict(row) for row in rows]
+    if profile_query:
+        results.sort(
+            key=lambda row: (
+                profile_search.claim_score(str(row["content"])),
+                float(row["created"]),
+            ),
+            reverse=True,
+        )
+        results = [
+            row for row in results if profile_search.claim_score(str(row["content"])) > 0
+        ]
+        return _with_message_context(c, gid, results[:maximum])
+    return results
+
+
+def _with_message_context(
+    c: sqlite3.Connection, guild_id: str, rows: list[dict]
+) -> list[dict]:
+    """Attach the immediately preceding visible-scope message as claim context."""
+    for row in rows:
+        previous = c.execute(
+            "SELECT display_name,content FROM server_messages "
+            "WHERE guild_id=? AND channel_id=? AND created<? "
+            "ORDER BY created DESC,id DESC LIMIT 1",
+            (guild_id, row["channel_id"], row["created"]),
+        ).fetchone()
+        if previous is not None:
+            row["context_before"] = str(previous["content"] or "")[:300]
+            row["context_author"] = str(previous["display_name"] or "user")[:100]
+    return rows
 
 
 def _empty_user_intelligence(user_id: str) -> dict:

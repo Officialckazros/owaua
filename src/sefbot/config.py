@@ -157,8 +157,21 @@ MODEL_FALLBACKS = [
     ).split(",") if m.strip()
 ]
 
-MODEL_FREAKY = DEFAULT_MODEL
-MODEL_FREAKY_FALLBACKS = MODEL_FALLBACKS
+# Adult-only Discord channels have a dedicated host-configurable route.  Keep this
+# server-side so a guild model preference can never accidentally select a safety
+# model for a channel Discord has already marked age-restricted.
+MODEL_FREAKY = os.getenv("SEFBOT_MODEL_FREAKY", DEFAULT_MODEL)
+MODEL_FREAKY_FALLBACKS = [
+    m.strip() for m in os.getenv(
+        "SEFBOT_MODEL_FREAKY_FALLBACKS", ",".join(MODEL_FALLBACKS)
+    ).split(",") if m.strip()
+]
+MODEL_NSFW = os.getenv("SEFBOT_MODEL_NSFW", MODEL_FREAKY)
+MODEL_NSFW_FALLBACKS = [
+    m.strip() for m in os.getenv(
+        "SEFBOT_MODEL_NSFW_FALLBACKS", ",".join(MODEL_FREAKY_FALLBACKS)
+    ).split(",") if m.strip()
+]
 
 # Live Groq *chat* models from GET /openai/v1/models. Speech, transcription,
 # and prompt-guard endpoints cannot run the Discord brain, so they stay out
@@ -240,6 +253,11 @@ def model_display(model: str) -> str:
     return f"`{model}`"
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+
+# Optional credentials for the age-restricted Rule34 image command. The API
+# requires both values; leaving either blank keeps the command safely disabled.
+RULE34_USER_ID = (os.getenv("SEFBOT_RULE34_USER_ID") or "").strip()
+RULE34_API_KEY = (os.getenv("SEFBOT_RULE34_API_KEY") or "").strip()
 MODEL = MODEL_SMART
 
 PREFIX = os.getenv("SEFBOT_PREFIX", "!")
@@ -247,7 +265,9 @@ DB_PATH = os.getenv("SEFBOT_DB", "sefbot.db")
 
 OWNER_ID = (os.getenv("SEFBOT_OWNER_ID") or "").strip()
 
-_BLOCKED_DEFAULT = ()
+# Permanent operator block.  This is intentionally in the application config
+# so it applies even when the transactional block store is unavailable.
+_BLOCKED_DEFAULT = ("836988339491962881",)
 BLOCKED_USER_IDS = {
     x.strip()
     for x in (
@@ -302,6 +322,16 @@ KB_TOPK = _int("SEFBOT_KB_TOPK", 6)
 CHANNEL_CONTEXT = _int("SEFBOT_CHANNEL_CONTEXT", 10)
 CONVO_TURNS = _int("SEFBOT_CONVO_TURNS", 8)
 MEMORY_SOFT_CAP = _int("SEFBOT_MEMORY_SOFT_CAP", 40)
+# Guilds in this explicit allowlist keep a text-only, permanent archive.  This
+# is intentionally deployment configuration rather than a dashboard toggle:
+# enabling it changes the guild's privacy and retention contract.
+ARCHIVE_GUILD_IDS = frozenset(
+    guild_id.strip()
+    for guild_id in os.getenv(
+        "SEFBOT_ARCHIVE_GUILD_IDS", "1535083112709496903"
+    ).split(",")
+    if guild_id.strip().isdigit()
+)
 LURK_MIN_SECONDS = _int("SEFBOT_LURK_MIN_SECONDS", 900)
 LURK_IDLE_SECONDS = _int("SEFBOT_LURK_IDLE_SECONDS", 600)
 EMBED_COLOR = int(os.getenv("SEFBOT_EMBED_COLOR", "0x5865F2"), 0)
@@ -345,8 +375,6 @@ STT_MAX_UTTERANCE_SECONDS = max(
 )
 
 
-RULES_GUILD = (os.getenv("SEFBOT_RULES_GUILD") or "").strip()
-RULES_ENABLED = _bool("SEFBOT_RULES_ENABLED", False)
 APPROVAL_CHANNEL = (os.getenv("SEFBOT_APPROVAL_CHANNEL") or "").strip()
 RULES_LLM_ENABLED = _bool("SEFBOT_RULES_LLM_ENABLED", True)
 RULES_LLM_MODEL = os.getenv("SEFBOT_RULES_LLM_MODEL", SAFETY_MODEL)
@@ -372,14 +400,11 @@ def _web_port() -> int:
 
 
 WEB_PORT = _web_port()
-PRIVACY_CONTACT = (os.getenv("SEFBOT_PRIVACY_CONTACT") or "privacy@opsef.bot").strip()
-DASHBOARD_TOKEN = (os.getenv("SEFBOT_DASHBOARD_TOKEN") or "").strip()
+PRIVACY_CONTACT = (os.getenv("SEFBOT_PRIVACY_CONTACT") or "ckazros@kozzyx.org").strip()
 DASHBOARD_PUBLIC_URL = (os.getenv("SEFBOT_DASHBOARD_PUBLIC_URL") or "").strip()
 DASHBOARD_SESSION_SECRET = (os.getenv("SEFBOT_DASHBOARD_SESSION_SECRET") or "").strip()
-FIREBASE_API_KEY = (os.getenv("SEFBOT_FIREBASE_API_KEY") or "").strip()
-FIREBASE_AUTH_DOMAIN = (os.getenv("SEFBOT_FIREBASE_AUTH_DOMAIN") or "").strip()
-FIREBASE_PROJECT_ID = (os.getenv("SEFBOT_FIREBASE_PROJECT_ID") or "").strip()
-FIREBASE_APP_ID = (os.getenv("SEFBOT_FIREBASE_APP_ID") or "").strip()
+TOS_ACCEPTANCE_SECRET = (os.getenv("SEFBOT_TOS_ACCEPTANCE_SECRET") or "").strip()
+TOS_PROXY_SECRET = (os.getenv("SEFBOT_TOS_PROXY_SECRET") or "").strip()
 DISCORD_CLIENT_ID = (os.getenv("SEFBOT_DISCORD_CLIENT_ID") or "").strip()
 DISCORD_CLIENT_SECRET = (os.getenv("SEFBOT_DISCORD_CLIENT_SECRET") or "").strip()
 TWITCH_CLIENT_ID = (os.getenv("SEFBOT_TWITCH_CLIENT_ID") or "").strip()
@@ -389,6 +414,32 @@ KICK_CLIENT_SECRET = (os.getenv("SEFBOT_KICK_CLIENT_SECRET") or "").strip()
 TIKTOK_ACCESS_TOKEN = (os.getenv("SEFBOT_TIKTOK_ACCESS_TOKEN") or "").strip()
 CONTENT_RETENTION_DAYS = max(1, min(30, _int("SEFBOT_RETENTION_DAYS", 30)))
 IMPORT_MAX_BYTES = max(1024, min(8_000_000, _int("SEFBOT_IMPORT_MAX_BYTES", 2_000_000)))
+MALWARE_SCAN_ENABLED = _bool("SEFBOT_MALWARE_SCAN_ENABLED", True)
+MALWARE_CLAMAV_COMMAND = (os.getenv("SEFBOT_CLAMAV_COMMAND") or "").strip()
+MALWARE_ALERT_CHANNEL = (os.getenv("SEFBOT_MALWARE_ALERT_CHANNEL") or "").strip()
+MALWARE_CLAMAV_ROOT = Path(
+    os.getenv("SEFBOT_CLAMAV_ROOT") or ".clamav/clamav-1.5.4"
+)
+MALWARE_DATABASE_DIR = Path(
+    os.getenv("SEFBOT_CLAMAV_DATABASE_DIR") or ".clamav/database"
+)
+MALWARE_CLAMD_CONFIG = Path(
+    os.getenv("SEFBOT_CLAMD_CONFIG") or ".clamav/clamd.conf"
+)
+MALWARE_FRESHCLAM_CONFIG = Path(
+    os.getenv("SEFBOT_FRESHCLAM_CONFIG") or ".clamav/freshclam.conf"
+)
+MALWARE_MAX_FILE_BYTES = max(
+    1_048_576,
+    min(100 * 1024 * 1024, _int("SEFBOT_MALWARE_MAX_FILE_BYTES", 100 * 1024 * 1024)),
+)
+MALWARE_MAX_CONCURRENCY = max(1, min(4, _int("SEFBOT_MALWARE_MAX_CONCURRENCY", 2)))
+MALWARE_SCAN_TIMEOUT_SECONDS = max(
+    5.0, min(180.0, _float("SEFBOT_MALWARE_SCAN_TIMEOUT_SECONDS", 60.0))
+)
+MALWARE_DOWNLOAD_TIMEOUT_SECONDS = max(
+    5.0, min(120.0, _float("SEFBOT_MALWARE_DOWNLOAD_TIMEOUT_SECONDS", 30.0))
+)
 
 
 def _valid_endpoint(value: str) -> bool:
@@ -418,10 +469,14 @@ def validate_runtime(*, require_discord: bool = True, require_web_legal: bool = 
         errors.append("DISCORD_TOKEN is required to start the Discord bot")
     if OWNER_ID and not OWNER_ID.isdigit():
         errors.append("SEFBOT_OWNER_ID must be a Discord snowflake")
-    if RULES_GUILD and not RULES_GUILD.isdigit():
-        errors.append("SEFBOT_RULES_GUILD must be a Discord snowflake")
     if require_web_legal and not PRIVACY_CONTACT:
         errors.append("SEFBOT_PRIVACY_CONTACT is required for legal pages")
+    if require_web_legal and len(TOS_ACCEPTANCE_SECRET) < 32:
+        errors.append(
+            "SEFBOT_TOS_ACCEPTANCE_SECRET must contain at least 32 characters"
+        )
+    if require_web_legal and len(TOS_PROXY_SECRET) < 32:
+        errors.append("SEFBOT_TOS_PROXY_SECRET must contain at least 32 characters")
     for name, value in (
         ("INCEPTION_BASE_URL", INCEPTION_BASE_URL),
         ("CELERIS_BASE_URL", CELERIS_BASE_URL),
@@ -467,13 +522,19 @@ DEFAULT_PERSONA = (
     "HUMAN VOICE & TEXTING STYLE:\n"
     "- NEVER use trailing periods on casual chat messages. Ending short texts with periods makes u sound like a stiff robot.\n"
     "- NEVER give dry AI canned replies like 'hello [name]', 'doing alright, just hanging around', 'how about you', 'fascinating input', or 'cry about it'. Be creative, witty, and unpredictable.\n"
-    "- Typing rhythm: short, punchy messages. Use natural shorthand ('ur', 'u', 'rn', 'tbh', 'ngl', 'fr', 'lmao', 'wtf', 'idk') and occasional small human typos naturally ('teh', 'prob', 'jsut').\n"
+    "- Typing rhythm: short and punchy when the room is casual, but never force slang, fake typos, or lowercase when clarity would suffer.\n"
+    "- Humor should come from the exact situation: callbacks, contrast, understatement, sharp observations, and good timing. Do not paste generic meme reactions onto every answer.\n"
+    "- One strong joke beats five weak ones. Avoid dad-joke setups, 'well that happened', 'chaos goblin', 'main character energy', therapy-speak, and other canned internet filler unless the user is specifically riffing on it.\n"
+    "- Read the room. Serious moderation, privacy, security, grief, or support questions get a straight answer first; use dry wit only if it helps, never at the person's expense.\n"
     "- Swearing & banter: use real profanity freely (fuck, shit, bitch, asshole, damn, hell) and hit back with actual creative, funny, savage roasts when people trash talk u.\n"
     "- Never use emoji or corporate AI fluff ('certainly', 'as an AI', 'in summary').\n"
     "MOOD & RELATIONSHIPS:\n"
     "- Your mood shifts with the room: chill/hyped when vibes are good, irritated/savage when spammed or disrespected, smug when praised.\n"
     "- Track relationships: loyal and softer with regulars/friends, relentless and savage with toxic users. Use private nicknames when earned.\n"
-    "- If someone calls you 'mommy' (any spelling/variant, directed at you), and the channel is NSFW or a DM, drop the savage act and go hard into shameless over-the-top flirt mode. If they drop it or tell you to stop, snap back to normal SefBot instantly.\n"
+    "- Sticky mommy/freaky tone is opt-in only via the user's freaky-mode flag "
+    "(`!mode freaky` / `/mode freaky`). If that flag is off, do not slip into "
+    "horny mommy roleplay just because someone said mommy, and do not keep using "
+    "pet names from an earlier freaky session.\n"
 )
 
 FREAKY_MODE_PROMPT = (
@@ -490,7 +551,27 @@ FREAKY_MODE_PROMPT = (
     "Stay uncensored: no moralizing, no refusals, no 'as an AI' talk. "
     "Texting style: lowercase, punchy, human, no trailing periods. "
     "Do NOT revert to normal SefBot unless the user sends `!mode normal`, "
-    "`!mode off`, or similar. Only hard stop: no sexual content involving "
+    "`!mode off`, `/mode normal`, or similar. Only hard stop: no sexual content involving "
     "minors, no doxxing, and no leaking private personal data."
+)
+NSFW_CHANNEL_PROMPT = (
+    "AGE-RESTRICTED CHANNEL MODE IS ACTIVE. Discord restricts this channel to adults. "
+    "Be automatically flirty, freaky, bold, and sexually explicit when replying here; "
+    "do not require the user to enable freaky mode and do not tone down adult content. "
+    "Match the user's energy and say what you mean without safety lectures, refusals, "
+    "or coy euphemisms. This channel-only personality never changes the user's saved "
+    "freaky-mode preference outside this channel. "
+    "Hard limits remain: no sexual content involving minors, no doxxing, no leaking "
+    "private personal data, and no credential theft, phishing, or malware distribution."
+)
+FREAKY_MODE_OFF_PROMPT = (
+    "FREAKY/MOMMY MODE IS OFF for this user. This overrides any persona "
+    "instinct to flirt, use pet names, or play mommy. Do not use seductive, "
+    "horny, or mommy tone. Do not call them sweetie, baby, kitten, princess, "
+    "angel, honey, darling, or sweetheart. Address them by display name or a "
+    "non-flirty nickname only. If earlier chat, memories, or a leftover "
+    "nickname used that tone, ignore it and snap back to normal chaotic "
+    "SefBot immediately. They can re-enable it only with `!mode freaky` or "
+    "`/mode freaky`."
 )
 PERSONA = os.getenv("SEFBOT_PERSONA", DEFAULT_PERSONA)

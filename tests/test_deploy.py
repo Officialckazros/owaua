@@ -171,6 +171,10 @@ class DeploymentValidationTests(unittest.TestCase):
             (website / "wearegays.net" / "multi.html").write_text(
                 "wag", encoding="utf-8"
             )
+            (website / "wearegays.net" / "femsec").mkdir()
+            (website / "wearegays.net" / "femsec" / "index.html").write_text(
+                "files", encoding="utf-8"
+            )
             (website / "wearedevsstatus" / "index.html").write_text(
                 "status", encoding="utf-8"
             )
@@ -189,6 +193,10 @@ class DeploymentValidationTests(unittest.TestCase):
             )
             self.assertTrue((assembled / "wearegays" / "status" / "index.html").is_file())
             self.assertTrue((assembled / "kirmy" / "social" / "index.html").is_file())
+            self.assertEqual(
+                (assembled / "femsec" / "index.html").read_text(encoding="utf-8"),
+                "files",
+            )
             archive = Path(directory) / "sites-bundle.zip"
             deploy_script.build_sites_archive(assembled, archive)
             self.assertGreater(archive.stat().st_size, 0)

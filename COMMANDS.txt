@@ -43,6 +43,11 @@ Dashboard-enabled community commands (available only when their module is on):
 !giveaway create 1h | 2 | Prize
                          Start a timed giveaway; `end <message-id>` draws it.
 !ticket open <subject>   Open a private support ticket; `close`/`resolve` archives it.
+/ticketpanel <panel_id>  Confirm and publish a persistent intake-first ticket panel.
+/rolemenu <menu_id>      Confirm and publish a persistent select-role menu.
+/cases [query] [status]  Privately search moderation cases (Manage Server).
+/casecreate ...          Confirm and create a private moderation case.
+/appeal <case_id> ...    Appeal a moderation case that belongs to you.
 !form <slug>             Open a configured web form; member-only links arrive by DM.
 !coinflip / !dice [n]    Free utility games.
 !rps <choice>            Rock-paper-scissors.
@@ -54,6 +59,20 @@ Dashboard-enabled community commands (available only when their module is on):
 !github owner/repo       GitHub repository information.
 !iss                     Current ISS coordinates.
 !distance a,b,c,d        Great-circle distance between coordinates.
+!nsfw <character> [n]   Send 1-10 random Rule34 images. Server age-restricted
+                         channels only. Slash: `/nsfw character:... amount:...`.
+!booster count [@user]  Current/all-time boost and booster statistics.
+!booster help            Full booster roles/channels/gifts/reactions/manager guide.
+!booster role #hex name  Claim or update an eligible personal role; attachments set icon.
+!booster channel claim text|voice
+                         Claim a configured private booster channel.
+!booster reaction emoji  Set the reaction added when you are mentioned.
+!booster add @user [N]   Manager: add missed recorded boosts.
+!booster adjust @user +/-N
+                         Manager: correct Discord's partial-removal blind spot.
+!booster sync            Manager: import existing boosters and resync rewards.
+!boosterrole #hex [name] Short alias for personal-role claim/update.
+!boostperks               Show economy perks and personal/server boost totals.
 
 !teach <fact>            Teach a server fact (Manage Server); DMs teach yourself.
 
@@ -75,6 +94,8 @@ Dashboard-enabled community commands (available only when their module is on):
 !persona set <text>      Override persona for this server (manage server).
 !persona clear           Reset to default persona.
 !persona show            Dump full persona text.
+!swears [@user]          Show a member's server swear-jar total.
+!swearjar on|off         Redirect admins to confirmed `/config swearjar on|off`.
 
 !quote add <text>        Save a hall-of-shame line (@user tags them).
 !quote / !quote random   Random quote.
@@ -100,6 +121,7 @@ Dashboard-enabled community commands (available only when their module is on):
 !assistant <request>     ONE-SHOT helpful mode; Discord actions require Confirm.
 !assist <request>        Alias of !assistant.
 !assistant undo          Revert your latest reversible confirmed assistant action.
+                         A lone .txt attachment is read even without typed text.
 
 !language [name]         Set the language the bot replies to you in
                          (`!language hebrew`, `!language es`, `!language ja`).
@@ -127,7 +149,10 @@ ordinary mentions and DMs never run tools.
 !song                    Alias of !music. MP3 downloading was removed.
                          (also: slash `/music song:<name>`)
 
-!privacy / !tos          Link to Terms & Privacy + data control commands.
+!privacy / !tos          Privacy controls or required button-based web Terms acceptance.
+!tos reject              Revoke Terms acceptance and lock ordinary bot use.
+!tos review list         Owner-only list of web acceptances held for abuse review.
+!tos review allow <id>   Owner-only approval of one held web acceptance.
 !dmblock                 Opt out of bot-relayed DMs from other users.
 !dmunblock               Re-enable bot-relayed DMs.
 !mydm                    Show DM opt-out status.
@@ -163,10 +188,10 @@ block access <user_id>   Hard-block a user from ALL bot interaction
 block unblock <user_id>  Remove a live CLI block.
 block list               Show live-blocked user ids.
 
-tos break                List EVERY ToS auto-block + why, then pick who to
+tos break                Owner-only global list of EVERY ToS auto-block + why, then pick who to
                          unblock. Unblocked users get a bot DM that they can
                          use the bot again.
-tos break list           List ToS blocks only (no prompt).
+tos break list           Owner-only global ToS-block list (sent as a DM; huge lists attach a .txt file).
 tos break unblock <id>   Unblock one user + DM them access restored.
 tos break unblock all    Unblock all ToS blocks (confirm) + DM each.
                          Pass --no-dm to skip the notify.

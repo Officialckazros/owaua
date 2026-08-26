@@ -24,7 +24,7 @@ _NAME_OK = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
 
 
 async def create_command(
-    request_text: str, author: str, guild_id: str
+    request_text: str, author: str, guild_id: str, *, prefix: str | None = None
 ) -> Tuple[bool, str]:
     """Generate and store a new community command. Returns (ok, message)."""
     if config.is_blocked(author):
@@ -65,9 +65,10 @@ async def create_command(
     existed = db.get_command(name, guild_id) is not None
     db.add_command(name, desc, behavior, author, guild_id)
     verb = "Updated" if existed else "Created"
+    command_prefix = prefix or config.PREFIX
     return True, (
-        f"{verb} **{config.PREFIX}{name}** — {desc}\n"
-        f"Try it: `{config.PREFIX}{name} <your input>`"
+        f"{verb} **{command_prefix}{name}** — {desc}\n"
+        f"Try it: `{command_prefix}{name} <your input>`"
     )
 
 

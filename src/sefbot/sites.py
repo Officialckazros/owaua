@@ -1,4 +1,4 @@
-"""Host-based static serving for kozzyx.org, kirmy.org, and wearegays.net."""
+"""Host-based static serving for kozzyx.org, kirmy.org, wearegays.net, and femsec."""
 
 from __future__ import annotations
 
@@ -21,7 +21,36 @@ SITE_HOSTS: Final[Mapping[str, str]] = {
     "www.kirmy.org": "kirmy",
     "wearegays.net": "wearegays",
     "www.wearegays.net": "wearegays",
+    "femsec.wearegays.net": "femsec",
 }
+FEMSEC_ORIGIN: Final = "https://femsec.wearegays.net"
+_FEMSEC_LEAF_REDIRECTS: Final = frozenset(
+    {"/about.html", "/css/files.css", "/js/search.js"}
+)
+_FEMSEC_PREFIXES: Final = (
+    "/boxes",
+    "/logs",
+    "/book",
+    "/dep",
+    "/mail",
+    "/exhibits",
+    "/redacted",
+    "/fd302",
+    "/filings",
+    "/contacts",
+    "/modules",
+    "/commands",
+    "/calendar",
+    "/foia",
+    "/list",
+    "/incidents",
+    "/fin",
+    "/island",
+    "/pet",
+    "/empty",
+    "/press",
+    "/img",
+)
 BLOCKED_SUFFIXES: Final = frozenset(
     {
         ".bak",
@@ -199,6 +228,23 @@ def _redirect(location: str) -> web.StreamResponse:
     raise web.HTTPMovedPermanently(location=location)
 
 
+def femsec_offsite_location(path: str) -> str | None:
+    """Send apex wearegays.net dump URLs to the femsec subdomain."""
+    if path in {"/femsec", "/femsec/"}:
+        return f"{FEMSEC_ORIGIN}/"
+    if path.startswith("/femsec/"):
+        rest = path[7:]
+        if not rest.startswith("/"):
+            rest = f"/{rest}"
+        return f"{FEMSEC_ORIGIN}{rest}"
+    if path in _FEMSEC_LEAF_REDIRECTS:
+        return f"{FEMSEC_ORIGIN}{path}"
+    for prefix in _FEMSEC_PREFIXES:
+        if path == prefix or path.startswith(prefix + "/"):
+            return f"{FEMSEC_ORIGIN}{path}"
+    return None
+
+
 def _content_type(path: Path) -> str:
     extra = EXTRA_MIME_TYPES.get(path.suffix.lower())
     if extra:
@@ -231,6 +277,9 @@ async def serve_public_site(request: web.Request, sites_root: Path) -> web.Strea
     if request.method not in {"GET", "HEAD"}:
         raise web.HTTPNotFound()
     if site == "wearegays":
+        femsec_target = femsec_offsite_location(path)
+        if femsec_target:
+            return _redirect(femsec_target)
         target = WEAREGAYS_REDIRECTS.get(path)
         if target:
             return _redirect(target)

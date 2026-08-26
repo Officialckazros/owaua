@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 
-from sefbot import blocked, config, db, dm
+from sefbot import blocked, config, db, dm, tos
 
 
 class StatePersistenceTest(unittest.TestCase):
@@ -205,6 +205,13 @@ class StatePersistenceTest(unittest.TestCase):
             }
         )
         db.cli_active_touch("606", "session")
+        db.tos_challenge_create("606", "a" * 64, tos.TOS_VERSION, time.time() + 60)
+        db.tos_acceptance_set(
+            "606",
+            tos.TOS_VERSION,
+            status="accepted",
+            network_hash="b" * 64,
+        )
         db.record_assistant_action(
             actor_id="606",
             scope_id="guild:1",
@@ -221,12 +228,42 @@ class StatePersistenceTest(unittest.TestCase):
         self.assertEqual(len(exported["dynamic_blocks"]), 1)
         self.assertEqual(len(exported["dm_contacts"]), 1)
         self.assertEqual(len(exported["assistant_actions"]), 1)
+        self.assertEqual(exported["tos_acceptance"][0]["status"], "accepted")
         deleted = db.privacy_delete_user("606")
         self.assertEqual(deleted["dynamic_blocks"], 1)
         self.assertEqual(deleted["dm_contacts"], 1)
         self.assertEqual(deleted["cli_active_conversations"], 1)
         self.assertEqual(deleted["assistant_action_history"], 1)
+        self.assertEqual(deleted["tos_acceptance_challenges"], 1)
+        self.assertEqual(deleted["tos_acceptances"], 1)
         self.assertFalse(blocked.is_dynamically_blocked("606"))
+
+    def test_privacy_delete_minimizes_but_preserves_malware_security_block(self) -> None:
+        blocked.block_user(
+            "707",
+            reason="tos: malware attachment detected (Win.Trojan.Agent)",
+            category="malware",
+            offending_text="sha256:abcdef0123456789 length:64",
+            channel_id="123",
+            guild_id="456",
+            guild_name="private guild",
+            user_tag="private tag",
+            trigger_source="clamav_attachment",
+            block_source="tos",
+        )
+
+        deleted = db.privacy_delete_user("707")
+
+        self.assertEqual(deleted["dynamic_blocks"], 0)
+        self.assertTrue(blocked.is_dynamically_blocked("707"))
+        metadata = blocked.get_blocked_user("707")
+        self.assertIsNotNone(metadata)
+        assert metadata is not None
+        self.assertEqual(metadata["category"], "malware")
+        self.assertEqual(metadata["guild_id"], "")
+        self.assertEqual(metadata["guild_name"], "")
+        self.assertEqual(metadata["user_tag"], "")
+        self.assertEqual(metadata["history"], [])
 
     def test_assistant_action_history_is_scope_bound_and_consumable(self) -> None:
         first_id = db.record_assistant_action(

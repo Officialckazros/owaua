@@ -17,7 +17,7 @@ def _module(
     description: str,
     settings: dict,
     *,
-    default_enabled: bool = False,
+    default_enabled: bool = True,
     implementation: str = "core live",
 ) -> dict:
     return {
@@ -73,8 +73,39 @@ MODULES: Final[dict[str, dict]] = {
     "autoroles": _module("Autoroles & Ranks", "Community", "Join roles, delayed removal and self-assignable ranks.", {
         "join_roles": [], "ranks": [], "one_rank_only": False,
     }),
+    "boosters": _module("Booster Perks", "Engagement", "Boost history, greetings, personal roles and channels, rewards, reactions, counters and logs.", {
+        "tracking_enabled": True,
+        "greetings_enabled": False, "greet_channel_id": "", "greet_messages": [
+            "Thanks {user}! You now have {userboosts} recorded boosts and brought us to {count}."
+        ],
+        "greet_images": [], "greet_embed": True, "greet_author": "",
+        "greet_author_icon": "", "greet_title": "Thank you for boosting!",
+        "greet_footer": "", "greet_footer_icon": "", "greet_thumbnail": "",
+        "greet_image": "", "greet_color": "5865f2", "greet_addon": "", "greet_dm": False,
+        "greet_include_stats": True, "greet_reaction": "", "react_original": False,
+        "react_custom": False,
+        "automatic_role_enabled": False, "automatic_role_id": "", "stop_remove_role_id": "",
+        "personal_roles_enabled": True, "personal_role_min_boosts": 1,
+        "personal_role_base_role_id": "", "personal_role_allow_hoist": False,
+        "personal_role_allowed_colors": [], "personal_role_prefix": "",
+        "personal_role_suffix": "", "personal_role_banned_words": [],
+        "qualifying_role_ids": [], "revoke_role_ids": [], "delete_ineligible_personal_role": True,
+        "role_gifts_enabled": False, "role_gift_min_boosts": 1, "role_gift_slots": 1,
+        "boost_level_roles": [], "boost_age_roles": [],
+        "private_channels_enabled": False, "private_channel_category_id": "",
+        "private_channel_type": "text", "private_channel_min_boosts": 1,
+        "private_channel_friend_slots": 0, "private_channel_invite_min_boosts": 1,
+        "private_channel_allow_role_ids": [], "private_channel_deny_role_ids": [],
+        "private_channel_manager_access": True,
+        "mention_reactions_enabled": False, "mention_reaction_min_boosts": 1,
+        "emoji_restrictions_enabled": False, "emoji_restrictions": [],
+        "normal_emoji_role_ids": [], "animated_emoji_role_ids": [], "stat_channels": [],
+        "log_channel_id": "", "log_color": "5865f2",
+        "log_events": ["boost_add", "boost_remove", "role", "channel"],
+        "log_routes": {}, "manager_role_ids": [],
+    }),
     "custom_commands": _module("Custom Commands", "Community", "Custom responses, variables, routing, permissions and cooldowns.", {
-        "prefix": "!", "commands": [],
+        "commands": [],
     }, default_enabled=True, implementation="partial"),
     "economy": _module("Economy & Cards", "Engagement", "Coins, gems, streaks, cards, decks, fusion and battles.", {
         "daily_base": 100, "work_min": 20, "work_max": 80, "battle_stamina_max": 10,
@@ -108,11 +139,35 @@ MODULES: Final[dict[str, dict]] = {
     "moderation": _module("Moderation", "Safety", "Cases, warnings, timeouts, bans, notes, locks, purge and appeals.", {
         "moderator_role_ids": [], "protected_role_ids": [], "log_channel_id": "",
         "dm_actions": True, "appeal_url": "", "remove_roles_while_muted": False,
+        "appeals_enabled": True, "appeal_channel_id": "", "case_expiry_days": 30,
+        "member_notes_enabled": True, "evidence_links_enabled": True,
         "preserve_ban_messages": True, "autopunish": [], "custom_responses": {},
-    }, default_enabled=True, implementation="partial"),
+    }, default_enabled=True, implementation="core live"),
+    "incident_center": _module("Staff Incident Center", "Safety", "Unified assignable queue for malware, automod, rules, assistant actions, cases and tickets.", {
+        "staff_role_ids": [], "escalation_role_ids": [], "default_assignee_id": "",
+        "notify_channel_id": "", "critical_ping_role_id": "",
+        "sources": ["malware", "automod", "rules", "assistant", "moderation", "ticket", "feed"],
+        "sla_hours": {"critical": 1, "high": 4, "medium": 24, "low": 72},
+    }, default_enabled=True, implementation="core live"),
+    "malware_scanner": _module(
+        "Malware Scanner",
+        "Safety",
+        "Locally scan non-media attachments, remove malware and block confirmed senders.",
+        {
+            "block_users": True,
+            "exclude_verified_media": True,
+            "fail_closed": True,
+            "log_channel_id": "",
+            "max_file_mb": 100,
+            "notify_channel": True,
+        },
+        default_enabled=True,
+        implementation="core live",
+    ),
     "reaction_roles": _module("Reaction Roles", "Community", "Reaction, button and dropdown role menus.", {
-        "menus": [],
-    }, implementation="partial"),
+        "menus": [], "persistent_components": True, "remove_on_unselect": True,
+        "require_rules_ack": False, "maximum_roles_per_menu": 25,
+    }, implementation="core live"),
     "reddit": _module("Reddit", "Feeds", "Post new subreddit submissions with flair and NSFW filters.", {
         "subscriptions": [], "poll_minutes": 5,
     }),
@@ -131,8 +186,11 @@ MODULES: Final[dict[str, dict]] = {
     }),
     "tickets": _module("Tickets", "Support", "Private ticket panels, intake fields, routing and transcripts.", {
         "category_id": "", "transcript_channel_id": "", "staff_role_ids": [],
-        "panels": [], "max_open_per_member": 5, "channel_name": "ticket-{user.name}",
-    }, implementation="partial"),
+        "panels": [], "intake_fields": [], "routing_rules": [], "sla_hours": 24,
+        "reminder_hours": 12, "auto_close_hours": 0, "require_intake": False,
+        "allow_member_close": True, "assignment_mode": "manual",
+        "max_open_per_member": 5, "channel_name": "ticket-{user.name}",
+    }, implementation="core live"),
     "tiktok": _module("TikTok", "Feeds", "New TikTok notifications and previews.", {
         "subscriptions": [], "poll_minutes": 5,
     }),
@@ -148,18 +206,155 @@ MODULES: Final[dict[str, dict]] = {
     "welcome": _module("Welcome", "Community", "Channel, DM and image welcomes with variables.", {
         "channel_id": "", "message": "Welcome {user.mention}!", "dm_message": "",
         "embed": {}, "image_enabled": False, "image_text": "Welcome {user.name}",
-    }, implementation="partial"),
+        "journey_enabled": False, "rules_channel_id": "", "rules_ack_role_id": "",
+        "role_choices": [], "intro_questions": [], "starter_channel_ids": [],
+        "help_followup_hours": 24, "help_message": "Need a hand getting started?",
+    }, implementation="core live"),
+    "scheduled_digests": _module("Scheduled Digests", "Automation", "Explicit daily or weekly staff summaries with bounded aggregate sections.", {
+        "enabled_cadences": [], "daily_channel_id": "", "weekly_channel_id": "",
+        "visibility": "staff", "sections": ["growth", "moderation", "engagement", "highlights", "tickets", "feeds", "scheduled_messages"],
+    }, default_enabled=True, implementation="core live"),
+    "server_health": _module("Server Health Advisor", "Safety", "Explanatory weekly configuration and workflow recommendations that never auto-change settings.", {
+        "weekly_enabled": False, "delivery_channel_id": "", "staff_only": True,
+        "check_permissions": True, "check_logging": True, "check_tickets": True,
+        "check_automod_noise": True, "check_booster_drift": True,
+    }, default_enabled=True, implementation="core live"),
+    "analytics_exports": _module("Analytics & Retention", "Administration", "Aggregate CSV exports and per-module retention transparency without message content or profiles.", {
+        "aggregate_csv_enabled": True, "include_growth": True, "include_moderation": True,
+        "include_engagement": True, "include_feeds": True,
+    }, default_enabled=True, implementation="core live"),
     "server_management": _module("Server Management", "Administration", "Role, nickname, member, invite and emoji utilities.", {
         "manager_role_ids": [], "ignored_user_ids": [], "ignored_role_ids": [],
         "ignored_channel_ids": [],
     }, default_enabled=True, implementation="partial"),
     "bot_controls": _module("Bot Controls", "Administration", "Command/module switches, permissions, prefix and diagnostics.", {
-        "prefix": "!", "disabled_commands": [], "allowed_role_ids": [],
+        "prefix": "", "disabled_commands": [], "allowed_role_ids": [],
         "ignored_role_ids": [], "allowed_channel_ids": [], "ignored_channel_ids": [],
     }, default_enabled=True, implementation="partial"),
     "localization": _module("Localization", "Administration", "Bot and dashboard language preferences.", {
         "bot_language": "en", "dashboard_language": "en",
     }, default_enabled=True),
+}
+
+
+# Core settings predate the module catalog and are read directly by the AI,
+# privacy, rules, moderation and voice runtimes.  Keeping their public editor
+# metadata and validation here gives the dashboard one complete, allow-listed
+# surface instead of accepting arbitrary guild_settings keys.
+SERVER_SETTINGS: Final[dict[str, dict]] = {
+    "persona": {
+        "label": "AI persona",
+        "description": "Optional server-specific system persona. Empty uses the host default.",
+        "kind": "textarea",
+        "default": "",
+        "max_length": 4000,
+    },
+    "opinion_profile": {
+        "label": "Bot opinion addendum",
+        "description": "Optional server-specific tastes or standards that refine SefBot's default viewpoints.",
+        "kind": "textarea",
+        "default": "",
+        "max_length": 2000,
+    },
+    "model": {
+        "label": "Chat model",
+        "description": "Model used for normal server conversations. Default follows the host configuration.",
+        "kind": "model",
+        "default": "",
+        "max_length": 160,
+    },
+    "language": {
+        "label": "Default reply language",
+        "description": "Language name or code used when a member has no personal preference.",
+        "kind": "text",
+        "default": "",
+        "max_length": 80,
+    },
+    "swear_level": {
+        "label": "Persona language level",
+        "description": "Controls profanity in AI responses.",
+        "kind": "choice",
+        "default": "full",
+        "choices": ["clean", "medium", "full"],
+    },
+    "swear_jar_enabled": {
+        "label": "Swear jar",
+        "description": (
+            "Count profanity per member in this server and reply with their updated total. "
+            "Only the numeric total is stored."
+        ),
+        "kind": "boolean",
+        "default": False,
+    },
+    "smart_always": {
+        "label": "Prefer smart routing",
+        "description": "Use the smart model tier for normal chat; disable to prefer the fast tier.",
+        "kind": "boolean",
+        "default": True,
+    },
+    "allowed_channels": {
+        "label": "Allowed command channels",
+        "description": "Empty allows commands in every channel.",
+        "kind": "channel_ids",
+        "default": [],
+        "maximum": 100,
+    },
+    "lurk": {
+        "label": "Lurk mode",
+        "description": "Allow an occasional AI message after the configured channel becomes quiet.",
+        "kind": "boolean",
+        "default": False,
+    },
+    "lurk_channel": {
+        "label": "Lurk channel",
+        "description": "Channel used by lurk mode. Lurk also requires history storage.",
+        "kind": "channel_id",
+        "default": "",
+    },
+    "history_enabled": {
+        "label": "Server history storage",
+        "description": "Opt in to bounded server conversation history for members who also consent.",
+        "kind": "boolean",
+        "default": False,
+    },
+    "retention_days": {
+        "label": "Content retention days",
+        "description": "Maximum age for this server's stored messages, conversations, feedback and audit data.",
+        "kind": "integer",
+        "default": 30,
+        "minimum": 1,
+        "maximum": 30,
+    },
+    "moderation_enabled": {
+        "label": "AI moderation review",
+        "description": "Send model-classified messages to a private staff review channel. Host safety credentials are also required.",
+        "kind": "boolean",
+        "default": False,
+    },
+    "modlog_channel": {
+        "label": "Private moderation log",
+        "description": "Must be a private text channel writable by SefBot.",
+        "kind": "channel_id",
+        "default": "",
+    },
+    "rules_enabled": {
+        "label": "Rules review",
+        "description": "Enable deterministic server-rule detection and confirmation-based enforcement.",
+        "kind": "boolean",
+        "default": False,
+    },
+    "approval_channel": {
+        "label": "Private approval channel",
+        "description": "Private staff channel for rule and action confirmations.",
+        "kind": "channel_id",
+        "default": "",
+    },
+    "voice_transcription_enabled": {
+        "label": "Voice transcription",
+        "description": "Allow consent-gated speech transcription in this server. Host STT support is also required.",
+        "kind": "boolean",
+        "default": False,
+    },
 }
 
 
@@ -177,6 +372,59 @@ def public_catalog() -> list[dict]:
     ]
 
 
+def default_server_settings() -> dict:
+    return {key: deepcopy(definition["default"]) for key, definition in SERVER_SETTINGS.items()}
+
+
+def public_server_settings() -> list[dict]:
+    return [
+        {"key": key, **deepcopy(definition)}
+        for key, definition in SERVER_SETTINGS.items()
+    ]
+
+
+def merge_server_settings(value: object) -> dict:
+    """Return the complete, bounded set of dashboard-editable guild settings."""
+    clean = default_server_settings()
+    if not isinstance(value, dict):
+        return clean
+    if len(value) > len(SERVER_SETTINGS) + 20:
+        raise ValueError("too many server settings")
+    for key, candidate in value.items():
+        definition = SERVER_SETTINGS.get(key)
+        if definition is None:
+            continue
+        kind = definition["kind"]
+        if kind == "boolean" and isinstance(candidate, bool):
+            clean[key] = candidate
+        elif kind == "integer" and isinstance(candidate, int) and not isinstance(candidate, bool):
+            clean[key] = max(
+                int(definition.get("minimum", -1_000_000)),
+                min(int(definition.get("maximum", 1_000_000)), candidate),
+            )
+        elif kind in {"text", "textarea", "model"} and isinstance(candidate, str):
+            text = candidate.strip()
+            if kind == "model" and text and not all(
+                char.isalnum() or char in "._:/-" for char in text
+            ):
+                continue
+            clean[key] = text[: int(definition.get("max_length", 4000))]
+        elif kind == "choice" and isinstance(candidate, str):
+            if candidate in definition.get("choices", []):
+                clean[key] = candidate
+        elif kind == "channel_id" and isinstance(candidate, str):
+            text = candidate.strip()
+            if not text or (text.isdigit() and len(text) <= 24):
+                clean[key] = text
+        elif kind == "channel_ids" and isinstance(candidate, list):
+            maximum = int(definition.get("maximum", 100))
+            clean[key] = list(dict.fromkeys(
+                str(item) for item in candidate
+                if str(item).isdigit() and len(str(item)) <= 24
+            ))[:maximum]
+    return clean
+
+
 def merge_settings(name: str, value: object) -> dict:
     """Return a bounded, type-compatible settings object for a module."""
     defaults = default_settings(name)
@@ -191,13 +439,27 @@ def merge_settings(name: str, value: object) -> dict:
         if isinstance(expected, bool) and isinstance(candidate, bool):
             defaults[key] = candidate
         elif isinstance(expected, str) and isinstance(candidate, str):
-            defaults[key] = candidate[:4000]
+            text = candidate.strip()
+            if key == "prefix":
+                if not text or (len(text) <= 8 and not any(char.isspace() for char in text)):
+                    defaults[key] = text
+            elif key.endswith("_id"):
+                if not text or (text.isdigit() and len(text) <= 24):
+                    defaults[key] = text
+            else:
+                defaults[key] = candidate[:4000]
         elif isinstance(expected, int) and not isinstance(expected, bool) and isinstance(candidate, int):
             defaults[key] = max(-1_000_000, min(1_000_000, candidate))
         elif isinstance(expected, float) and isinstance(candidate, (int, float)):
             defaults[key] = max(0.0, min(1000.0, float(candidate)))
         elif isinstance(expected, list) and isinstance(candidate, list):
-            defaults[key] = candidate[:500]
+            if key.endswith("_ids"):
+                defaults[key] = list(dict.fromkeys(
+                    str(item) for item in candidate
+                    if str(item).isdigit() and len(str(item)) <= 24
+                ))[:500]
+            else:
+                defaults[key] = candidate[:500]
         elif isinstance(expected, dict) and isinstance(candidate, dict):
             defaults[key] = dict(list(candidate.items())[:500])
     return defaults

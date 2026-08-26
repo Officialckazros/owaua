@@ -18,12 +18,13 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Deque, Dict, List, Optional, Tuple
 
 import discord
 
-from sefbot import config, db, embeds
+from sefbot import config, db, embeds, staffops
 from sefbot.scope import Scope
 from sefbot.services.llm_client import LLMError, coerce_bool
 from sefbot.services.llm_client import llm as _llm
@@ -160,6 +161,37 @@ _pending_by_key: Dict[Tuple[int, int, str], float] = {}
 _recent_msgs: Dict[Tuple[int, int], Deque[Tuple[str, float]]] = {}
 _SPAM_MAXLEN = 20
 
+_CONFUSABLES = str.maketrans({
+    "а": "a", "е": "e", "і": "i", "о": "o", "р": "p", "с": "c",
+    "х": "x", "у": "y", "Α": "a", "Β": "b", "Ε": "e", "Ι": "i",
+    "Κ": "k", "Μ": "m", "Ν": "n", "Ο": "o", "Ρ": "p", "Τ": "t",
+    "Χ": "x", "Υ": "y", "０": "0", "１": "1", "３": "3", "４": "4",
+    "５": "5", "７": "7", "８": "8", "９": "9",
+})
+_LEET = str.maketrans({"0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "8": "b", "@": "a", "$": "s"})
+
+
+def normalize_for_rules(content: str) -> str:
+    """Expose common Unicode, separator, leetspeak, and repeat bypasses.
+
+    The normalized value is used only for deterministic candidate detection;
+    staff still approve every resulting action and see the original evidence.
+    """
+    value = unicodedata.normalize("NFKC", str(content or "")).translate(_CONFUSABLES)
+    value = "".join(
+        char for char in value
+        if unicodedata.category(char) not in {"Cf", "Cc", "Cs"}
+    ).casefold().translate(_LEET)
+    value = re.sub(r"([^\W\d_])\1{2,}", r"\1\1", value)
+    value = re.sub(r"[^a-z0-9]+", " ", value).strip()
+    # Collapse deliberately spaced-out words such as "k y s" or "p e d o".
+    value = re.sub(
+        r"(?<![a-z])(?:[a-z]\s+){2,}[a-z](?![a-z])",
+        lambda match: match.group(0).replace(" ", ""),
+        value,
+    )
+    return " ".join(value.split())[:4_000]
+
 
 @dataclass
 class PendingAction:
@@ -188,19 +220,22 @@ class PendingAction:
 
 def match_rule(content: str) -> Optional[Rule]:
     """Return the first rule whose patterns match the message text."""
-    low = (content or "").lower()
+    low = normalize_for_rules(content)
     if not low:
         return None
+    collapsed = re.sub(r"([a-z])\1+", r"\1", low)
     for rule in RULES:
         for pat in rule.patterns:
-            if re.search(pat, low):
+            if re.search(pat, low) or (collapsed != low and re.search(pat, collapsed)):
                 return rule
     return None
 
 
 def name_violation(author) -> Optional[Rule]:
     """Check a user's name/display name for instant-ban slurs."""
-    name = f"{getattr(author, 'name', '')} {getattr(author, 'display_name', '')}".lower()
+    name = normalize_for_rules(
+        f"{getattr(author, 'name', '')} {getattr(author, 'display_name', '')}"
+    )
     for pat in _BY_ID["name_slur"].patterns:
         if re.search(pat, name):
             return _BY_ID["name_slur"]
@@ -755,15 +790,18 @@ async def _llm_confirm(message: discord.Message, rule: Rule) -> bool:
 async def check_message(client, message: discord.Message) -> None:
     """Fire-and-forget entry point from on_message."""
     try:
-        if not getattr(config, "RULES_ENABLED", False):
-            return
         if message.guild is None or not _enabled_for_guild(message.guild.id):
             return
         if message.author.bot:
             return
         if not message.content or len(message.content) < 3:
             return
-        if message.content.lstrip().startswith(config.PREFIX):
+        prefixes = {config.PREFIX}
+        controls = db.module_config(Scope.guild(message.guild.id).key, "bot_controls")
+        configured_prefix = str(controls["settings"].get("prefix") or "").strip()
+        if controls["enabled"] and configured_prefix:
+            prefixes.add(configured_prefix)
+        if any(message.content.lstrip().startswith(prefix) for prefix in prefixes if prefix):
             return
         approval_channel = await _fresh_approval_channel(message.guild)
         if approval_channel is not None and message.channel.id == approval_channel.id:
@@ -844,6 +882,15 @@ async def check_message(client, message: discord.Message) -> None:
                 embed=embed,
                 view=view,
                 allowed_mentions=discord.AllowedMentions.none(),
+            )
+            staffops.record_incident(
+                Scope.guild(message.guild.id).key,
+                source="rules",
+                summary=f"Rule review: {rule.name}",
+                severity="high" if category in {"ban", "kick"} else "medium",
+                subject_id=str(uid),
+                reference=f"channel:{message.channel.id}/message:{message.id}",
+                metadata={"rule_id": rule.id, "proposed_action": category},
             )
         except discord.HTTPException:
             log.warning("rules: couldn't post approval")

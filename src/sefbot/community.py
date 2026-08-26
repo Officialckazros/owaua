@@ -25,7 +25,7 @@ import aiohttp
 import discord
 
 from sefbot import config as bot_config
-from sefbot import db, embeds
+from sefbot import db, embeds, staffops
 from sefbot.scope import Scope
 
 _URL_RE: Final = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
@@ -47,6 +47,379 @@ _HTTP_HOSTS: Final = frozenset(
     }
 )
 _token_cache: dict[str, tuple[str, float]] = {}
+_persistent_views_registered = False
+
+
+def _component_slug(value: object, fallback: str) -> str:
+    clean = re.sub(r"[^a-z0-9_-]", "", str(value or "").lower())[:30]
+    return clean or fallback
+
+
+def _bot_role_allows(guild: discord.Guild, role: discord.Role) -> bool:
+    me = guild.me
+    return bool(me and role < me.top_role and role.id != guild.default_role.id)
+
+
+async def _create_ticket_from_interaction(
+    interaction: discord.Interaction,
+    panel: dict,
+    answers: list[dict],
+) -> None:
+    guild = interaction.guild
+    member = interaction.user
+    if guild is None or not isinstance(member, discord.Member):
+        await interaction.followup.send("Tickets can only be opened inside the server.", ephemeral=True)
+        return
+    config = _cfg(guild, "tickets")
+    if not config["enabled"]:
+        await interaction.followup.send("Tickets are currently disabled.", ephemeral=True)
+        return
+    settings = config["settings"]
+    scope = _scope(guild)
+    existing = [item for item in db.community_records("ticket", scope, user_id=str(member.id), status=None, limit=5_000) if item["status"] in {"active", "open", "waiting"}]
+    maximum = max(1, min(100, int(settings.get("max_open_per_member") or 5)))
+    if len(existing) >= maximum:
+        await interaction.followup.send(f"You already have {len(existing)} open ticket(s).", ephemeral=True)
+        return
+    answer_map = {str(item.get("id")): str(item.get("value") or "") for item in answers}
+    route: dict = {}
+    routing_rules = panel.get("routing_rules") if isinstance(panel.get("routing_rules"), list) else settings.get("routing_rules", [])
+    for candidate in routing_rules[:100]:
+        if not isinstance(candidate, dict):
+            continue
+        field_value = answer_map.get(str(candidate.get("field_id") or ""), "").casefold()
+        expected = str(candidate.get("value") or "").casefold()
+        operator = str(candidate.get("operator") or "contains")
+        matched = bool(expected) and (
+            (operator == "equals" and field_value == expected)
+            or (operator == "starts_with" and field_value.startswith(expected))
+            or (operator == "contains" and expected in field_value)
+        )
+        if matched:
+            route = candidate
+            break
+    category_id = str(route.get("category_id") or panel.get("category_id") or settings.get("category_id") or "")
+    category = guild.get_channel(int(category_id)) if category_id.isdigit() else None
+    staff_ids = route.get("staff_role_ids") if isinstance(route.get("staff_role_ids"), list) else (panel.get("staff_role_ids") if isinstance(panel.get("staff_role_ids"), list) else settings.get("staff_role_ids", []))
+    assigned_to = str(route.get("assigned_to") or panel.get("assigned_to") or "")
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+        guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+    }
+    for role_id in staff_ids[:20]:
+        role = guild.get_role(int(role_id)) if str(role_id).isdigit() else None
+        if role:
+            overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+    assigned_member = guild.get_member(int(assigned_to)) if assigned_to.isdigit() else None
+    if assigned_member is not None:
+        overwrites[assigned_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+    safe_name = re.sub(r"[^a-z0-9-]", "-", member.name.lower())[:40]
+    try:
+        channel = await guild.create_text_channel(
+            f"ticket-{safe_name}-{secrets.randbelow(10000):04d}",
+            category=category if isinstance(category, discord.CategoryChannel) else None,
+            overwrites=overwrites,
+            reason="Persistent ticket panel opened",
+        )
+    except (discord.Forbidden, discord.HTTPException):
+        await interaction.followup.send("I could not create the private ticket channel.", ephemeral=True)
+        return
+    subject = next((str(item.get("value") or "") for item in answers if item.get("value")), str(panel.get("title") or "Support request"))[:500]
+    sla_hours = max(1, min(720, int(panel.get("sla_hours") or settings.get("sla_hours") or 24)))
+    panel_id = _component_slug(panel.get("id"), "default")
+    record_id = db.community_record_create(
+        "ticket",
+        scope,
+        {
+            "channel_id": str(channel.id),
+            "subject": subject,
+            "panel_id": panel_id,
+            "answers": answers[:5],
+            "assigned_to": assigned_to,
+            "sla_due": time.time() + sla_hours * 3600,
+            "staff_role_ids": [str(value) for value in staff_ids[:20]],
+            "route_id": str(route.get("id") or "")[:40],
+            "sla_alerted": False,
+            "last_member_activity": time.time(),
+        },
+        user_id=str(member.id),
+        record_key=str(channel.id),
+        due=time.time() + sla_hours * 3600,
+    )
+    staff_mentions = " ".join(f"<@&{role_id}>" for role_id in staff_ids[:20] if str(role_id).isdigit())
+    if assigned_to.isdigit():
+        staff_mentions = (staff_mentions + f" <@{assigned_to}>").strip()
+    answer_text = "\n".join(f"**{item['label']}:** {item['value']}" for item in answers if item.get("value"))
+    await _safe_send(
+        channel,
+        f"Ticket #{record_id} opened by {member.mention}.\n{answer_text or '**Subject:** ' + subject}\n{staff_mentions}",
+    )
+    await interaction.followup.send(f"Your private ticket is ready: {channel.mention}", ephemeral=True)
+
+
+class TicketIntakeModal(discord.ui.Modal):
+    def __init__(self, panel: dict) -> None:
+        super().__init__(title=str(panel.get("title") or "Open support ticket")[:45], timeout=300)
+        self.panel = panel
+        fields = panel.get("intake_fields") if isinstance(panel.get("intake_fields"), list) else []
+        if not fields:
+            fields = [{"id": "subject", "label": "How can staff help?", "required": True, "style": "paragraph"}]
+        self.fields: list[tuple[dict, discord.ui.TextInput]] = []
+        for index, field in enumerate(fields[:5]):
+            if not isinstance(field, dict):
+                continue
+            label = str(field.get("label") or f"Question {index + 1}")[:45]
+            text_input = discord.ui.TextInput(
+                label=label,
+                custom_id=_component_slug(field.get("id"), f"q{index}"),
+                required=field.get("required", True) is not False,
+                max_length=max(1, min(1000, int(field.get("max_length") or 500))),
+                style=discord.TextStyle.paragraph if str(field.get("style")) == "paragraph" else discord.TextStyle.short,
+                placeholder=str(field.get("placeholder") or "")[:100] or None,
+            )
+            self.add_item(text_input)
+            self.fields.append((field, text_input))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        answers = [
+            {"id": _component_slug(field.get("id"), "question"), "label": str(field.get("label") or item.label)[:100], "value": str(item.value)[:1000]}
+            for field, item in self.fields
+        ]
+        await _create_ticket_from_interaction(interaction, self.panel, answers)
+
+
+class PersistentTicketPanel(discord.ui.View):
+    def __init__(self, guild_id: int, panel: dict) -> None:
+        super().__init__(timeout=None)
+        self.guild_id = int(guild_id)
+        self.panel = panel
+        slug = _component_slug(panel.get("id"), "default")
+        button = discord.ui.Button(
+            label=str(panel.get("button_label") or panel.get("title") or "Open ticket")[:80],
+            style=discord.ButtonStyle.primary,
+            custom_id=f"sefbot:ticket:{self.guild_id}:{slug}",
+        )
+        button.callback = self.open_ticket
+        self.add_item(button)
+
+    async def open_ticket(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id != self.guild_id:
+            await interaction.response.send_message("This ticket panel belongs to another server.", ephemeral=True)
+            return
+        await interaction.response.send_modal(TicketIntakeModal(self.panel))
+
+
+class PersistentRoleMenu(discord.ui.View):
+    def __init__(self, guild_id: int, menu: dict) -> None:
+        super().__init__(timeout=None)
+        self.guild_id = int(guild_id)
+        self.menu = menu
+        options = []
+        for item in menu.get("items", [])[:25]:
+            if not isinstance(item, dict) or not str(item.get("role_id") or "").isdigit():
+                continue
+            options.append(discord.SelectOption(
+                label=str(item.get("label") or item.get("name") or item["role_id"])[:100],
+                value=str(item["role_id"]),
+                description=str(item.get("description") or "")[:100] or None,
+                emoji=str(item.get("emoji")) if item.get("emoji") else None,
+            ))
+        if options:
+            select = discord.ui.Select(
+                placeholder=str(menu.get("placeholder") or "Choose your roles")[:150],
+                custom_id=f"sefbot:roles:{self.guild_id}:{_component_slug(menu.get('id'), 'default')}",
+                min_values=0,
+                max_values=max(1, min(len(options), int(menu.get("max_values") or len(options)))),
+                options=options,
+            )
+            select.callback = self.choose_roles
+            self.add_item(select)
+
+    async def choose_roles(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id != self.guild_id or not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message("This role menu is not available here.", ephemeral=True)
+            return
+        config = _cfg(interaction.guild, "reaction_roles")
+        welcome = _cfg(interaction.guild, "welcome")
+        if config["settings"].get("require_rules_ack"):
+            ack_id = str(welcome["settings"].get("rules_ack_role_id") or "")
+            if ack_id.isdigit() and all(role.id != int(ack_id) for role in interaction.user.roles):
+                await interaction.response.send_message("Acknowledge the server rules before choosing roles.", ephemeral=True)
+                return
+        selected = {str(value) for value in getattr(self.children[0], "values", [])}
+        allowed = {str(item.get("role_id")) for item in self.menu.get("items", []) if isinstance(item, dict)}
+        changed = 0
+        for role_id in allowed:
+            role = interaction.guild.get_role(int(role_id)) if role_id.isdigit() else None
+            if role is None or not _bot_role_allows(interaction.guild, role):
+                continue
+            has_role = role in interaction.user.roles
+            try:
+                if role_id in selected and not has_role:
+                    await interaction.user.add_roles(role, reason="Persistent self-role menu")
+                    changed += 1
+                elif role_id not in selected and has_role and config["settings"].get("remove_on_unselect", True):
+                    await interaction.user.remove_roles(role, reason="Persistent self-role menu")
+                    changed += 1
+            except (discord.Forbidden, discord.HTTPException):
+                continue
+        await interaction.response.send_message(f"Updated {changed} role selection(s).", ephemeral=True)
+
+
+class OnboardingIntroModal(discord.ui.Modal):
+    def __init__(self, guild_id: int, settings: dict) -> None:
+        super().__init__(title="Introduce yourself", timeout=300)
+        self.guild_id = int(guild_id)
+        self.inputs: list[tuple[dict, discord.ui.TextInput]] = []
+        questions = settings.get("intro_questions") if isinstance(settings.get("intro_questions"), list) else []
+        for index, question in enumerate(questions[:5]):
+            if not isinstance(question, dict):
+                continue
+            item = discord.ui.TextInput(
+                label=str(question.get("label") or f"Question {index + 1}")[:45],
+                custom_id=_component_slug(question.get("id"), f"intro{index}"),
+                required=question.get("required", False) is True,
+                max_length=max(1, min(500, int(question.get("max_length") or 200))),
+                style=discord.TextStyle.paragraph if question.get("paragraph") else discord.TextStyle.short,
+            )
+            self.add_item(item)
+            self.inputs.append((question, item))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id != self.guild_id:
+            await interaction.response.send_message("This intro form belongs to another server.", ephemeral=True)
+            return
+        answers = [
+            {"id": _component_slug(question.get("id"), "intro"), "label": str(question.get("label") or item.label)[:100], "value": str(item.value)[:500]}
+            for question, item in self.inputs
+        ]
+        db.community_record_create(
+            "onboarding_intro", f"guild:{self.guild_id}", {"answers": answers},
+            user_id=str(interaction.user.id), record_key=str(interaction.user.id),
+        )
+        await interaction.response.send_message("Intro saved privately for the onboarding workflow.", ephemeral=True)
+
+
+class PersistentOnboardingView(discord.ui.View):
+    def __init__(self, guild_id: int, settings: dict) -> None:
+        super().__init__(timeout=None)
+        self.guild_id = int(guild_id)
+        self.settings = settings
+        ack = discord.ui.Button(label="Acknowledge rules", style=discord.ButtonStyle.success, custom_id=f"sefbot:onboard:{guild_id}:ack")
+        ack.callback = self.acknowledge
+        self.add_item(ack)
+        choices = settings.get("role_choices") if isinstance(settings.get("role_choices"), list) else []
+        options = [
+            discord.SelectOption(
+                label=str(item.get("label") or item.get("role_id"))[:100],
+                value=str(item.get("role_id")),
+                description=str(item.get("description") or "")[:100] or None,
+            )
+            for item in choices[:25]
+            if isinstance(item, dict) and str(item.get("role_id") or "").isdigit()
+        ]
+        if options:
+            select = discord.ui.Select(
+                placeholder="Choose optional starter roles",
+                custom_id=f"sefbot:onboard:{guild_id}:roles",
+                min_values=0,
+                max_values=len(options),
+                options=options,
+            )
+            select.callback = self.choose_roles
+            self.add_item(select)
+        if isinstance(settings.get("intro_questions"), list) and settings.get("intro_questions"):
+            intro = discord.ui.Button(label="Answer intro questions", style=discord.ButtonStyle.secondary, custom_id=f"sefbot:onboard:{guild_id}:intro")
+            intro.callback = self.intro
+            self.add_item(intro)
+
+    async def acknowledge(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id != self.guild_id or not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message("Open this onboarding step inside the server.", ephemeral=True)
+            return
+        role_id = str(self.settings.get("rules_ack_role_id") or "")
+        role = interaction.guild.get_role(int(role_id)) if role_id.isdigit() else None
+        if role is None or not _bot_role_allows(interaction.guild, role):
+            await interaction.response.send_message("The acknowledgement role is not configured safely.", ephemeral=True)
+            return
+        try:
+            await interaction.user.add_roles(role, reason="Rules acknowledged through onboarding")
+        except (discord.Forbidden, discord.HTTPException):
+            await interaction.response.send_message("I could not assign the acknowledgement role.", ephemeral=True)
+            return
+        db.community_record_create("onboarding_ack", _scope(interaction.guild), {"role_id": role_id}, user_id=str(interaction.user.id), record_key=str(interaction.user.id))
+        starters = [f"<#{value}>" for value in self.settings.get("starter_channel_ids", [])[:10] if str(value).isdigit()]
+        await interaction.response.send_message("Rules acknowledged." + (" Start here: " + " · ".join(starters) if starters else ""), ephemeral=True)
+
+    async def choose_roles(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id != self.guild_id or not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message("Open this onboarding step inside the server.", ephemeral=True)
+            return
+        ack_id = str(self.settings.get("rules_ack_role_id") or "")
+        if ack_id.isdigit() and all(role.id != int(ack_id) for role in interaction.user.roles):
+            await interaction.response.send_message("Acknowledge the rules before choosing starter roles.", ephemeral=True)
+            return
+        selected_control = next((item for item in self.children if isinstance(item, discord.ui.Select)), None)
+        selected = {str(value) for value in getattr(selected_control, "values", [])}
+        allowed = {str(item.get("role_id")) for item in self.settings.get("role_choices", []) if isinstance(item, dict)}
+        changed = 0
+        for role_id in allowed:
+            role = interaction.guild.get_role(int(role_id)) if role_id.isdigit() else None
+            if role is None or not _bot_role_allows(interaction.guild, role):
+                continue
+            try:
+                if role_id in selected and role not in interaction.user.roles:
+                    await interaction.user.add_roles(role, reason="Onboarding role choice")
+                    changed += 1
+                elif role_id not in selected and role in interaction.user.roles:
+                    await interaction.user.remove_roles(role, reason="Onboarding role choice removed")
+                    changed += 1
+            except (discord.Forbidden, discord.HTTPException):
+                continue
+        await interaction.response.send_message(f"Updated {changed} starter role(s).", ephemeral=True)
+
+    async def intro(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id != self.guild_id:
+            await interaction.response.send_message("Open this onboarding step inside the server.", ephemeral=True)
+            return
+        await interaction.response.send_modal(OnboardingIntroModal(self.guild_id, self.settings))
+
+
+def register_persistent_views(client: discord.Client) -> int:
+    """Register configured component custom IDs once per process restart."""
+    global _persistent_views_registered
+    if _persistent_views_registered:
+        return 0
+    count = 0
+    for guild in list(client.guilds):
+        tickets = _cfg(guild, "tickets")
+        if tickets["enabled"]:
+            for panel in tickets["settings"].get("panels", [])[:100]:
+                if not isinstance(panel, dict):
+                    continue
+                view = PersistentTicketPanel(guild.id, panel)
+                if view.children:
+                    message_id = str(panel.get("message_id") or "")
+                    client.add_view(view, message_id=int(message_id) if message_id.isdigit() else None)
+                    count += 1
+        reaction = _cfg(guild, "reaction_roles")
+        if reaction["enabled"]:
+            for menu in reaction["settings"].get("menus", [])[:100]:
+                if not isinstance(menu, dict):
+                    continue
+                view = PersistentRoleMenu(guild.id, menu)
+                if view.children:
+                    message_id = str(menu.get("message_id") or "")
+                    client.add_view(view, message_id=int(message_id) if message_id.isdigit() else None)
+                    count += 1
+        welcome = _cfg(guild, "welcome")
+        if welcome["enabled"] and welcome["settings"].get("journey_enabled"):
+            client.add_view(PersistentOnboardingView(guild.id, welcome["settings"]))
+            count += 1
+    _persistent_views_registered = True
+    return count
 _CARDS: Final = (
     {"name": "Cipher Fox", "atk": 18, "def": 12, "skill": "Packet Feint", "faction": "Neon", "lore": "A trickster born between two encrypted frames."},
     {"name": "Iron Warden", "atk": 11, "def": 21, "skill": "Hard Lock", "faction": "Bastion", "lore": "It never opens the same port twice."},
@@ -485,6 +858,7 @@ async def handle_message(message: discord.Message) -> bool:
 
 async def member_join(member: discord.Member) -> None:
     guild = member.guild
+    db.log_interaction("member_join", str(member.id), _scope(guild))
     autoban = _cfg(guild, "autoban")
     if autoban["enabled"]:
         settings = autoban["settings"]
@@ -530,6 +904,27 @@ async def member_join(member: discord.Member) -> None:
         target = _channel(guild, settings.get("channel_id"))
         if target:
             await _safe_send(target, _render(settings.get("message"), member=member, guild=guild, channel=target))
+            if settings.get("journey_enabled"):
+                rules_channel = str(settings.get("rules_channel_id") or "")
+                journey_text = (
+                    f"{member.mention}, start by reading "
+                    + (f"<#{rules_channel}>" if rules_channel.isdigit() else "the server rules")
+                    + ", then acknowledge them below. Role choices and intro prompts stay opt-in."
+                )
+                await target.send(
+                    journey_text,
+                    view=PersistentOnboardingView(guild.id, settings),
+                    allowed_mentions=discord.AllowedMentions(users=True),
+                )
+                followup_hours = max(1, min(720, int(settings.get("help_followup_hours") or 24)))
+                db.community_record_create(
+                    "onboarding_followup",
+                    _scope(guild),
+                    {"message": str(settings.get("help_message") or "Need a hand getting started?")[:500]},
+                    user_id=str(member.id),
+                    record_key=str(member.id),
+                    due=time.time() + followup_hours * 3600,
+                )
         dm_message = _render(settings.get("dm_message"), member=member, guild=guild)
         if dm_message:
             await _safe_send(member, dm_message)
@@ -542,6 +937,7 @@ async def member_join(member: discord.Member) -> None:
 
 
 async def member_remove(member: discord.Member) -> None:
+    db.log_interaction("member_leave", str(member.id), _scope(member.guild))
     announce = _cfg(member.guild, "announcements")
     if announce["enabled"]:
         target = _channel(member.guild, announce["settings"].get("channel_id"))
@@ -1364,6 +1760,35 @@ async def scheduler_tick(client: discord.Client) -> None:
         scope = _scope(guild)
         await _poll_public_feeds(guild, scope, timestamp)
         await _poll_social_feeds(guild, scope, timestamp)
+        for item in db.community_records("onboarding_followup", scope, due_before=timestamp, limit=500):
+            member = guild.get_member(int(item["user_id"])) if str(item.get("user_id", "")).isdigit() else None
+            if member:
+                await _safe_send(member, str(item["data"].get("message") or "Need a hand getting started?"))
+            db.community_record_update(item["id"], status="delivered" if member else "member_left")
+        for ticket in db.community_records("ticket", scope, due_before=timestamp, limit=500):
+            data = ticket["data"]
+            if data.get("sla_alerted"):
+                continue
+            channel = _channel(guild, data.get("channel_id"))
+            if channel:
+                await _safe_send(
+                    channel,
+                    f"Ticket #{ticket['id']} reached its configured first-response SLA. Staff assignment: "
+                    f"{('<@' + str(data.get('assigned_to')) + '>') if str(data.get('assigned_to') or '').isdigit() else 'unassigned'}.",
+                )
+            staffops.record_incident(
+                scope,
+                source="ticket",
+                summary=f"Ticket #{ticket['id']} reached its first-response SLA",
+                severity="high",
+                subject_id=str(ticket.get("user_id") or "") or None,
+                reference=f"channel:{data.get('channel_id', '')}",
+                assigned_to=str(data.get("assigned_to") or "") or None,
+                metadata={"ticket_id": ticket["id"], "panel_id": str(data.get("panel_id") or "")},
+            )
+            db.community_record_update(
+                ticket["id"], data={**data, "sla_alerted": True}, status="waiting"
+            )
         for item in db.community_records("reminder", scope, due_before=timestamp, limit=500):
             user = guild.get_member(int(item["user_id"])) if str(item.get("user_id", "")).isdigit() else None
             channel = _channel(guild, item["data"].get("channel_id"))

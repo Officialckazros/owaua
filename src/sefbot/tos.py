@@ -3,7 +3,8 @@
 Canonical page:
   https://kozzyx.org/sefbot/terms
 
-Users must `!tos accept` (current version) before normal bot use.
+Users must open a short-lived Discord-bound link, read the public page, and
+accept the current version there before normal bot use.
 Clear ToS violations warn first; after TOS_STRIKE_LIMIT strikes the user is
 hard-blocked via blocked.py.
 """
@@ -11,19 +12,28 @@ from __future__ import annotations
 
 import collections
 import hashlib
+import hmac
+import ipaddress
 import re
+import secrets
 import threading
 import time
 from typing import Optional, Tuple
+from urllib.parse import quote
+
+import discord
 
 from sefbot import config, db
 from sefbot.legal import LEGAL_VERSION, PRIVACY_URL, TERMS_URL
 
 TOS_VERSION = LEGAL_VERSION
 TOS_URL = TERMS_URL
+TOS_ACCEPT_URL = f"{TERMS_URL}/accept"
 
 TOS_STRIKE_LIMIT = 3
 _LEAK_STRIKE_LIMIT = 3
+_ACCEPTANCE_CHALLENGE_SECONDS = 15 * 60
+_NETWORK_RETENTION_SECONDS = 30 * 86_400
 _RATE_WINDOW_SEC = 20.0
 _RATE_MAX = 8
 _rate_buckets: dict[str, collections.deque[float]] = {}
@@ -87,6 +97,104 @@ def _uid(user_id) -> str:
     return str(user_id or "").strip()
 
 
+def issue_acceptance_url(user_id) -> str:
+    """Issue one opaque, single-use, short-lived web acceptance capability."""
+    uid = _uid(user_id)
+    if not uid.isdigit() or len(uid) > 24:
+        raise ValueError("invalid Discord user id")
+    if len(config.TOS_ACCEPTANCE_SECRET) < 32:
+        raise RuntimeError("web ToS acceptance is not configured")
+    token = secrets.token_urlsafe(32)
+    digest = hmac.new(
+        config.TOS_ACCEPTANCE_SECRET.encode("utf-8"),
+        token.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    db.tos_challenge_create(
+        uid,
+        digest,
+        TOS_VERSION,
+        time.time() + _ACCEPTANCE_CHALLENGE_SECONDS,
+    )
+    return f"{TOS_ACCEPT_URL}?token={quote(token, safe='')}"
+
+
+def consume_acceptance_challenge(token: str) -> str | None:
+    raw = str(token or "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{40,80}", raw):
+        return None
+    if len(config.TOS_ACCEPTANCE_SECRET) < 32:
+        return None
+    digest = hmac.new(
+        config.TOS_ACCEPTANCE_SECRET.encode("utf-8"),
+        raw.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    return db.tos_challenge_consume(digest, TOS_VERSION)
+
+
+def network_fingerprint(address: str) -> str:
+    """Return a keyed, non-reversible network token; never persist the IP."""
+    if len(config.TOS_ACCEPTANCE_SECRET) < 32:
+        raise RuntimeError("web ToS acceptance is not configured")
+    parsed = ipaddress.ip_address(str(address or "").strip())
+    if isinstance(parsed, ipaddress.IPv6Address):
+        normalized = f"v6:{ipaddress.ip_network(f'{parsed}/64', strict=False)}"
+    else:
+        normalized = f"v4:{parsed.compressed}"
+    key = hmac.new(
+        config.TOS_ACCEPTANCE_SECRET.encode("utf-8"),
+        b"opsef-tos-network-v1",
+        hashlib.sha256,
+    ).digest()
+    return hmac.new(key, normalized.encode("ascii"), hashlib.sha256).hexdigest()
+
+
+def record_web_acceptance(user_id: str, client_address: str) -> str:
+    """Apply the disclosed acceptance/risk decision without storing a raw IP."""
+    uid = _uid(user_id)
+    if not uid.isdigit() or config.is_blocked(uid):
+        return "blocked"
+    try:
+        fingerprint = network_fingerprint(client_address)
+    except (ValueError, RuntimeError):
+        return "unavailable"
+
+    network_cutoff = time.time() - _NETWORK_RETENTION_SECONDS
+    blocked_match = db.tos_acceptance_network_has_dynamic_block(
+        fingerprint,
+        since=network_cutoff,
+        exclude_user_id=uid,
+    )
+    if not blocked_match:
+        # Static ids and emergency-only fallback blocks are not represented in
+        # dynamic_blocks, so retain the bounded application-level check too.
+        recent_users = db.tos_acceptance_network_users(
+            fingerprint,
+            since=network_cutoff,
+        )
+        blocked_match = any(
+            other != uid and config.is_blocked(other) for other in recent_users
+        )
+    needs_review = blocked_match
+    status = "review" if needs_review else "accepted"
+    db.tos_acceptance_set(
+        uid,
+        TOS_VERSION,
+        status=status,
+        network_hash=fingerprint,
+        risk_code="blocked_network_match" if needs_review else "",
+    )
+    if needs_review:
+        db.user_flag_set(uid, "tos_accepted", "")
+        db.user_flag_set(uid, "tos_review_pending", "1")
+        return status
+    db.user_flag_set(uid, "tos_review_pending", "")
+    db.user_flag_set(uid, "tos_accepted", TOS_VERSION)
+    db.user_flag_set(uid, "tos_accepted_at", str(time.time()))
+    return status
+
+
 def has_accepted(user_id) -> bool:
     """True if user accepted the current ToS version."""
     uid = _uid(user_id)
@@ -94,19 +202,39 @@ def has_accepted(user_id) -> bool:
         return False
     if config.is_bot_owner(uid):
         return True
-    return (db.user_flag_get(uid, "tos_accepted") or "") == TOS_VERSION
+    record = db.tos_acceptance_get(uid)
+    return bool(
+        (db.user_flag_get(uid, "tos_accepted") or "") == TOS_VERSION
+        and record is not None
+        and record.get("version") == TOS_VERSION
+        and record.get("status") == "accepted"
+    )
 
 
 def accept(user_id) -> None:
     uid = _uid(user_id)
+    db.tos_acceptance_set(uid, TOS_VERSION, status="accepted")
     db.user_flag_set(uid, "tos_accepted", TOS_VERSION)
     db.user_flag_set(uid, "tos_accepted_at", str(time.time()))
+    db.user_flag_set(uid, "tos_review_pending", "")
 
 
 def reject(user_id) -> None:
     uid = _uid(user_id)
+    db.tos_acceptance_set(uid, TOS_VERSION, status="rejected")
     db.user_flag_set(uid, "tos_accepted", "")
     db.user_flag_set(uid, "tos_rejected_at", str(time.time()))
+    db.user_flag_set(uid, "tos_review_pending", "")
+
+
+def allow_review(user_id) -> bool:
+    uid = _uid(user_id)
+    if not uid.isdigit() or not db.tos_acceptance_allow(uid, TOS_VERSION):
+        return False
+    db.user_flag_set(uid, "tos_accepted", TOS_VERSION)
+    db.user_flag_set(uid, "tos_accepted_at", str(time.time()))
+    db.user_flag_set(uid, "tos_review_pending", "")
+    return True
 
 
 def status_line(user_id) -> str:
@@ -118,17 +246,107 @@ def status_line(user_id) -> str:
         except (TypeError, ValueError):
             when_s = "unknown date"
         return f"accepted **v{TOS_VERSION}** ({when_s})"
+    record = db.tos_acceptance_get(_uid(user_id))
+    if record and record.get("version") == TOS_VERSION and record.get("status") == "review":
+        return "**submitted for review** — ordinary commands remain locked"
     return f"**not accepted** — required version **v{TOS_VERSION}**"
 
 
 def need_accept_message(prefix: str = "!") -> str:
     return (
         f"**Terms of Service required**\n"
-        f"Read: {TOS_URL}\n"
+        f"Use the button below to read and accept: {TOS_URL}\n"
         f"Privacy: {PRIVACY_URL}\n\n"
-        f"If you agree, run `{prefix}tos accept`.\n"
+        f"After accepting on the website, return to Discord and press "
+        f"**I've accepted — check**, or retry your command.\n"
         f"No chat or other commands until you accept **v{TOS_VERSION}**."
     )
+
+
+class AcceptanceView(discord.ui.View):
+    """Short-lived web link plus invoker-bound acceptance controls.
+
+    The web URL is deliberately not a Discord link button.  Link buttons do
+    not produce interactions, so anybody who can see the message could open
+    the bearer URL.  A regular button lets ``interaction_check`` enforce the
+    Discord user binding before the URL is disclosed.
+    """
+
+    def __init__(self, user_id: int | str) -> None:
+        super().__init__(timeout=float(_ACCEPTANCE_CHALLENGE_SECONDS))
+        self.user_id = int(user_id)
+        self.acceptance_url = issue_acceptance_url(self.user_id)
+        for child in self.children:
+            if getattr(child, "custom_id", "") == "tos:read-placeholder":
+                child.custom_id = f"tos:read:{self.user_id}"
+            elif getattr(child, "label", "") == "I've accepted — check":
+                child.custom_id = f"tos:check:{self.user_id}"
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "this acceptance link belongs to someone else. Run `/tos` for your own link.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _send_acceptance_url(self, interaction: discord.Interaction) -> None:
+        """Reveal the bearer URL only after the view's user check succeeds."""
+        await interaction.response.send_message(
+            f"[Open the Terms acceptance page]({self.acceptance_url})",
+            ephemeral=True,
+        )
+
+    @discord.ui.button(
+        label="Read and accept the Terms",
+        style=discord.ButtonStyle.primary,
+        custom_id="tos:read-placeholder",
+    )
+    async def read_terms(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ) -> None:
+        # The explicit owner check also keeps direct callback invocation from
+        # bypassing the view guard.
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "this acceptance link belongs to someone else. Run `/tos` for your own link.",
+                ephemeral=True,
+            )
+            return
+        await self._send_acceptance_url(interaction)
+
+    @discord.ui.button(
+        label="I've accepted — check",
+        style=discord.ButtonStyle.success,
+    )
+    async def check_acceptance(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ) -> None:
+        if has_accepted(self.user_id):
+            for child in self.children:
+                child.disabled = True
+            await interaction.response.edit_message(
+                embed=discord.Embed(
+                    title="terms accepted",
+                    description=(
+                        f"ToS **v{TOS_VERSION}** is accepted. You can use OpSef now."
+                    ),
+                    color=0x2B2D31,
+                ),
+                view=self,
+            )
+            self.stop()
+            return
+        record = db.tos_acceptance_get(str(self.user_id))
+        if record and record.get("status") == "review":
+            message = (
+                "your acceptance needs a manual abuse-prevention review. "
+                f"Contact {config.PRIVACY_CONTACT}; ordinary commands stay locked for now."
+            )
+        else:
+            message = "acceptance is not complete yet. Finish the website form, then check again."
+        await interaction.response.send_message(message, ephemeral=True)
 
 
 def command_allowed_without_tos(cmd_name: str) -> bool:

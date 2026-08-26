@@ -83,6 +83,15 @@ _EXACT_CHANNEL_TARGET_ACTIONS = frozenset(
         "purge_messages",
     }
 )
+_CURRENT_CHANNEL_DEFAULT_ACTIONS = frozenset(
+    {
+        "purge_messages",
+        "set_slowmode",
+        "set_channel_topic",
+        "react_message",
+        "deny_media_perms",
+    }
+)
 
 _STATUS_KINDS = {
     "playing": discord.ActivityType.playing,
@@ -137,6 +146,15 @@ _TYPE_ALIASES = {
     "react": "react_message",
     "react_message": "react_message",
     "add_reaction": "react_message",
+    "slowmode": "set_slowmode",
+    "remove_slowmode": "set_slowmode",
+    "disable_slowmode": "set_slowmode",
+    "channel_topic": "set_channel_topic",
+    "set_topic": "set_channel_topic",
+    "server_name": "set_server_name",
+    "rename_server": "set_server_name",
+    "status": "set_status",
+    "deny_media": "deny_media_perms",
 }
 
 _ACTION_REQUEST_RE = re.compile(
@@ -154,6 +172,28 @@ _UNDO_REQUEST_RE = re.compile(
     r"the\s+(?:last|previous)\s+(?:action|change)|the\s+change))?[.!?]*\s*$"
     r"|^\s*(?:please\s+)?(?:change|put)\s+(?:it|that)\s+back[.!?]*\s*$"
 )
+_PLAN_REQUEST_RE = re.compile(
+    r"(?is)(?:\bplan\b|\bpreview\b|\bhow\s+would\s+you\b|"
+    r"\bclean\s+up\s+(?:this|the)\s+channel\b|"
+    r"\bset\s+up\s+(?:an?\s+)?(?:onboarding|ticket|moderation|automod)\b)"
+)
+_ACTION_REQUEST_START_RE = re.compile(
+    r"(?is)^\s*(?:(?:please\s+)?(?:can|could|would|will)\s+you\s+|"
+    r"(?:please\s+)?(?:i\s+(?:want|need|would\s+like)\s+(?:you\s+)?to\s+)|"
+    r"(?:please\s+)?(?:go\s+ahead\s+and\s+)?)(?:"
+    r"rename|nick(?:name)?|kick|ban|mute|timeout|unmute|untimeout|purge|clear|"
+    r"give|assign|add|remove|take|create|delete|dm|message|react|set|change|"
+    r"update|deny|enable|disable|turn)\b"
+)
+_TERSE_SLOWMODE_REQUEST_RE = re.compile(
+    r"(?is)^\s*slowmode\s+(?:off|on|remove|disable|enable|stop|reset|\d)"
+)
+_USER_MENTION_RE = re.compile(r"<@!?(\d{15,22})>")
+_ROLE_MENTION_RE = re.compile(r"<@&(\d{15,22})>")
+_CHANNEL_MENTION_RE = re.compile(r"<#(\d{15,22})>")
+_DURATION_RE = re.compile(
+    r"(?i)(\d{1,6})\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)?\b"
+)
 
 
 def assistant_proposals(raw_actions: object) -> List[dict]:
@@ -163,17 +203,288 @@ def assistant_proposals(raw_actions: object) -> List[dict]:
     tool calls.  Treat that model output as untrusted and never let one reply
     smuggle multiple mutations into a single confirmation.
     """
-    if not isinstance(raw_actions, list) or len(raw_actions) != 1:
+    # Some otherwise-capable models emit the one proposal as an object instead
+    # of wrapping it in the contract's array.  Accepting that shape does not
+    # weaken the one-action boundary; it merely normalizes an equivalent form.
+    if isinstance(raw_actions, dict):
+        proposal = raw_actions
+    elif isinstance(raw_actions, list) and len(raw_actions) == 1:
+        proposal = raw_actions[0]
+    else:
         return []
-    proposal = raw_actions[0]
     if not isinstance(proposal, dict) or action_type(proposal) is None:
         return []
     return [proposal]
 
 
+def bind_assistant_channel_scope(proposal: dict, user_text: str) -> Optional[dict]:
+    """Bind omitted channel targets to the live confirmation channel.
+
+    Models occasionally copy a visible user or guild id into the optional
+    ``channel`` field.  For actions documented to default to the current
+    channel, trust a target only when the user supplied that exact channel id
+    or mention.  Otherwise omit it so confirmation-time context is authoritative.
+    """
+    canonical = action_type(proposal)
+    if canonical not in _CURRENT_CHANNEL_DEFAULT_ACTIONS:
+        return dict(proposal)
+
+    text = str(user_text or "")
+    requested_ids = set(_CHANNEL_MENTION_RE.findall(text))
+    requested_ids.update(
+        re.findall(r"(?<![<@&!])\b(\d{15,22})\b", text)
+    )
+    scoped = dict(proposal)
+    if not requested_ids:
+        scoped.pop("channel", None)
+        return scoped
+
+    proposed_id = _channel_id(scoped.get("channel"))
+    if proposed_id is None or str(proposed_id) not in requested_ids:
+        return None
+    scoped["channel"] = str(proposed_id)
+    return scoped
+
+
 def looks_like_action_request(text: str) -> bool:
-    """Conservatively identify imperative Discord-action requests."""
-    return bool(_ACTION_REQUEST_RE.search(str(text or "").strip()))
+    """Conservatively identify imperative Discord-action requests.
+
+    Merely discussing an action (for example, ``how does slowmode work?``) must
+    not replace a useful answer with an action-resolution error.
+    """
+    value = str(text or "").strip()
+    if not _ACTION_REQUEST_RE.search(value):
+        return False
+    return bool(
+        _ACTION_REQUEST_START_RE.search(value)
+        or _TERSE_SLOWMODE_REQUEST_RE.search(value)
+    )
+
+
+def looks_like_plan_request(text: str) -> bool:
+    """Recognize broad staff requests that need a non-mutating preview first."""
+    return bool(_PLAN_REQUEST_RE.search(str(text or "")))
+
+
+def assistant_plan(raw_plan: object, user_text: str = "") -> List[dict]:
+    """Validate a model-authored preview without executing any step."""
+    if not isinstance(raw_plan, list) or not 1 <= len(raw_plan) <= 10:
+        return []
+    output: List[dict] = []
+    for index, raw in enumerate(raw_plan, 1):
+        if not isinstance(raw, dict):
+            return []
+        title = " ".join(str(raw.get("title") or f"Step {index}").split())[:120]
+        explanation = " ".join(str(raw.get("explanation") or "").split())[:500]
+        permission = " ".join(str(raw.get("permission") or "").split())[:120]
+        mutation = bool(raw.get("mutation"))
+        action = raw.get("action")
+        proposal = None
+        if action not in (None, {}, []):
+            proposals = assistant_proposals(action)
+            if len(proposals) != 1:
+                return []
+            proposal = bind_assistant_channel_scope(proposals[0], user_text)
+            if proposal is None:
+                return []
+            mutation = is_state_changing(proposal)
+            required = _PERMS.get(action_type(proposal) or "")
+            if required:
+                permission = required
+        if mutation and proposal is None:
+            return []
+        output.append({
+            "step": index,
+            "title": title,
+            "explanation": explanation,
+            "permission": permission or "none",
+            "mutation": mutation,
+            "action": proposal,
+        })
+    return output
+
+
+def render_assistant_plan(plan: List[dict]) -> str:
+    lines = [
+        "Plan preview — nothing has changed. Each mutation gets its own permission check and Confirm button:",
+    ]
+    for step in plan:
+        suffix = f"permission: `{step['permission']}`"
+        suffix += "; separate confirmation required" if step.get("mutation") else "; review-only"
+        detail = f" — {step['explanation']}" if step.get("explanation") else ""
+        lines.append(f"{step['step']}. **{step['title']}**{detail} ({suffix})")
+    lines.append("Ask me to execute one specific step when you are ready; I will preview that single mutation again.")
+    return "\n".join(lines)[:3_900]
+
+
+def _duration_seconds(match: re.Match) -> int:
+    amount = int(match.group(1))
+    unit = str(match.group(2) or "s").lower()
+    if unit.startswith(("m", "min")):
+        amount *= 60
+    elif unit.startswith(("h", "hr")):
+        amount *= 3600
+    return max(0, min(_MAX_SLOWMODE, amount))
+
+
+def infer_assistant_proposal(text: str) -> Optional[dict]:
+    """Recover a small set of unambiguous proposals from plain user text.
+
+    This is a resilience fallback for malformed/missing model ``actions``.  It
+    deliberately covers only requests whose parameters can be read exactly;
+    the returned action still goes through Confirm and all live permission and
+    hierarchy checks before anything changes.
+    """
+    value = " ".join(str(text or "").strip().split())
+    if not value or not looks_like_action_request(value):
+        return None
+    lowered = value.lower()
+    channel_match = _CHANNEL_MENTION_RE.search(value)
+    channel = channel_match.group(1) if channel_match else None
+
+    if "slowmode" in lowered:
+        proposal = {"type": "set_slowmode"}
+        if channel:
+            proposal["channel"] = channel
+        if re.search(r"\b(?:off|remove|disable|stop|reset)\b", lowered):
+            proposal["seconds"] = 0
+            return proposal
+        tail = value[lowered.find("slowmode") + len("slowmode"):]
+        duration = _DURATION_RE.search(tail)
+        if duration:
+            proposal["seconds"] = _duration_seconds(duration)
+            return proposal
+        return None
+
+    purge = re.search(
+        r"(?i)\b(?:purge|clear|delete)\s+(?:the\s+)?(?:last\s+)?(\d{1,3})"
+        r"(?:\s+messages?)?\b",
+        value,
+    )
+    if purge and "channel" not in lowered:
+        proposal = {"type": "purge_messages", "count": min(100, int(purge.group(1)))}
+        if channel:
+            proposal["channel"] = channel
+        return proposal
+
+    user_match = _USER_MENTION_RE.search(value)
+    user = user_match.group(1) if user_match else None
+    role_match = _ROLE_MENTION_RE.search(value)
+    role = role_match.group(1) if role_match else None
+
+    if user and role:
+        if re.search(r"(?i)\b(?:give|assign|add)\b", value):
+            return {"type": "assign_role", "target_user": user, "role": role}
+        if re.search(r"(?i)\b(?:remove|take)\b", value):
+            return {"type": "remove_role", "target_user": user, "role": role}
+
+    if user:
+        if re.search(r"(?i)\b(?:unmute|untimeout|remove\s+(?:the\s+)?timeout)\b", value):
+            return {"type": "remove_timeout", "target_user": user}
+        if re.search(r"(?i)\bkick\b", value):
+            return {"type": "kick_user", "target_user": user}
+        if re.search(r"(?i)\bban\b", value):
+            return {"type": "ban_user", "target_user": user}
+
+    if role and re.search(r"(?i)\bdelete\b.{0,40}\brole\b|\bdelete\s*<@&", value):
+        return {"type": "delete_role", "role": role}
+    if channel and re.search(r"(?i)\bdelete\b.{0,40}\bchannel\b|\bdelete\s*<#", value):
+        return {"type": "delete_channel", "channel": channel}
+
+    topic = re.search(
+        r"(?is)\b(?:set|change|update)\s+(?:the\s+)?(?:channel\s+)?topic\s+"
+        r"(?:to\s+)?(.+)$",
+        value,
+    )
+    if topic:
+        proposal = {"type": "set_channel_topic", "topic": topic.group(1).strip()[:1024]}
+        if channel:
+            proposal["channel"] = channel
+        return proposal
+
+    server_name = re.search(
+        r"(?is)\b(?:set|change|rename)\s+(?:the\s+)?server(?:\s+name)?\s+"
+        r"(?:to\s+)?(.+)$",
+        value,
+    )
+    if server_name:
+        name = server_name.group(1).strip().strip("'\"")[:100]
+        if name:
+            return {"type": "set_server_name", "name": name}
+    return None
+
+
+def assistant_resolution_message(text: str, model_response: str = "") -> str:
+    """Keep a useful model clarification or return action-specific guidance."""
+    response = str(model_response or "").strip()
+    if response.endswith("?") and len(response) <= 500:
+        return response
+    lowered = str(text or "").lower()
+    if "slowmode" in lowered:
+        return (
+            "What slowmode delay should I use? Say something like `slowmode 10 seconds` "
+            "or `slowmode off`; mention a channel only if you do not mean this one."
+        )
+    if re.search(r"\b(?:kick|ban|mute|timeout|unmute|untimeout|nickname|rename|dm)\b", lowered):
+        return "Mention the exact user and include any duration, nickname, or message needed."
+    if "role" in lowered:
+        return "Mention the exact user and role, or give the new role name, and try again."
+    if "channel" in lowered or "topic" in lowered:
+        return "Mention the exact channel and include the new name or topic, then try again."
+    return "I recognized a Discord action, but I still need its exact target or value."
+
+
+def resolve_assistant_output(
+    user_text: str,
+    raw_actions: object,
+    model_response: str,
+    *,
+    in_guild: bool,
+    leak_blocked: bool = False,
+    raw_plan: object = None,
+) -> tuple[str, List[dict]]:
+    """Resolve one assistant turn into safe copy and at most one proposal.
+
+    Prefix and slash commands share this boundary so model-output quirks cannot
+    make the two public assistant interfaces behave differently.  A proposal
+    remains inert here: callers must still render an invoker-bound confirmation
+    and execute it with ``confirmed=True``.
+    """
+    response = str(model_response or "").strip()
+    if leak_blocked:
+        return response, []
+    plan = assistant_plan(raw_plan, user_text)
+    if plan:
+        if not in_guild and any(step.get("mutation") for step in plan):
+            return "Discord configuration plans only work inside a server; nothing was changed.", []
+        return render_assistant_plan(plan), []
+    if looks_like_plan_request(user_text) and not raw_plan:
+        return (
+            "I can preview that safely, but I need a step-by-step plan before proposing changes. "
+            "Nothing has changed; try again and I will list permissions and one confirmation per mutation.",
+            [],
+        )
+    proposals = assistant_proposals(raw_actions)
+    if proposals:
+        scoped = bind_assistant_channel_scope(proposals[0], user_text)
+        proposals = [scoped] if scoped else []
+
+    requested_action = looks_like_action_request(user_text)
+    if requested_action and not proposals:
+        inferred = infer_assistant_proposal(user_text)
+        proposals = [inferred] if inferred else []
+
+    if proposals and in_guild:
+        return (
+            f"Ready to `{preview_action(proposals[0])}`. Nothing has changed yet; "
+            "use Confirm below to execute it.",
+            proposals,
+        )
+    if requested_action and not in_guild:
+        return "Discord actions only work inside a server; nothing was changed.", []
+    if requested_action and not proposals:
+        return assistant_resolution_message(user_text, response), []
+    return response, []
 
 
 def is_undo_request(text: str) -> bool:
@@ -347,6 +658,25 @@ def _has(member: discord.Member, perm: Optional[str], channel=None) -> bool:
     if getattr(perms, "administrator", False):
         return True
     return bool(getattr(perms, perm, False))
+
+
+def _is_slowmode_channel(channel) -> bool:
+    """Whether Discord exposes per-user slowmode editing for this channel."""
+    return isinstance(
+        channel,
+        (
+            discord.TextChannel,
+            discord.Thread,
+            discord.ForumChannel,
+            discord.VoiceChannel,
+            discord.StageChannel,
+        ),
+    )
+
+
+def _slowmode_permission(channel) -> str:
+    """Return the effective Discord permission needed to edit slowmode."""
+    return "manage_threads" if isinstance(channel, discord.Thread) else "manage_channels"
 
 
 def _bot_member(guild) -> Optional[discord.Member]:
@@ -1052,6 +1382,10 @@ async def _one(
             or _has(requester, "change_nickname")
         ):
             return "denied: you need `change_nickname` to set your own nickname"
+    elif t == "set_slowmode" and _is_slowmode_channel(scope_channel):
+        perm_needed = _slowmode_permission(scope_channel)
+        if not _has(requester, perm_needed, channel=scope_channel):
+            return f"denied: you need `{perm_needed}` to use `{t}`"
     else:
         check_ch = scope_channel if t in _CHANNEL_SCOPED else None
         if not _has(requester, perm_needed, channel=check_ch):
@@ -1320,12 +1654,13 @@ async def _one(
 
     if t == "set_slowmode":
         ch = scope_channel
-        if ch is None or not isinstance(ch, discord.TextChannel):
-            return "set_slowmode: no text channel to set"
+        if not _is_slowmode_channel(ch):
+            return "set_slowmode: no slowmode-capable channel to set"
         if me is not None and hasattr(ch, "permissions_for"):
             bp = ch.permissions_for(me)
-            if not (bp.manage_channels or bp.administrator):
-                return f"blocked: I need `manage_channels` in #{ch.name}"
+            required = _slowmode_permission(ch)
+            if not (getattr(bp, required, False) or bp.administrator):
+                return f"blocked: I need `{required}` in #{ch.name}"
         try:
             seconds = max(0, min(_MAX_SLOWMODE, int(a.get("seconds") or 0)))
         except (TypeError, ValueError):

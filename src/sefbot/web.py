@@ -14,11 +14,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import hmac
 import html
 import inspect
 import ipaddress
 import logging
 import os
+import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +28,7 @@ from typing import Final, TypeAlias
 
 from aiohttp import web
 
+from sefbot import config, tos
 from sefbot.dashboard import (
     DASHBOARD_PREFIX,
     DashboardAuthConfig,
@@ -57,11 +60,16 @@ code{background:#222;padding:.1rem .3rem;border-radius:.25rem}
 table{width:100%;border-collapse:collapse;font-size:.92rem;margin:1rem 0}
 th,td{border:1px solid #333;padding:.45rem .55rem;text-align:left;vertical-align:top}
 th{background:#1a1a1a}ul{padding-left:1.2rem}
+button{background:#eee;color:#111;border:0;border-radius:.35rem;padding:.75rem 1rem;font:inherit;font-weight:700;cursor:pointer}
+label.accept{display:flex;gap:.7rem;align-items:flex-start;margin:1.2rem 0}
+label.accept input{margin-top:.4rem}
 """.strip()
 _STYLE_HASH: Final = base64.b64encode(
     hashlib.sha256(_STYLE.encode("utf-8")).digest()
 ).decode("ascii")
-_READINESS_COMPONENTS: Final = frozenset({"service", "discord", "database"})
+_READINESS_COMPONENTS: Final = frozenset(
+    {"service", "discord", "database", "malware_scanner"}
+)
 
 ReadinessResult: TypeAlias = bool | Mapping[str, bool]
 ReadinessProvider: TypeAlias = Callable[
@@ -79,9 +87,14 @@ class ReadinessState:
 
     discord: bool = False
     database: bool = False
+    malware_scanner: bool = False
 
     def __call__(self) -> Mapping[str, bool]:
-        return {"discord": self.discord, "database": self.database}
+        return {
+            "discord": self.discord,
+            "database": self.database,
+            "malware_scanner": self.malware_scanner,
+        }
 
 
 def _document(title: str, body: str) -> str:
@@ -130,6 +143,40 @@ def _terms_page(contact: str) -> str:
 
 def _privacy_page(contact: str) -> str:
     return _document("Privacy Notice", privacy_inner(contact))
+
+
+def _acceptance_page(contact: str, token: str) -> str:
+    safe_token = html.escape(token, quote=True)
+    safe_contact = html.escape(contact)
+    body = terms_inner(contact) + f"""
+<section class="card" aria-labelledby="accept-heading">
+  <h2 id="accept-heading">Accept this version</h2>
+  <p>For abuse and block-evasion prevention, this submission processes your
+  client IP address together with your Discord account id. The raw address is
+  not stored: OpSef stores a keyed network token for at most 30 days. A match to
+  a currently blocked account places access into manual review regardless of
+  Discord account age; it does not automatically hard-block the matching account.
+  Shared, mobile, school, workplace, and VPN networks can be inaccurate. You can
+  contact {safe_contact} to appeal a review.</p>
+  <form method="post" action="/sefbot/terms/accept">
+    <input type="hidden" name="token" value="{safe_token}">
+    <label class="accept"><input type="checkbox" name="agree" value="yes" required>
+      <span>I have read and agree to Terms v{html.escape(tos.TOS_VERSION)}, and I
+      understand the disclosed abuse-prevention processing described above and
+      in the Privacy Notice.</span></label>
+    <button type="submit">Accept and return to Discord</button>
+  </form>
+</section>
+"""
+    return _document("Review and accept Terms", body)
+
+
+def _acceptance_result(title: str, message: str) -> str:
+    return _document(
+        title,
+        f'<h1>{html.escape(title)}</h1><div class="card"><p>{html.escape(message)}</p>'
+        '<p>You can close this page and return to Discord.</p></div>',
+    )
 
 
 def _html_response(content: str) -> web.Response:
@@ -238,8 +285,9 @@ async def _security_headers(
         # same-origin stylesheet, script and API calls.
         _apply_dashboard_headers(response)
         return response
+    form_action = "'self'" if request.path == "/sefbot/terms/accept" else "'none'"
     response.headers["Content-Security-Policy"] = (
-        "default-src 'none'; base-uri 'none'; form-action 'none'; "
+        f"default-src 'none'; base-uri 'none'; form-action {form_action}; "
         f"style-src 'sha256-{_STYLE_HASH}'; frame-ancestors 'none'"
     )
     response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
@@ -294,7 +342,6 @@ def create_app(
     privacy_contact: str,
     readiness: ReadinessProvider | None = None,
     sites_root: str | os.PathLike[str] | None = None,
-    dashboard_token: str | None = None,
     dashboard_auth: DashboardAuthConfig | None = None,
     guild_provider: GuildProvider | None = None,
 ) -> web.Application:
@@ -328,6 +375,79 @@ def create_app(
     async def privacy(_request: web.Request) -> web.Response:
         return _html_response(_privacy_page(contact))
 
+    async def accept_terms_get(request: web.Request) -> web.Response:
+        token = str(request.query.get("token") or "")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{40,80}", token):
+            return _html_response(
+                _acceptance_result(
+                    "Invalid acceptance link",
+                    "This link is invalid. Return to Discord and request a new one with /tos.",
+                )
+            )
+        return _html_response(_acceptance_page(contact, token))
+
+    async def accept_terms_post(request: web.Request) -> web.Response:
+        if request.content_length is not None and request.content_length > MAX_REQUEST_BYTES:
+            raise web.HTTPRequestEntityTooLarge(
+                max_size=MAX_REQUEST_BYTES, actual_size=request.content_length
+            )
+        form = await request.post()
+        token = str(form.get("token") or "")
+        if form.get("agree") != "yes":
+            raise web.HTTPBadRequest(text="acceptance checkbox is required")
+        supplied_secret = request.headers.get("X-SefBot-Origin-Auth", "")
+        trusted_proxy = bool(
+            config.TOS_PROXY_SECRET
+            and supplied_secret
+            and hmac.compare_digest(config.TOS_PROXY_SECRET, supplied_secret)
+        )
+        forwarded = request.headers.get("X-Forwarded-For", "").split(",", 1)[0].strip()
+        try:
+            client_address = str(ipaddress.ip_address(forwarded)) if trusted_proxy else ""
+        except ValueError:
+            client_address = ""
+        if not client_address:
+            return web.Response(
+                text=_acceptance_result(
+                    "Acceptance temporarily unavailable",
+                    "The trusted network check was unavailable. No acceptance was recorded; try again later.",
+                ),
+                status=503,
+                content_type="text/html",
+                charset="utf-8",
+            )
+        user_id = tos.consume_acceptance_challenge(token)
+        if user_id is None:
+            return _html_response(
+                _acceptance_result(
+                    "Expired acceptance link",
+                    "This link was already used or expired. Return to Discord and request a new one.",
+                )
+            )
+        result = tos.record_web_acceptance(user_id, client_address)
+        if result == "accepted":
+            return _html_response(
+                _acceptance_result(
+                    "Terms accepted",
+                    f"OpSef Terms v{tos.TOS_VERSION} are accepted for your Discord account.",
+                )
+            )
+        if result == "review":
+            return _html_response(
+                _acceptance_result(
+                    "Acceptance submitted for review",
+                    f"An abuse-prevention review is required. Contact {contact} if this is a mistake.",
+                )
+            )
+        if result == "blocked":
+            return _html_response(
+                _acceptance_result(
+                    "Access unavailable",
+                    f"This Discord account cannot use OpSef. Contact {contact} to appeal.",
+                )
+            )
+        raise web.HTTPServiceUnavailable(text="acceptance temporarily unavailable")
+
     async def health(_request: web.Request) -> web.Response:
         return web.json_response({"status": "ok"})
 
@@ -354,6 +474,8 @@ def create_app(
     app.router.add_get("/sefbot", landing)
     app.router.add_get("/sefbot/", redirect_landing)
     app.router.add_get("/sefbot/terms", terms)
+    app.router.add_get("/sefbot/terms/accept", accept_terms_get)
+    app.router.add_post("/sefbot/terms/accept", accept_terms_post)
     app.router.add_get("/sefbot/privacy", privacy)
     app.router.add_get("/sefbot/tos", redirect_terms)
     app.router.add_get("/opsef-tos.html", redirect_terms)
@@ -362,7 +484,6 @@ def create_app(
     app.router.add_get("/readyz", ready)
     attach_dashboard_routes(
         app,
-        access_token=dashboard_token,
         guild_provider=guild_provider,
         auth_config=dashboard_auth,
     )
@@ -380,7 +501,6 @@ class WebService:
         readiness: ReadinessProvider,
         host: str = DEFAULT_HOST,
         port: int = DEFAULT_PORT,
-        dashboard_token: str | None = None,
         dashboard_auth: DashboardAuthConfig | None = None,
         guild_provider: GuildProvider | None = None,
     ) -> None:
@@ -394,7 +514,6 @@ class WebService:
         self._app = create_app(
             privacy_contact=privacy_contact,
             readiness=readiness,
-            dashboard_token=dashboard_token,
             dashboard_auth=dashboard_auth,
             guild_provider=guild_provider,
         )
@@ -444,14 +563,9 @@ def main() -> None:
         contact = os.getenv("SEFBOT_PRIVACY_CONTACT", "")
         app = create_app(
             privacy_contact=contact,
-            dashboard_token=os.getenv("SEFBOT_DASHBOARD_TOKEN"),
             dashboard_auth=DashboardAuthConfig(
                 public_url=os.getenv("SEFBOT_DASHBOARD_PUBLIC_URL", ""),
                 session_secret=os.getenv("SEFBOT_DASHBOARD_SESSION_SECRET", ""),
-                firebase_api_key=os.getenv("SEFBOT_FIREBASE_API_KEY", ""),
-                firebase_auth_domain=os.getenv("SEFBOT_FIREBASE_AUTH_DOMAIN", ""),
-                firebase_project_id=os.getenv("SEFBOT_FIREBASE_PROJECT_ID", ""),
-                firebase_app_id=os.getenv("SEFBOT_FIREBASE_APP_ID", ""),
                 discord_client_id=os.getenv("SEFBOT_DISCORD_CLIENT_ID", ""),
                 discord_client_secret=os.getenv("SEFBOT_DISCORD_CLIENT_SECRET", ""),
             ),

@@ -2,6 +2,11 @@
 
 A privacy-first Discord assistant with scoped memory, human-approved administration tools, and optional moderation, vision, and voice features. Raw message history is off by default and ordinary chat cannot execute Discord actions.
 
+Non-media Discord attachments are scanned locally with ClamAV before any bot
+feature reads them. Confirmed malware is removed, privately reported, and the
+sender is hard-blocked from bot access. Scanner failures fail closed for the
+file without punishing the sender; verified image/audio/video media is excluded.
+
 Built on top of [JayyDoesDev/airo](https://github.com/JayyDoesDev/airo), with a self-improvement layer bolted on.
 
 ## How it grows
@@ -16,9 +21,11 @@ Stack enough of all three and its "level" climbs from Newborn to Sage.
 
 - Model replies use a validated structured shape before they are rendered.
 - Guild, DM, and user data use exact scopes so one server or private conversation cannot read another.
-- Stored raw history requires both server enablement and the individual user's opt-in, and expires within 30 days.
+- Ordinary stored raw history requires both server enablement and the individual user's opt-in, and expires within 30 days; the disclosed deployment-level archive guild below is the explicit text-only exception.
 - Ordinary chat is read-only. `/act` and explicit one-shot `/assistant` or `!assistant` requests may propose one administration action, but the invoking user must confirm an exact preview; permissions and role hierarchy are checked again at confirmation time.
 - Confirmed assistant actions keep a scoped, 30-day undo record when an exact inverse exists. Use `!assistant undo` or `/assistant request:undo`; irreversible operations are reported as such and never fake a rollback.
+- Broad staff requests can return a non-executing multi-step plan with a permission explanation for every step. Each meaningful mutation must be requested and confirmed separately; opaque or bundled mutations are rejected.
+- Prefix and slash assistant commands both accept a `.txt` attachment as the request, including when no separate prompt text is supplied.
 - Can throw together a chart (bar/line/pie/radar) via QuickChart, no API key needed.
 - `!vibecheck` gives an unfiltered read on how a channel's doing.
 - No emoji, ever, in anything it sends.
@@ -48,24 +55,73 @@ PYTHONPATH=src python -m sefbot.bot
 
 `@mention` it or DM it to chat. Use `/privacy` for consent, export, and deletion; `/help` lists the currently registered commands and permissions.
 
+First use is locked behind `/tos`: Discord issues a single-use 15-minute link,
+the user reads and accepts the current Terms on the public page, then returns to
+Discord. The web form discloses its abuse-prevention processing and stores only
+a keyed network token for at most 30 days, never the raw client IP. Configure
+separate `SEFBOT_TOS_ACCEPTANCE_SECRET` and `SEFBOT_TOS_PROXY_SECRET` values;
+the latter must match the secret header set by the trusted Cloudflare Worker.
+
 ## Web dashboard and community modules
 
-The bot now serves an authenticated control center at `/dashboard` on the same
-host and port as its legal and health pages. Generate a private access token,
-put it in `SEFBOT_DASHBOARD_TOKEN`, restart the bot, then sign in and select a
-connected server. A token shorter than 24 characters is rejected. The token is
-exchanged for a signed, HttpOnly, SameSite session; dashboard writes require a
-CSRF token and every module change is recorded in the server's dashboard audit
-trail.
+The bot serves its control center at
+[`wearegays.net/dashboard`](https://wearegays.net/dashboard). Discord is the only
+sign-in method. Only connected servers that the Discord user owns or can manage
+are visible. The bot requests Discord's `identify` and `guilds` scopes; it does
+not receive the user's Discord password.
+
+In the Discord Developer Portal, add this OAuth2 redirect URI:
+
+`https://wearegays.net/dashboard/auth/discord/callback`
+
+Set `SEFBOT_DASHBOARD_PUBLIC_URL`, a separate random
+`SEFBOT_DASHBOARD_SESSION_SECRET`, and `SEFBOT_DISCORD_CLIENT_ID` /
+`SEFBOT_DISCORD_CLIENT_SECRET`; see `.env.example` for the exact names. Discord
+OAuth is exchanged for a signed, HttpOnly, SameSite session. Dashboard writes
+require a CSRF token and every module change is recorded in the server's
+dashboard audit trail.
+
+The **Incident Center** combines searchable moderation cases, private member
+notes, HTTPS evidence references, expiry and appeal timelines, malware and rule
+reviews, confirmed assistant actions, and unresolved tickets. Queue changes are
+OAuth-authorized, CSRF-bound, guild-scoped, assignable, and audit logged.
+
+Server Health reports are opt-in and advisory only. Scheduled staff digests use
+an explicit private channel and visibility, and analytics exports contain
+aggregate counts rather than message content or personal profiles.
 
 The dashboard exposes every module under one catalog: community, safety,
 automation, support, engagement, feeds, content, utilities and administration.
-There are no SefBot paid tiers or artificial item limits. New high-impact
-modules are disabled by default so installing an update cannot unexpectedly
-moderate members, delete messages, post feeds or change roles; existing safe
-features remain enabled for compatibility. Enable and configure only the
-modules you want. Structured settings such as rules, forms, role menus and
-subscriptions use bounded JSON editors in the module panel. Each module card
+The **Settings** page also exposes every guild-scoped core control used by the
+runtime: persona, chat model, language, response tier, command channels, lurk,
+history and retention, moderation review, rules review, private staff channels,
+and voice transcription. Channel and role fields use the selected server's live
+Discord resources. Host credentials, OAuth secrets, database paths, bind ports,
+and provider API keys intentionally remain deployment settings rather than being
+exposed to server managers.
+
+**Booster Perks** is a fully dashboard-driven module. It persists individual
+current/all-time boost history, imports existing boosters, sends randomized
+embed/plain/DM greetings with `{user}`, `{username}`, `{userboosts}`, `{level}`,
+`{count}` and `{totalcount}`, manages automatic/personal/level/age roles, gifts,
+private text/voice channels, mention reactions, emoji role restrictions,
+read-only statistic voice channels, manager roles and per-event logs. Member
+self-service and safe manager corrections use `!booster help`. Discord does not
+reliably expose removal of only one of several boosts, so managers can correct
+that specific case with `!booster adjust @member -1`.
+
+The dashboard has a dedicated **Booster Perks** workspace rather than a raw
+module JSON editor. Every catalog setting appears once as a typed toggle,
+text/URL/number field, live Discord role/channel selector, or add/remove row
+builder. The same page shows live current/all-time statistics and individual
+records, and lets authorized server managers import/synchronize boosters, send
+a test greeting, and apply audited `+N`/`-N` corrections.
+
+There are no SefBot paid tiers or artificial item limits. Every dashboard
+module is enabled by default, and server managers can disable any module later.
+Modules that need rules, channels, roles, forms, or subscriptions remain inert
+until those settings are configured. Structured settings use bounded JSON
+editors in the module panel. Each module card
 also reports whether its core workflow is live, partial, or configuration-only
 so the dashboard never implies complete Dyno parity where it does not exist.
 The checked-in [`FEATURE_COVERAGE.md`](FEATURE_COVERAGE.md) is the detailed
@@ -78,7 +134,7 @@ slowmode, starboard, reaction-based role menus, tickets with transcripts,
 reaction-entry timed giveaways,
 web forms and submission automation, Reddit/YouTube public feeds, voice-text
 links and utility/fun commands. Existing confirmed administration actions,
-custom commands, moderation review, economy and localization remain integrated.
+custom commands, moderation review, economy, Booster Perks and localization remain integrated.
 Third-party networks may still require their own free developer credentials or
 impose upstream quotas; SefBot itself does not charge to unlock them.
 
@@ -96,7 +152,7 @@ returned through the dashboard.
 - Privacy: [kozzyx.org/sefbot/privacy](https://kozzyx.org/sefbot/privacy)
 - `/privacy status|opt-in|opt-out|export|delete` remains private and available without accepting the ToS. ToS acceptance is not raw-history consent.
 - Moderation, server rules, raw history, and voice transcription are disabled by default. Voice transcription additionally requires participant consent in the exact guild.
-- The built-in HTTP service exposes `/healthz` for liveness and `/readyz` for sanitized Discord/database readiness. `SEFBOT_PRIVACY_CONTACT` defaults to `privacy@opsef.bot`; `PORT` defaults to `8080`.
+- The built-in HTTP service exposes `/healthz` for liveness and `/readyz` for sanitized Discord/database readiness. `SEFBOT_PRIVACY_CONTACT` defaults to `ckazros@kozzyx.org`; `PORT` defaults to `8080`.
 - The authenticated dashboard is at `/dashboard`. Public forms are under
   `/forms/<server-id>/<form-slug>` and are available only when that exact form
   and the Forms module are enabled.
@@ -109,10 +165,14 @@ A second, self-contained model layer (`services/llm_client.py`) that talks to an
 - **`/ask <question> [mode=reasoning|fast]`** — one-shot Q&A. `reasoning` uses the best model (`SEFBOT_CHAT_MODEL`, default GPT OSS 120B); `fast` uses Llama 3.3 70B on Groq (`SEFBOT_FAST_MODEL`). Cooldown-protected.
 - **`/act <natural language>`** — moderators can ask for one typed action such as a timeout or ban. The bot shows an ephemeral, mention-safe preview bound to that invoker; only a confirmation within two minutes can proceed. The executor then re-resolves the target and rechecks the exact permission, bot capability, and role hierarchy. Schemas live in `function_registry.py`.
 - **Passive moderation** — disabled until `SEFBOT_SAFETY_ENABLED=1` and an administrator enables it for the guild. Safety GPT is a bounded classifier only: high-confidence flags go to a private staff review with **Delete message** / **Dismiss** controls. The model cannot delete content, warn users, or globally block anyone by itself.
+- **Malware scanner** — enabled by default for every non-media attachment and backed by a required local ClamAV installation. Media exclusions require matching MIME, extension, and binary magic. Confirmed signatures delete/report/block immediately; unavailable, oversized, or timed-out scans remove the message without blocking its sender. Files are owner-only temporary data and are never uploaded to an antivirus vendor.
 - **Vision** — `/describe [image] [url] [prompt]` and the right-click **Describe image** message context menu. Uses Qwen vision (`SEFBOT_VISION_MODEL`); one call returns both a description and a moderation flag. Remote URLs must resolve to a public HTTP(S) endpoint, redirects are revalidated, and downloads are streamed under `SEFBOT_VISION_MAX_IMAGE_BYTES`. PNG, JPEG, GIF, and WebP are supported. Cooldown-protected.
+- **Age-restricted images** — `/nsfw character:<tag> amount:<1-10>` (or `!nsfw <tag> [amount]`) uses the Rule34 API only in server channels Discord marks age-restricted. Set `SEFBOT_RULE34_USER_ID` and `SEFBOT_RULE34_API_KEY` to enable it; credentials stay host-side.
 - **Multilingual** — `!language` / `/language` sets the language the bot replies in (per user, with an optional server default). Non-English messages are also detected with `langdetect` (cheap, never the LLM). In a channel listed in `SEFBOT_MULTILINGUAL_CHANNELS`, and when no language is set, Llama 3.3 70B replies in the message's own language; elsewhere the message is translated for the brain as before.
 - **Voice** — `/join`, `/leave`, and `/say <text>` provide playback/TTS. Live `/stt` is off by default and requires `manage_channels`, guild enablement, and consent from every non-bot participant; the session stops when its controller leaves or consent/channel visibility changes. The released `discord-ext-voice-recv` packages still require a vulnerable PyNaCl version, so the base install keeps PyNaCl ≥ 1.6.2 and safely leaves live receive unavailable until a compatible upstream release exists. Do not downgrade PyNaCl to enable it.
-- **Server rules (approval-gated)** — the optional preset runs only when `SEFBOT_RULES_ENABLED=1`, `SEFBOT_RULES_GUILD` is explicitly configured, and that guild enables it. Findings go to a private review channel. Approval rechecks the action-specific permission (`ban_members`, `kick_members`, `moderate_members`, or `manage_messages`) and bot hierarchy before doing anything; denial, timeout, or restart takes no action.
+- **Server rules (approval-gated)** — a server manager enables the preset and selects a private approval channel in the dashboard. Findings go only to that private review channel. Approval rechecks the action-specific permission (`ban_members`, `kick_members`, `moderate_members`, or `manage_messages`) and bot hierarchy before doing anything; denial, timeout, or restart takes no action. Optional LLM confirmation still depends on the host's provider configuration.
+- **Swear jar** — disabled by default. Server managers can enable it in Dashboard → Settings or with confirmed `/config swearjar on`. Each message with locally detected profanity gets a reply with that member's server total; only the aggregate number is stored. Use `/swears [user]` or `!swears [@user]` to check it.
+- **Dedicated text archive** — guild `1535083112709496903` is the deployment-level archival scope. On startup and every six hours, SefBot resumes a channel/thread backfill from durable cursors, then indexes new and edited messages live. It stores message text and author IDs only: attachments, embeds, stickers, Unicode emoji, custom Discord emoji, and emoji-only messages are omitted. Archived raw text is exempt from the normal 30-day cleanup. Managers can inspect coverage with `/archive-status`; `user` questions retrieve relevant messages from the full indexed history.
 
 ## Knowledge base
 

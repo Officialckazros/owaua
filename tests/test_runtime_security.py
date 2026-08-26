@@ -5,7 +5,50 @@ import types
 import unittest
 from unittest import mock
 
-from sefbot import actions, brain, function_registry, moderation, rules, slash, voice
+from sefbot import actions, brain, embeds, function_registry, moderation, rules, slash, voice
+
+
+class ModelOutputLinkSafetyTest(unittest.TestCase):
+    def test_python_deobfuscation_result_is_not_clickable(self):
+        model_output = "https://watchpeopledie.tv/"
+
+        scrubbed = brain.scrub_ai_output(model_output)
+        safe, proposals = actions.resolve_assistant_output(
+            'what does print("/vt.eidelpoephctaw//:sptth"[::-1]) output?',
+            [],
+            scrubbed,
+            in_guild=True,
+        )
+
+        self.assertEqual([], proposals)
+        self.assertIn("model-produced links", safe)
+        self.assertIn("https[:]//watchpeopledie.tv/", safe)
+        self.assertNotIn("https://", safe)
+
+    def test_markdown_uppercase_and_www_links_are_defanged(self):
+        safe = brain.scrub_ai_output(
+            "[open](HTTPS://example.invalid/path) or www.example.invalid"
+        )
+
+        self.assertIn("[open](HTTPS[:]//example.invalid/path)", safe)
+        self.assertIn("www[.]example.invalid", safe)
+        self.assertNotIn("HTTPS://", safe)
+        self.assertNotIn("www.example.invalid", safe)
+
+    def test_benign_code_explanation_is_unchanged(self):
+        text = "It reverses the string and prints `hello`."
+
+        self.assertEqual(text, brain.scrub_ai_output(text))
+
+    def test_host_validated_search_source_remains_clickable(self):
+        embed = embeds.say("grounded answer")
+
+        embeds.add_sources(
+            embed,
+            [{"title": "Python docs", "url": "https://docs.python.org/3/"}],
+        )
+
+        self.assertIn("https://docs.python.org/3/", embed.fields[0].value)
 
 
 class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
@@ -18,13 +61,114 @@ class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
     def test_assistant_proposal_accepts_one_known_action_only(self):
         proposal = {"type": "set_nickname", "target_user": "42", "nickname": "Raven"}
         self.assertEqual([proposal], actions.assistant_proposals([proposal]))
+        self.assertEqual([proposal], actions.assistant_proposals(proposal))
         self.assertEqual([], actions.assistant_proposals([proposal, proposal]))
         self.assertEqual([], actions.assistant_proposals([{"type": "shell"}]))
+
+    def test_assistant_proposal_accepts_common_safe_aliases(self):
+        proposal = {"type": "remove_slowmode"}
+        self.assertEqual([proposal], actions.assistant_proposals([proposal]))
+        self.assertEqual("set_slowmode", actions.action_type(proposal))
+
+    def test_current_channel_action_discards_model_invented_channel_id(self):
+        proposal = {
+            "type": "set_slowmode",
+            "channel": "976934154421829663",
+            "seconds": 0,
+        }
+        self.assertEqual(
+            {"type": "set_slowmode", "seconds": 0},
+            actions.bind_assistant_channel_scope(proposal, "remove slowmode"),
+        )
+
+    def test_explicit_channel_action_keeps_only_the_users_exact_target(self):
+        proposal = {
+            "type": "set_slowmode",
+            "channel": "123456789012345678",
+            "seconds": 0,
+        }
+        self.assertEqual(
+            proposal,
+            actions.bind_assistant_channel_scope(
+                proposal, "remove slowmode in <#123456789012345678>"
+            ),
+        )
+        self.assertIsNone(
+            actions.bind_assistant_channel_scope(
+                proposal, "remove slowmode in <#223456789012345678>"
+            )
+        )
 
     def test_action_request_detection_does_not_match_general_creation(self):
         self.assertTrue(actions.looks_like_action_request("rename <@123456789012345678> to Raven"))
         self.assertTrue(actions.looks_like_action_request("create a private channel"))
         self.assertFalse(actions.looks_like_action_request("create a Python class for me"))
+        self.assertFalse(actions.looks_like_action_request("how does slowmode work?"))
+        self.assertFalse(actions.looks_like_action_request("why was that user banned?"))
+
+    def test_clear_slowmode_request_recovers_current_channel_proposal(self):
+        self.assertEqual(
+            {"type": "set_slowmode", "seconds": 0},
+            actions.infer_assistant_proposal("slowmode remove"),
+        )
+        self.assertEqual(
+            {"type": "set_slowmode", "seconds": 600, "channel": "123456789012345678"},
+            actions.infer_assistant_proposal(
+                "set slowmode to 10 minutes in <#123456789012345678>"
+            ),
+        )
+
+    def test_clear_action_requests_recover_without_model_action_shape(self):
+        self.assertEqual(
+            {"type": "purge_messages", "count": 25},
+            actions.infer_assistant_proposal("purge the last 25 messages"),
+        )
+        self.assertEqual(
+            {"type": "ban_user", "target_user": "123456789012345678"},
+            actions.infer_assistant_proposal("ban <@123456789012345678>"),
+        )
+
+    def test_action_resolution_keeps_model_clarification(self):
+        question = "Which channel should I update?"
+        self.assertEqual(
+            question,
+            actions.assistant_resolution_message("change the channel topic", question),
+        )
+
+    def test_assistant_output_resolution_is_one_safe_shared_boundary(self):
+        proposal = {"type": "set_slowmode", "seconds": 10}
+        response, proposals = actions.resolve_assistant_output(
+            "set slowmode to 10 seconds",
+            [proposal],
+            "Done already.",
+            in_guild=True,
+        )
+        self.assertEqual([proposal], proposals)
+        self.assertIn("Nothing has changed yet", response)
+        self.assertNotIn("Done already", response)
+
+        response, proposals = actions.resolve_assistant_output(
+            "set slowmode to 10 seconds",
+            [proposal],
+            "Done already.",
+            in_guild=False,
+        )
+        self.assertEqual([], proposals)
+        self.assertIn("only work inside a server", response)
+
+    def test_leak_block_prevents_action_inference(self):
+        response, proposals = actions.resolve_assistant_output(
+            "purge the last 25 messages",
+            [],
+            "I cannot reveal private instructions.",
+            in_guild=True,
+            leak_blocked=True,
+        )
+        self.assertEqual([], proposals)
+        self.assertEqual(
+            "I cannot reveal private instructions.",
+            response,
+        )
 
     def test_undo_request_detection_is_unambiguous(self):
         for text in ("undo", "revert it", "reverse the last action", "put that back"):
@@ -80,6 +224,56 @@ class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
                 object(), object(), object(),
             )
         self.assertEqual(expiry.isoformat(), inverse["until"])
+
+    async def test_confirmed_slowmode_supports_threads_with_manage_threads(self):
+        class FakeMember:
+            pass
+
+        class FakeThread:
+            id = 123456789012345678
+            name = "support-thread"
+
+            def __init__(self):
+                self.edit = mock.AsyncMock()
+
+            def permissions_for(self, _member):
+                return types.SimpleNamespace(
+                    administrator=False,
+                    manage_channels=False,
+                    manage_threads=True,
+                )
+
+        guild = types.SimpleNamespace(owner_id=999)
+        requester = FakeMember()
+        requester.id = 7
+        requester.guild = guild
+        requester.guild_permissions = types.SimpleNamespace(administrator=False)
+        bot_member = FakeMember()
+        bot_member.id = 8
+        bot_member.guild = guild
+        thread = FakeThread()
+        guild.fetch_channel = mock.AsyncMock(return_value=thread)
+
+        with (
+            mock.patch.object(actions.discord, "Member", FakeMember),
+            mock.patch.object(actions.discord, "Thread", FakeThread),
+        ):
+            result = await actions._one(
+                {
+                    "type": "set_slowmode",
+                    "channel": str(thread.id),
+                    "seconds": 0,
+                },
+                requester,
+                guild,
+                object(),
+                channel=thread,
+                bot_member=bot_member,
+            )
+
+        self.assertEqual("slowmode in #support-thread set to 0s", result)
+        thread.edit.assert_awaited_once()
+        self.assertEqual(0, thread.edit.await_args.kwargs["slowmode_delay"])
 
     async def test_assistant_confirmation_records_inverse_and_consumes_undo(self):
         proposal = {"type": "set_nickname", "target_user": "42", "nickname": "Before"}
