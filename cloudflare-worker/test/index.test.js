@@ -36,7 +36,7 @@ test("rejects unknown paths and methods without contacting upstream", async () =
       {},
     );
     assert.equal(post.status, 405);
-    assert.equal(post.headers.get("Allow"), "GET, HEAD");
+    assert.equal(post.headers.get("Allow"), "GET, HEAD, POST");
     assert.equal(calls, 0);
   } finally {
     globalThis.fetch = originalFetch;
@@ -195,7 +195,7 @@ test("preserves bounded readiness JSON and rejects response type confusion", asy
   }
 });
 
-test("forwards only a validated acceptance token", async () => {
+test("forwards only a validated acceptance token and the authenticated form POST", async () => {
   const originalFetch = globalThis.fetch;
   const token = "a".repeat(40);
   const captured = [];
@@ -213,6 +213,17 @@ test("forwards only a validated acceptance token", async () => {
     assert.equal(get.status, 200);
     assert.equal(captured[0].url, `${ORIGIN}/sefbot/terms/accept?token=${token}`);
 
+    const post = await worker.fetch(
+      new Request("https://wearegays.net/sefbot/terms/accept", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: `token=${token}&agree=yes`,
+      }),
+      { SEFBOT_ORIGIN: ORIGIN, ORIGIN_AUTH_SECRET: "s".repeat(32) },
+    );
+    assert.equal(post.status, 200);
+    assert.equal(captured[1].init.headers.get("X-SefBot-Origin-Auth"), "s".repeat(32));
+    assert.equal(await new Response(captured[1].init.body).text(), `token=${token}&agree=yes`);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -67,7 +67,7 @@ function parseOrigin(rawOrigin) {
   return origin;
 }
 
-function upstreamHeaders(request, publicUrl, path) {
+function upstreamHeaders(request, publicUrl, path, env) {
   const headers = new Headers({
     Accept:
       path === "/healthz" || path === "/readyz"
@@ -80,6 +80,13 @@ function upstreamHeaders(request, publicUrl, path) {
   const requestId = request.headers.get("CF-Ray");
   if (requestId && /^[A-Za-z0-9-]{1,64}$/.test(requestId)) {
     headers.set("X-Request-ID", requestId);
+  }
+  if (path === "/sefbot/terms/accept" && request.method === "POST") {
+    if (typeof env.ORIGIN_AUTH_SECRET !== "string" || env.ORIGIN_AUTH_SECRET.length < 32) {
+      throw new TypeError("missing acceptance proxy secret");
+    }
+    headers.set("Content-Type", "application/x-www-form-urlencoded");
+    headers.set("X-SefBot-Origin-Auth", env.ORIGIN_AUTH_SECRET);
   }
   return headers;
 }
@@ -257,9 +264,10 @@ export default {
     if (publicUrl.protocol !== "https:") {
       return response(path, "HTTPS is required", 400);
     }
-    if (request.method !== "GET" && request.method !== "HEAD") {
+    const acceptingTerms = path === "/sefbot/terms/accept" && request.method === "POST";
+    if (request.method !== "GET" && request.method !== "HEAD" && !acceptingTerms) {
       const rejected = response(path, "Method not allowed", 405);
-      rejected.headers.set("Allow", "GET, HEAD");
+      rejected.headers.set("Allow", "GET, HEAD, POST");
       return rejected;
     }
 
@@ -283,7 +291,8 @@ export default {
     try {
       const upstream = await fetch(target, {
         method: request.method,
-        headers: upstreamHeaders(request, publicUrl, path),
+        headers: upstreamHeaders(request, publicUrl, path, env),
+        body: acceptingTerms ? request.body : undefined,
         redirect: "manual",
         signal: controller.signal,
       });
