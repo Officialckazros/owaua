@@ -1137,7 +1137,9 @@ async def on_message(message: discord.Message):
         "privacy", "privacypolicy", "tos", "terms", "termsofservice",
         "help", "about", "status",
     }
-    if config.is_blocked(message.author.id):
+    # A hard block stops bot features, but never the privacy/Terms escape hatch.
+    # Blocked users must still be able to inspect/export/delete their data.
+    if config.is_blocked(message.author.id) and command_name not in privacy_commands:
         return
     if message.guild is None and _cli_claims_user(message.author.id):
         return
@@ -1928,7 +1930,9 @@ async def _handle_command(message, body, guild_id, author, *, prefix: str | None
         "privacy", "privacypolicy", "tos", "terms", "termsofservice",
         "help", "about", "status",
     }
-    if config.is_blocked(author):
+    # Keep privacy and legal controls reachable after a block. In particular,
+    # !privacy export/delete must not be swallowed by the access gate.
+    if config.is_blocked(author) and name not in privacy_commands:
         return
 
     if not tos.has_accepted(author) and not tos.command_allowed_without_tos(name):
@@ -4345,6 +4349,15 @@ async def _cmd_privacy(message, arg, guild_id, author):
     p = _prefix_for_scope(guild_id)
     raw = (arg or "").strip()
     sub = raw.split(maxsplit=1)[0].lower() if raw else "status"
+    if config.is_blocked(author) and sub in {"opt-in", "optin", "on"}:
+        await _send_private(
+            message,
+            embeds.error(
+                "blocked users can export or delete their data, but cannot opt in "
+                "to create new stored data."
+            ),
+        )
+        return
     if sub in {"opt-in", "optin", "on"}:
         db.privacy_set_opt_in(author, guild_id, True)
         await _send_private(

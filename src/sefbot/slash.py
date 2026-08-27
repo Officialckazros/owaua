@@ -823,7 +823,9 @@ class _BlockingTree(app_commands.CommandTree):
         name = name.lower()
         privacy_safe = name in {"privacy", "tos", "terms", "help", "about", "status"}
 
-        if config.is_blocked(uid):
+        if config.is_blocked(uid) and not privacy_safe:
+            # Privacy/legal escape hatches remain available to blocked users.
+            # In particular, /privacy export and /privacy delete must stay reachable.
             try:
                 msg = "you are blocked from using this bot."
                 if interaction.response.is_done():
@@ -2099,6 +2101,15 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         uid = str(interaction.user.id)
         current_scope = _guild_id(interaction)
         sub = (action or "status").strip().lower()
+        if config.is_blocked(uid) and sub in {"opt-in", "optin", "on"}:
+            await interaction.response.send_message(
+                embed=embeds.error(
+                    "blocked users can export or delete their data, but cannot opt in "
+                    "to create new stored data."
+                ),
+                ephemeral=True,
+            )
+            return
         if sub == "opt-in":
             db.privacy_set_opt_in(uid, current_scope, True)
             await interaction.response.send_message(
