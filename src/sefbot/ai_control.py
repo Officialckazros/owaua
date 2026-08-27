@@ -185,22 +185,145 @@ def provider_health_snapshot() -> list[dict[str, Any]]:
 
 _usage_lock = threading.Lock()
 _usage: dict[tuple[str, str], collections.deque[float]] = {}
+_token_usage: dict[tuple[str, str], collections.deque[tuple[float, int]]] = {}
+_provider_attempts: collections.deque[float] = collections.deque()
 
 
-def check_request_budget(scope_id: str | None, task: str) -> None:
-    if not scope_id:
-        return
-    settings = db.guild_settings(str(scope_id))
-    limit = max(10, min(600, int(settings.get("ai_requests_per_minute") or config.AI_REQUESTS_PER_MINUTE)))
-    key = (str(scope_id), str(task))
+class AIBudgetExceeded(RuntimeError):
+    """A paid-AI request was rejected before another provider call was made."""
+
+
+def _retry_after(bucket: collections.deque, now_value: float) -> int:
+    if not bucket:
+        return 1
+    oldest = float(bucket[0][0] if isinstance(bucket[0], tuple) else bucket[0])
+    return max(1, math.ceil(60.0 - (now_value - oldest)))
+
+
+def _prune_times(bucket: collections.deque[float], now_value: float) -> None:
+    while bucket and bucket[0] <= now_value - 60.0:
+        bucket.popleft()
+
+
+def _prune_tokens(
+    bucket: collections.deque[tuple[float, int]], now_value: float
+) -> None:
+    while bucket and bucket[0][0] <= now_value - 60.0:
+        bucket.popleft()
+
+
+def _cleanup_usage_maps(now_value: float) -> None:
+    for key, bucket in list(_usage.items()):
+        _prune_times(bucket, now_value)
+        if not bucket:
+            _usage.pop(key, None)
+    for key, bucket in list(_token_usage.items()):
+        _prune_tokens(bucket, now_value)
+        if not bucket:
+            _token_usage.pop(key, None)
+
+
+def _budget_error(bucket: collections.deque, now_value: float) -> AIBudgetExceeded:
+    return AIBudgetExceeded(
+        f"AI spending limit reached; retry in {_retry_after(bucket, now_value)}s"
+    )
+
+
+def check_request_budget(
+    scope_id: str | None, task: str, *, user_id: str | None = None
+) -> None:
+    """Atomically admit one logical AI request across shared hard ceilings.
+
+    The task is accepted for trace/caller compatibility but deliberately is not
+    part of any key: switching features must never multiply a user's allowance.
+    """
+    del task
+    scope = str(scope_id or "").strip()
+    user = str(user_id or "").strip()
+    host_limit = max(1, min(600, int(config.AI_REQUESTS_PER_MINUTE)))
+    scope_limit = host_limit
+    if scope:
+        settings = db.guild_settings(scope)
+        scope_limit = max(
+            1,
+            min(host_limit, int(settings.get("ai_requests_per_minute") or host_limit)),
+        )
+    user_limit = max(
+        1, min(host_limit, int(config.AI_USER_REQUESTS_PER_MINUTE))
+    )
     now_value = time.monotonic()
     with _usage_lock:
-        bucket = _usage.setdefault(key, collections.deque())
-        while bucket and bucket[0] <= now_value - 60.0:
-            bucket.popleft()
-        if len(bucket) >= limit:
-            raise RuntimeError("AI request budget reached for this server; retry in a moment")
-        bucket.append(now_value)
+        _cleanup_usage_maps(now_value)
+        limits = [(('global', '*'), host_limit)]
+        if scope:
+            limits.append((('scope', scope), scope_limit))
+        if user:
+            limits.append((('user', user), user_limit))
+        buckets: list[collections.deque[float]] = []
+        for key, limit in limits:
+            bucket = _usage.setdefault(key, collections.deque())
+            _prune_times(bucket, now_value)
+            if len(bucket) >= limit:
+                raise _budget_error(bucket, now_value)
+            buckets.append(bucket)
+        for bucket in buckets:
+            bucket.append(now_value)
+
+
+def reserve_provider_attempt(
+    *,
+    scope_id: str | None = None,
+    user_id: str | None = None,
+    estimated_tokens: int = 1,
+) -> None:
+    """Reserve one real outbound provider attempt before network I/O.
+
+    Reservations are intentionally not refunded: once an attempt reaches this
+    boundary it may be billable even if the caller times out or disconnects.
+    """
+    scope = str(scope_id or "").strip()
+    user = str(user_id or "").strip()
+    token_cost = max(1, int(estimated_tokens))
+    host_attempt_limit = max(
+        1, min(10_000, int(config.AI_PROVIDER_ATTEMPTS_PER_MINUTE))
+    )
+    host_token_limit = max(
+        1_000, min(10_000_000, int(config.AI_TOKEN_BUDGET_PER_MINUTE))
+    )
+    scope_token_limit = host_token_limit
+    if scope:
+        settings = db.guild_settings(scope)
+        scope_token_limit = max(
+            1_000,
+            min(host_token_limit, int(settings.get("ai_tokens_per_minute") or host_token_limit)),
+        )
+    user_token_limit = max(
+        1_000,
+        min(host_token_limit, int(config.AI_USER_TOKEN_BUDGET_PER_MINUTE)),
+    )
+    now_value = time.monotonic()
+    with _usage_lock:
+        _cleanup_usage_maps(now_value)
+        _prune_times(_provider_attempts, now_value)
+        if len(_provider_attempts) >= host_attempt_limit:
+            raise _budget_error(_provider_attempts, now_value)
+
+        limits = [(('global', '*'), host_token_limit)]
+        if scope:
+            limits.append((('scope', scope), scope_token_limit))
+        if user:
+            limits.append((('user', user), user_token_limit))
+        buckets: list[collections.deque[tuple[float, int]]] = []
+        for key, limit in limits:
+            bucket = _token_usage.setdefault(key, collections.deque())
+            _prune_tokens(bucket, now_value)
+            if sum(cost for _created, cost in bucket) + token_cost > limit:
+                raise _budget_error(bucket, now_value)
+            buckets.append(bucket)
+
+        _provider_attempts.append(now_value)
+        for bucket in buckets:
+            bucket.append((now_value, token_cost))
 
 
 def estimate_tokens(value: object) -> int:
@@ -210,6 +333,30 @@ def estimate_tokens(value: object) -> int:
     else:
         chars = len(str(value or ""))
     return max(1, math.ceil(chars / 3.6))
+
+
+def estimate_chat_tokens(system: str, messages: object) -> int:
+    """Estimate chat tokens without treating base64 image bytes as text tokens."""
+
+    def _parts(value: object) -> int:
+        if isinstance(value, str):
+            return estimate_tokens(value)
+        if isinstance(value, list):
+            return sum(_parts(item) for item in value)
+        if isinstance(value, dict):
+            part_type = str(value.get("type") or "")
+            if part_type in {"image_url", "input_image", "image"}:
+                # Conservative fixed reservation for provider image tokenization;
+                # the encoded transport bytes themselves are not prompt tokens.
+                return 2_000
+            if "content" in value:
+                return _parts(value.get("content")) + estimate_tokens(value.get("role"))
+            if "text" in value:
+                return _parts(value.get("text"))
+            return min(2_000, estimate_tokens(value))
+        return estimate_tokens(value)
+
+    return estimate_tokens(system) + _parts(messages)
 
 
 def _trim_middle(text: str, limit: int) -> str:

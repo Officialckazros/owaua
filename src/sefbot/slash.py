@@ -554,12 +554,19 @@ async def _generate_reply(
         chosen = multilingual.effective_language(author, guild_id)
         if chosen is None:
             multi = await multilingual.maybe_multilingual_reply(
-                interaction.channel, guild, query, detected
+                interaction.channel,
+                guild,
+                query,
+                detected,
+                scope_id=guild_id,
+                user_id=author,
             )
             if multi:
                 multi = brain.scrub_ai_output(multi)
                 return embeds.say(multi, title="🌐"), multi
-        query = await multilingual.translate_text(query, "English")
+        query = await multilingual.translate_text(
+            query, "English", scope_id=guild_id, user_id=author
+        )
 
     roles = ""
     if guild:
@@ -1335,7 +1342,15 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         system = (config.PERSONA + "\n\nGive an unhinged, brutally honest read on this "
                   "channel's energy based on the messages. Keep it short. No emoji.")
         try:
-            text = await ai.chat(system, [{"role": "user", "content": ctx}], max_tokens=400)
+            text = await ai.chat(
+                system,
+                [{"role": "user", "content": ctx}],
+                max_tokens=400,
+                task="creative",
+                scope_id=_guild_id(interaction),
+                user_id=str(interaction.user.id),
+                prompt_version="vibecheck-v1",
+            )
         except Exception as e:
             await interaction.followup.send(embed=embeds.error("couldn't read the room: " + ai.friendly_error(e)))
             return
@@ -1392,6 +1407,8 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             text = await ai.chat(
                 brain.cybersec_system(), [{"role": "user", "content": q}],
                 max_tokens=1000, temperature=0.4, tier="expert",
+                task="fact_check", scope_id=guild_id,
+                user_id=str(interaction.user.id), prompt_version="cybersec-v1",
             )
         except Exception as e:
             await interaction.followup.send(embed=embeds.error("tutor's offline: " + ai.friendly_error(e)))
@@ -1825,7 +1842,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
     @tree.command(name="ask", description="Ask directly or run one of 41 read-only AI workflows.")
     @app_commands.describe(
         question="what to ask",
-        mode="reasoning = best model (GPT OSS 120B), fast = Groq GPT-OSS 20B",
+        mode="reasoning = DeepSeek V4 Flash 0731, fast = Groq GPT-OSS 20B",
         attachment="optional .txt file attachment to read",
         workflow="optional summary, rewrite, analysis, study, extraction or fact-check workflow",
         instruction="optional tone, language, audience, categories or formatting direction",
@@ -1895,64 +1912,35 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             str(interaction.user.id),
             _guild_id(interaction),
         )
-        if fast:
-            if not config.GROQ_API_KEY:
-                await interaction.followup.send(
-                    embed=embeds.error("fast mode needs a Groq API key."), ephemeral=True
-                )
-                return
-            try:
-                text = await _llm.chat(
-                    config.FAST_MODEL,
-                    [{"role": "user", "content": q}],
-                    system=system,
-                    max_tokens=800,
-                    temperature=0.4,
-                    base_url=config.GROQ_BASE_URL,
-                    api_key=config.GROQ_API_KEY,
-                )
-            except Exception as e:
-                await interaction.followup.send(embed=embeds.error("fast: " + str(e)[:400]))
-                return
-        elif config.LLM_API_KEY:
-            try:
-                text = await _llm.chat(
-                    config.CHAT_MODEL,
-                    [{"role": "user", "content": q}],
-                    system=system,
-                    max_tokens=800,
-                    temperature=0.4,
-                )
-            except Exception as e:
-                await interaction.followup.send(embed=embeds.error("reasoning: " + str(e)[:400]))
-                return
-        else:
-
-            if not ai.deepseek_configured():
-                await interaction.followup.send(
-                    embed=embeds.error(
-                        "no LLM endpoint configured (SEFBOT_LLM_API_KEY) and deepseek "
-                        "isn't configured either."
-                    ),
-                    ephemeral=True,
-                )
-                return
-            try:
-                text = await ai.chat(
-                    system,
-                    [{"role": "user", "content": q}],
-                    max_tokens=800,
-                    temperature=0.4,
-                    model=config.DEEPSEEK_MODEL,
-                    fallbacks=[],
-                    task="workflow",
-                    scope_id=_guild_id(interaction),
-                    user_id=str(interaction.user.id),
-                    prompt_version="direct-ask-v2",
-                )
-            except Exception as e:
-                await interaction.followup.send(embed=embeds.error("deepseek: " + ai.friendly_error(e)))
-                return
+        model = config.FAST_MODEL if fast else config.DEEPSEEK_MODEL
+        if fast and not config.GROQ_API_KEY:
+            await interaction.followup.send(
+                embed=embeds.error("fast mode needs a Groq API key."), ephemeral=True
+            )
+            return
+        if not fast and not ai.deepseek_configured():
+            await interaction.followup.send(
+                embed=embeds.error("deepseek isn't configured."), ephemeral=True
+            )
+            return
+        try:
+            text = await ai.chat(
+                system,
+                [{"role": "user", "content": q}],
+                max_tokens=800,
+                temperature=0.4,
+                model=model,
+                fallbacks=[],
+                task="workflow",
+                scope_id=_guild_id(interaction),
+                user_id=str(interaction.user.id),
+                prompt_version="direct-ask-v3",
+            )
+        except Exception as e:
+            await interaction.followup.send(
+                embed=embeds.error(ai.friendly_error(e)), ephemeral=True
+            )
+            return
         text = brain.scrub_ai_output(text, assistant=True)
         await interaction.followup.send(
             embed=embeds.say(text, title=f"ask · {mode}"), ephemeral=private
@@ -2328,7 +2316,16 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             "Call out bits, people, and vibes. Short paragraphs. No emoji."
         )
         try:
-            text = await ai.chat(system, [{"role": "user", "content": ctx}], max_tokens=700, tier="smart")
+            text = await ai.chat(
+                system,
+                [{"role": "user", "content": ctx}],
+                max_tokens=700,
+                tier="smart",
+                task="recap",
+                scope_id=_guild_id(interaction),
+                user_id=str(interaction.user.id),
+                prompt_version="recap-v1",
+            )
         except Exception as e:
             await interaction.followup.send(embed=embeds.error(f"recap failed: {e}"))
             return
@@ -3255,7 +3252,16 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         )
         await interaction.response.defer(thinking=True, ephemeral=True)
         try:
-            text = await ai.chat(system, [{"role": "user", "content": prompt}], max_tokens=400, tier="smart")
+            text = await ai.chat(
+                system,
+                [{"role": "user", "content": prompt}],
+                max_tokens=400,
+                tier="smart",
+                task="creative",
+                scope_id=_guild_id(interaction),
+                user_id=str(interaction.user.id),
+                prompt_version="roast-battle-v1",
+            )
         except Exception:
             await interaction.followup.send(
                 embed=embeds.error("battle generation failed."), ephemeral=True
@@ -3305,7 +3311,15 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             'Return JSON: {"question":"...","answer":"..."} only. No emoji.'
         )
         await interaction.response.defer(thinking=True)
-        spec = await ai.json_call(system, blob, tier="fast")
+        spec = await ai.json_call(
+            system,
+            blob,
+            tier="fast",
+            task="creative",
+            scope_id=guild_id,
+            user_id=str(interaction.user.id),
+            prompt_version="trivia-v1",
+        )
         if not spec or not spec.get("question"):
             await interaction.followup.send(embed=embeds.error("couldn't invent a question."))
             return
@@ -3629,6 +3643,8 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             resp = await ai.chat(
                 system_prompt, [{"role": "user", "content": user_prompt}],
                 max_tokens=800, model=config.MODEL_SMART, fallbacks=[],
+                task="assistant", scope_id=_guild_id(interaction),
+                user_id=str(interaction.user.id), prompt_version="user-intelligence-v1",
             )
             resp = brain.scrub_ai_output(resp)
             await interaction.followup.send(
@@ -3739,6 +3755,8 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             resp = await ai.chat(
                 system_prompt, [{"role": "user", "content": user_prompt}],
                 max_tokens=800, model=config.MODEL_SMART, fallbacks=[],
+                task="assistant", scope_id=_guild_id(interaction),
+                user_id=str(interaction.user.id), prompt_version="server-intelligence-v1",
             )
             resp = brain.scrub_ai_output(resp)
             await interaction.followup.send(
@@ -3804,7 +3822,13 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 )
                 return
             data, mime = downloaded
-        description, flag = await vision.describe_bytes(data, prompt, mime)
+        description, flag = await vision.describe_bytes(
+            data,
+            prompt,
+            mime,
+            scope_id=_guild_id(interaction),
+            user_id=str(interaction.user.id),
+        )
         text = description
         if flag.get("flagged"):
             text = f"⚠️ **flagged: {flag['category']}** — {flag['reason']}\n\n{description}"
@@ -3814,7 +3838,11 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
     @tree.context_menu(name="Describe image")
     async def describe_image_menu(interaction: discord.Interaction, message: discord.Message):
         await interaction.response.defer(thinking=True, ephemeral=True)
-        text = await vision.describe_message(message)
+        text = await vision.describe_message(
+            message,
+            scope_id=_guild_id(interaction),
+            user_id=str(interaction.user.id),
+        )
         text = brain.scrub_ai_output(text)
         await interaction.followup.send(embed=embeds.say(text, title="describe image"), ephemeral=True)
 
@@ -3896,6 +3924,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 [{"role": "user", "content": request[:1500]}],
                 function_registry.TOOL_SCHEMAS,
                 system=system,
+                task="assistant",
+                scope_id=_guild_id(interaction),
+                user_id=str(interaction.user.id),
             )
         except Exception:
             await interaction.followup.send(

@@ -24,7 +24,7 @@ from typing import Callable, Optional, Tuple
 
 import discord
 
-from sefbot import config, db
+from sefbot import ai_control, config, db
 from sefbot.scope import Scope
 from sefbot.services.llm_client import LLMError, llm
 
@@ -512,6 +512,8 @@ async def _stt_worker(session: SttSession, vc) -> None:
                     wav,
                     api_key=config.GROQ_API_KEY,
                     base_url=config.GROQ_BASE_URL,
+                    scope_id=Scope.guild(session.guild_id).key,
+                    user_id=str(uid),
                 )
                 # Consent, membership, feature flags, and destination access can
                 # all change while the provider request is in flight.
@@ -534,7 +536,7 @@ async def _stt_worker(session: SttSession, vc) -> None:
                 )
             except asyncio.CancelledError:
                 raise
-            except LLMError:
+            except (LLMError, ai_control.AIBudgetExceeded):
                 log.warning("stt transcription failed")
             except (discord.Forbidden, discord.NotFound):
                 session.stop_event.set()
@@ -704,8 +706,10 @@ async def say(interaction: discord.Interaction, text: str) -> Tuple[bool, str]:
                 response_format="wav",
                 api_key=config.GROQ_API_KEY,
                 base_url=config.GROQ_BASE_URL,
+                scope_id=Scope.guild(guild.id).key,
+                user_id=str(interaction.user.id),
             )
-        except LLMError:
+        except (LLMError, ai_control.AIBudgetExceeded):
             if connected_here:
                 with contextlib.suppress(discord.HTTPException):
                     await vc.disconnect()

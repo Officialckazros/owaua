@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Tuple
 
 import discord
 
-from sefbot import config
+from sefbot import ai_control, config
 from sefbot.services.llm_client import LLMError, coerce_bool, llm, sniff_image_mime
 
 log = logging.getLogger("sefbot.vision")
@@ -45,7 +45,12 @@ def collect_image_urls(message: discord.Message) -> List[str]:
 
 
 async def describe_bytes(
-    image_bytes: bytes, prompt: str = "", mime: str = "image/png"
+    image_bytes: bytes,
+    prompt: str = "",
+    mime: str = "image/png",
+    *,
+    scope_id: str | None = None,
+    user_id: str | None = None,
 ) -> Tuple[str, Dict]:
     """Describe image bytes + safety flag in one vision call."""
     detected_mime = sniff_image_mime(image_bytes)
@@ -68,7 +73,11 @@ async def describe_bytes(
             image_bytes,
             text_prompt,
             mime=detected_mime,
+            scope_id=scope_id,
+            user_id=user_id,
         )
+    except ai_control.AIBudgetExceeded as e:
+        return str(e), {}
     except LLMError as e:
         log.warning("vision request failed (%s)", type(e).__name__)
         return "(vision failed: provider unavailable)", {}
@@ -85,7 +94,13 @@ async def describe_bytes(
     return description or "(no description)", flag
 
 
-async def describe_message(message: discord.Message, prompt: str = "") -> str:
+async def describe_message(
+    message: discord.Message,
+    prompt: str = "",
+    *,
+    scope_id: str | None = None,
+    user_id: str | None = None,
+) -> str:
     """Describe the first image on a message (context-menu entry point)."""
     urls = collect_image_urls(message)
     if not urls:
@@ -94,7 +109,9 @@ async def describe_message(message: discord.Message, prompt: str = "") -> str:
     if downloaded is None:
         return "couldn't fetch the image."
     data, mime = downloaded
-    description, flag = await describe_bytes(data, prompt, mime)
+    description, flag = await describe_bytes(
+        data, prompt, mime, scope_id=scope_id, user_id=user_id
+    )
     if flag.get("flagged"):
         return (
             f"⚠️ **flagged: {flag['category']}** — {flag['reason']}\n\n{description}"

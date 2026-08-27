@@ -419,11 +419,19 @@ SERVER_SETTINGS: Final[dict[str, dict]] = {
     },
     "ai_requests_per_minute": {
         "label": "AI requests per minute",
-        "description": "Per-feature server budget that prevents accidental provider and cost spikes.",
+        "description": "Aggregate server budget across every AI feature. The host hard limit still applies.",
         "kind": "integer",
-        "default": 120,
-        "minimum": 10,
-        "maximum": 600,
+        "default": 30,
+        "minimum": 1,
+        "maximum": 60,
+    },
+    "ai_tokens_per_minute": {
+        "label": "AI reserved tokens per minute",
+        "description": "Aggregate input plus maximum-output budget across provider attempts in this server.",
+        "kind": "integer",
+        "default": 150000,
+        "minimum": 10000,
+        "maximum": 300000,
     },
     "ai_context_chars": {
         "label": "AI context character budget",

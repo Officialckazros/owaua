@@ -17,7 +17,7 @@ import re
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-from sefbot import config, db
+from sefbot import ai_control, config, db
 from sefbot.services.llm_client import LLMError, llm
 
 log = logging.getLogger("sefbot.multilingual")
@@ -56,7 +56,13 @@ async def detect_lang(text: str) -> Optional[str]:
     return lang
 
 
-async def translate_text(text: str, target_lang: str) -> str:
+async def translate_text(
+    text: str,
+    target_lang: str,
+    *,
+    scope_id: str | None = None,
+    user_id: str | None = None,
+) -> str:
     """Translate text with the fast model before it hits the brain."""
     system = (
         f"You are a translation assistant. Translate the following text to "
@@ -71,13 +77,23 @@ async def translate_text(text: str, target_lang: str) -> str:
             temperature=0.0,
             max_tokens=500,
             tier="fast",
+            task="workflow",
+            scope_id=scope_id,
+            user_id=user_id,
+            prompt_version="translation-v1",
         )
     except Exception:
         return text
 
 
 async def maybe_multilingual_reply(
-    channel, guild, text: str, lang: Optional[str]
+    channel,
+    guild,
+    text: str,
+    lang: Optional[str],
+    *,
+    scope_id: str | None = None,
+    user_id: str | None = None,
 ) -> Optional[str]:
     """Return a Groq GPT-OSS 20B reply in the message's language, or None.
 
@@ -105,8 +121,11 @@ async def maybe_multilingual_reply(
             max_tokens=600,
             base_url=config.GROQ_BASE_URL,
             api_key=config.GROQ_API_KEY,
+            task="workflow",
+            scope_id=scope_id,
+            user_id=user_id,
         )
-    except LLMError as e:
+    except (LLMError, ai_control.AIBudgetExceeded) as e:
         log.warning("multilingual reply failed: %s", e)
         return None
 

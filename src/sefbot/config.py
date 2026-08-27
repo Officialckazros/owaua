@@ -83,7 +83,11 @@ DEEPSEEK_BASE_URL = (
     os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com/v1"
 ).rstrip("/")
 
+# DeepSeek exposes the current 0731 checkpoint through this stable API id.
+# Dated display/version names such as ``deepseek-v4-flash-0731`` are not valid
+# request ids on the official API and are migrated below for compatibility.
 OFFICIAL_DEEPSEEK_MODEL = "deepseek-v4-flash"
+OFFICIAL_DEEPSEEK_MODEL_VERSION = "DeepSeek-V4-Flash-0731"
 _configured_deepseek_model = (
     os.getenv("DEEPSEEK_MODEL") or OFFICIAL_DEEPSEEK_MODEL
 ).strip()
@@ -260,7 +264,7 @@ def model_display(model: str) -> str:
     if model == MODEL_BIG:
         return "free big-brain — NVIDIA Nemotron 3 Ultra 550B (1M context)"
     if model == DEFAULT_MODEL:
-        return "DeepSeek V4 Flash — official API (`deepseek-v4-flash`)"
+        return "DeepSeek V4 Flash 0731 — official API (`deepseek-v4-flash`)"
     label = _GROQ_LABELS.get(model)
     if label:
         return f"{label} (`{model}`)"
@@ -351,8 +355,27 @@ LURK_MIN_SECONDS = _int("SEFBOT_LURK_MIN_SECONDS", 900)
 LURK_IDLE_SECONDS = _int("SEFBOT_LURK_IDLE_SECONDS", 600)
 EMBED_COLOR = int(os.getenv("SEFBOT_EMBED_COLOR", "0x5865F2"), 0)
 
-AI_MAX_CONCURRENCY = _int("SEFBOT_AI_MAX_CONCURRENCY", 10)
-AI_REQUESTS_PER_MINUTE = _int("SEFBOT_AI_REQUESTS_PER_MINUTE", 120)
+AI_MAX_CONCURRENCY = max(1, min(4, _int("SEFBOT_AI_MAX_CONCURRENCY", 4)))
+# Host hard ceilings. Guild dashboard values may only lower these limits.
+AI_REQUESTS_PER_MINUTE = max(
+    1, min(60, _int("SEFBOT_AI_REQUESTS_PER_MINUTE", 60))
+)
+AI_USER_REQUESTS_PER_MINUTE = max(
+    1, min(6, _int("SEFBOT_AI_USER_REQUESTS_PER_MINUTE", 6))
+)
+AI_PROVIDER_ATTEMPTS_PER_MINUTE = max(
+    1, min(120, _int("SEFBOT_AI_PROVIDER_ATTEMPTS_PER_MINUTE", 120))
+)
+AI_TOKEN_BUDGET_PER_MINUTE = max(
+    10_000, min(300_000, _int("SEFBOT_AI_TOKEN_BUDGET_PER_MINUTE", 300_000))
+)
+AI_USER_TOKEN_BUDGET_PER_MINUTE = max(
+    5_000,
+    min(30_000, _int("SEFBOT_AI_USER_TOKEN_BUDGET_PER_MINUTE", 30_000)),
+)
+AI_MAX_PROVIDER_ATTEMPTS = max(
+    1, min(4, _int("SEFBOT_AI_MAX_PROVIDER_ATTEMPTS", 4))
+)
 AI_CONTEXT_MAX_CHARS = _int("SEFBOT_AI_CONTEXT_MAX_CHARS", 48_000)
 AI_CIRCUIT_FAILURES = _int("SEFBOT_AI_CIRCUIT_FAILURES", 3)
 AI_CIRCUIT_COOLDOWN_SECONDS = _float("SEFBOT_AI_CIRCUIT_COOLDOWN_SECONDS", 60.0)

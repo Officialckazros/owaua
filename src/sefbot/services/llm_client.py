@@ -186,11 +186,13 @@ class LLMClient:
         api_key: Optional[str] = None,
         timeout: float = 60.0,
         connect_timeout: float = 15.0,
-        max_retries: int = 3,
+        max_retries: int = 1,
     ) -> None:
         self.base_url = _safe_provider_base(base_url or config.LLM_BASE_URL)
         self.api_key = api_key if api_key is not None else config.LLM_API_KEY
-        self.max_retries = max_retries
+        self.max_retries = max(
+            0, min(int(max_retries), max(0, int(config.AI_MAX_PROVIDER_ATTEMPTS) - 1))
+        )
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(timeout, connect=connect_timeout),
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
@@ -216,13 +218,25 @@ class LLMClient:
         payload: Dict[str, Any],
         *,
         retries: Optional[int] = None,
+        scope_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """POST JSON with retries + exponential backoff on 429/5xx/timeouts."""
-        attempts = self.max_retries if retries is None else retries
+        attempts = self.max_retries if retries is None else max(
+            0, min(int(retries), max(0, int(config.AI_MAX_PROVIDER_ATTEMPTS) - 1))
+        )
         health_key = str(payload.get("model") or url)[:160]
         if not ai_control.provider_available(health_key):
             raise LLMError("provider circuit is temporarily open")
+        estimated_tokens = ai_control.estimate_chat_tokens(
+            "", payload.get("messages") or []
+        ) + max(0, int(payload.get("max_tokens") or 0))
         for attempt in range(attempts + 1):
+            ai_control.reserve_provider_attempt(
+                scope_id=scope_id,
+                user_id=user_id,
+                estimated_tokens=estimated_tokens,
+            )
             started = time.perf_counter()
             try:
                 resp = await self._client.post(url, headers=headers, json=payload)
@@ -290,6 +304,9 @@ class LLMClient:
         *,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
+        task: str = "workflow",
+        scope_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         base, key = self._resolve(base_url, api_key)
         if not key:
@@ -298,7 +315,14 @@ class LLMClient:
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
         }
-        data = await self._post_json(f"{base}/chat/completions", headers, payload)
+        ai_control.check_request_budget(scope_id, task, user_id=user_id)
+        data = await self._post_json(
+            f"{base}/chat/completions",
+            headers,
+            payload,
+            scope_id=scope_id,
+            user_id=user_id,
+        )
         choices = data.get("choices") or []
         if not choices:
             raise LLMError("provider returned no completion choices")
@@ -315,6 +339,9 @@ class LLMClient:
         max_tokens: int = 800,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
+        task: str = "workflow",
+        scope_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> str:
         """Run a chat completion and return the assistant's text."""
         msgs = list(messages)
@@ -326,7 +353,14 @@ class LLMClient:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        msg = await self._chat_completion(payload, base_url=base_url, api_key=api_key)
+        msg = await self._chat_completion(
+            payload,
+            base_url=base_url,
+            api_key=api_key,
+            task=task,
+            scope_id=scope_id,
+            user_id=user_id,
+        )
         return str(msg.get("content") or "").strip()
 
     async def chat_with_tools(
@@ -341,6 +375,9 @@ class LLMClient:
         max_tokens: int = 1000,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
+        task: str = "assistant",
+        scope_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Tuple[str, List[Dict[str, str]]]:
         """Chat completion with tool-calling.
 
@@ -358,7 +395,14 @@ class LLMClient:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        msg = await self._chat_completion(payload, base_url=base_url, api_key=api_key)
+        msg = await self._chat_completion(
+            payload,
+            base_url=base_url,
+            api_key=api_key,
+            task=task,
+            scope_id=scope_id,
+            user_id=user_id,
+        )
         text = str(msg.get("content") or "").strip()
         calls: List[Dict[str, str]] = []
         for tc in msg.get("tool_calls") or []:
@@ -381,6 +425,9 @@ class LLMClient:
         max_tokens: int = 600,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
+        task: str = "workflow",
+        scope_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Optional[dict]:
         """Chat completion forced to return a single JSON object."""
         sys_text = system or "Respond with ONLY a single valid JSON object, no prose."
@@ -392,6 +439,9 @@ class LLMClient:
             max_tokens=max_tokens,
             base_url=base_url,
             api_key=api_key,
+            task=task,
+            scope_id=scope_id,
+            user_id=user_id,
         )
         return _extract_json(raw)
 
@@ -407,6 +457,9 @@ class LLMClient:
         temperature: float = 0.2,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
+        task: str = "vision",
+        scope_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> str:
         """Send an image (inlined base64) to a vision model and return its text."""
         parts = [
@@ -423,6 +476,9 @@ class LLMClient:
             max_tokens=max_tokens,
             base_url=base_url,
             api_key=api_key,
+            task=task,
+            scope_id=scope_id,
+            user_id=user_id,
         )
 
     async def vision_json(
@@ -435,6 +491,9 @@ class LLMClient:
         max_tokens: int = 700,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
+        task: str = "vision",
+        scope_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Optional[dict]:
         """Vision pass that must return a JSON object (e.g. description + flag)."""
         parts = [
@@ -452,6 +511,9 @@ class LLMClient:
             max_tokens=max_tokens,
             base_url=base_url,
             api_key=api_key,
+            task=task,
+            scope_id=scope_id,
+            user_id=user_id,
         )
         return _extract_json(raw)
 
@@ -528,8 +590,16 @@ class LLMClient:
         return result[0] if result else None
 
 
-    async def moderate(self, model: str, text: str, *, base_url: Optional[str] = None,
-                       api_key: Optional[str] = None) -> Dict[str, Any]:
+    async def moderate(
+        self,
+        model: str,
+        text: str,
+        *,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        scope_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Passive content moderation. Returns ``{"flagged", "category", "reason", "confidence"}``."""
         system = (
             "You are a content moderation classifier for a Discord server that allows dark humor, "
@@ -550,6 +620,9 @@ class LLMClient:
             temperature=0.0,
             base_url=base_url,
             api_key=api_key,
+            task="moderation",
+            scope_id=scope_id,
+            user_id=user_id,
         )
         if not result:
             return {"flagged": False, "category": "none", "reason": "", "confidence": 0.0}
@@ -580,16 +653,20 @@ class LLMClient:
         language: Optional[str] = None,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
+        scope_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> str:
         """Speech-to-text via the OpenAI-compatible /audio/transcriptions endpoint."""
         base, key = self._resolve(base_url, api_key)
         if not key:
             raise LLMError("no API key configured for transcription")
         headers = {"Authorization": f"Bearer {key}"}
+        ai_control.check_request_budget(scope_id, "transcription", user_id=user_id)
         data: Dict[str, Any] = {"model": model}
         if language:
             data["language"] = language
         for attempt in range(self.max_retries + 1):
+            ai_control.reserve_provider_attempt(scope_id=scope_id, user_id=user_id)
             try:
                 resp = await self._client.post(
                     f"{base}/audio/transcriptions",
@@ -624,12 +701,15 @@ class LLMClient:
         response_format: str = "wav",
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
+        scope_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> bytes:
         """Text-to-speech via the OpenAI-compatible /audio/speech endpoint. Returns audio bytes."""
         base, key = self._resolve(base_url, api_key)
         if not key:
             raise LLMError("no API key configured for TTS")
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        ai_control.check_request_budget(scope_id, "speech", user_id=user_id)
         payload = {
             "model": model,
             # Groq's current Orpheus API accepts at most 200 characters.
@@ -640,6 +720,11 @@ class LLMClient:
             "response_format": response_format,
         }
         for attempt in range(self.max_retries + 1):
+            ai_control.reserve_provider_attempt(
+                scope_id=scope_id,
+                user_id=user_id,
+                estimated_tokens=ai_control.estimate_tokens(payload),
+            )
             try:
                 resp = await self._client.post(
                     f"{base}/audio/speech", headers=headers, json=payload

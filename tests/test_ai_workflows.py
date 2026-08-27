@@ -44,6 +44,7 @@ class WorkflowCatalogTest(unittest.TestCase):
             "ai_staff_triage": False,
             "ai_mode_default": "reasoning",
             "ai_requests_per_minute": 9999,
+            "ai_tokens_per_minute": 9999999,
             "ai_context_chars": 1,
             "ai_structured_repair": False,
             "ai_tracing_enabled": False,
@@ -56,7 +57,8 @@ class WorkflowCatalogTest(unittest.TestCase):
         self.assertFalse(merged["ai_fact_check_search"])
         self.assertFalse(merged["ai_staff_triage"])
         self.assertEqual(merged["ai_mode_default"], "reasoning")
-        self.assertEqual(merged["ai_requests_per_minute"], 600)
+        self.assertEqual(merged["ai_requests_per_minute"], 60)
+        self.assertEqual(merged["ai_tokens_per_minute"], 300_000)
         self.assertEqual(merged["ai_context_chars"], 12_000)
         self.assertFalse(merged["ai_structured_repair"])
         self.assertFalse(merged["ai_tracing_enabled"])

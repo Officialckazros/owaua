@@ -13,7 +13,7 @@ from typing import Optional
 
 import discord
 
-from sefbot import config, db, embeds
+from sefbot import ai_control, config, db, embeds
 from sefbot.scope import Scope
 from sefbot.services.llm_client import LLMError, llm
 
@@ -429,6 +429,8 @@ async def safety_check(message: discord.Message) -> None:
             message.content[:4000],
             base_url=config.SAFETY_BASE_URL,
             api_key=config.SAFETY_API_KEY,
+            scope_id=Scope.guild(message.guild.id).key,
+            user_id=str(message.author.id),
         )
         if not isinstance(result, dict):
             return
@@ -438,7 +440,7 @@ async def safety_check(message: discord.Message) -> None:
             confidence = 0.0
         if result.get("flagged") is True and confidence >= config.SAFETY_MIN_CONFIDENCE:
             await _queue_review(message, result)
-    except LLMError:
+    except (LLMError, ai_control.AIBudgetExceeded):
         log.warning("safety model unavailable")
     except asyncio.CancelledError:
         raise

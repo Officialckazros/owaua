@@ -67,6 +67,13 @@ class DeepseekModelTest(unittest.TestCase):
             "deepseek-v4-flash",
         )
 
+    def test_official_api_id_is_the_0731_checkpoint(self) -> None:
+        self.assertEqual(config.OFFICIAL_DEEPSEEK_MODEL, "deepseek-v4-flash")
+        self.assertEqual(
+            config.OFFICIAL_DEEPSEEK_MODEL_VERSION, "DeepSeek-V4-Flash-0731"
+        )
+        self.assertIn("0731", config.model_display(config.DEFAULT_MODEL))
+
 
 class ExtractJsonTest(unittest.TestCase):
     def test_fenced_object(self) -> None:
@@ -119,7 +126,7 @@ class GenerateRetryTest(unittest.TestCase):
 
         def fake(model, system, messages, max_tokens, temperature):
             calls["n"] += 1
-            if calls["n"] < 3:
+            if calls["n"] < 2:
                 raise RuntimeError("deepseek: empty content")
             return '{"response": "recovered"}'
 
@@ -135,6 +142,30 @@ class GenerateRetryTest(unittest.TestCase):
                 0.5,
             )
         self.assertEqual(out, '{"response": "recovered"}')
+        self.assertEqual(calls["n"], 2)
+
+    def test_total_provider_attempts_are_capped_across_fallbacks(self) -> None:
+        calls = {"n": 0}
+
+        def fake(model, system, messages, max_tokens, temperature):
+            calls["n"] += 1
+            raise RuntimeError("deepseek: empty content")
+
+        ai.ai_control._provider_attempts.clear()
+        ai.ai_control._token_usage.clear()
+        with mock.patch.object(ai, "_deepseek_generate", fake), \
+             mock.patch.object(ai.time, "sleep"), \
+             mock.patch.object(config, "DEEPSEEK_API_KEY", "test-key"), \
+             mock.patch.object(config, "AI_MAX_PROVIDER_ATTEMPTS", 3):
+            with self.assertRaisesRegex(RuntimeError, "empty content"):
+                ai._generate(
+                    "deepseek-v4-flash",
+                    "sys",
+                    [{"role": "user", "content": "hi"}],
+                    100,
+                    0.5,
+                    fallbacks=["deepseek-v4-flash-backup", "deepseek-v4-flash-last"],
+                )
         self.assertEqual(calls["n"], 3)
 
     def test_empty_string_is_not_treated_as_success(self) -> None:

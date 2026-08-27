@@ -68,7 +68,13 @@ except Exception:
     detect = None
 
 
-async def translate_text(text: str, target_lang: str) -> str:
+async def translate_text(
+    text: str,
+    target_lang: str,
+    *,
+    scope_id: str | None = None,
+    user_id: str | None = None,
+) -> str:
     """Translate text to target language using the AI model."""
     system = f"You are a translation assistant. Translate the following text to {target_lang} while preserving meaning and tone."
     try:
@@ -78,6 +84,10 @@ async def translate_text(text: str, target_lang: str) -> str:
             temperature=0.0,
             max_tokens=500,
             tier="fast",
+            task="workflow",
+            scope_id=scope_id,
+            user_id=user_id,
+            prompt_version="translation-v1",
         )
         return result
     except Exception:
@@ -810,6 +820,8 @@ async def _lurk_tick():
             text = await ai.chat(
                 system, [{"role": "user", "content": ctx}],
                 max_tokens=120, temperature=0.95, tier="fast",
+                task="creative", scope_id=gid,
+                prompt_version="lurk-v1",
             )
         except Exception as e:
             _LOG.debug("lurk generation failed: %s", e)
@@ -1651,7 +1663,9 @@ async def _chat(
     if imgs:
         print(f"[vision] describing {len(imgs)} image(s) for {author}")
         async with message.channel.typing():
-            image_notes = await ai.describe_images(imgs, caption=query)
+            image_notes = await ai.describe_images(
+                imgs, caption=query, scope_id=guild_id, user_id=author
+            )
         if image_notes and not image_notes.lower().startswith("(vision failed"):
             print(f"[vision] ok ({len(image_notes)} chars)")
         else:
@@ -1675,7 +1689,12 @@ async def _chat(
         chosen = multilingual.effective_language(author, guild_id)
         if chosen is None:
             multi = await multilingual.maybe_multilingual_reply(
-                message.channel, message.guild, query, detected
+                message.channel,
+                message.guild,
+                query,
+                detected,
+                scope_id=guild_id,
+                user_id=author,
             )
             if multi:
                 multi = brain.scrub_ai_output(multi)
@@ -1686,7 +1705,9 @@ async def _chat(
                     reference=message,
                 )
                 return
-        query = await translate_text(query, "English")
+        query = await translate_text(
+            query, "English", scope_id=guild_id, user_id=author
+        )
     assistant = bool(force_assistant)
     ch = message.channel
     if message.guild is None:
@@ -2808,6 +2829,8 @@ async def _cmd_cybersec(message, arg, guild_id, author):
                 brain.cybersec_system(persona),
                 [{"role": "user", "content": topic}],
                 max_tokens=1000, temperature=0.4, tier="expert",
+                task="fact_check", scope_id=guild_id, user_id=author,
+                prompt_version="cybersec-v1",
             )
         except Exception as e:
             await _send(message.channel, embeds.error("tutor's offline: " + ai.friendly_error(e)), feedback=False)
@@ -2857,6 +2880,8 @@ async def _cmd_ask(message, arg, guild_id, author):
                 max_tokens=800, temperature=0.4,
                 model=config.DEEPSEEK_MODEL,
                 fallbacks=[],
+                task="workflow", scope_id=guild_id, user_id=author,
+                prompt_version="direct-ask-v2",
             )
         except Exception as e:
             await _send(message.channel, embeds.error(
@@ -3327,6 +3352,8 @@ async def _cmd_vibecheck(message, arg, guild_id, author):
             text = await ai.chat(
                 system, [{"role": "user", "content": ctx}],
                 max_tokens=400, tier="smart",
+                task="creative", scope_id=guild_id, user_id=author,
+                prompt_version="vibecheck-v1",
             )
         except Exception as e:
             await _send(message.channel, embeds.error("couldn't read the room: " + ai.friendly_error(e)), feedback=False)
@@ -3562,6 +3589,8 @@ async def _cmd_recap(message, arg, guild_id, author):
             text = await ai.chat(
                 system, [{"role": "user", "content": ctx}],
                 max_tokens=700, tier="smart",
+                task="recap", scope_id=guild_id, user_id=author,
+                prompt_version="recap-v1",
             )
         except Exception as e:
             await _send(message.channel, embeds.error(f"recap failed: {e}"), feedback=False)
@@ -3798,6 +3827,8 @@ async def _cmd_user(message, arg, guild_id, author):
             resp = await ai.chat(
                 system_prompt, [{"role": "user", "content": user_prompt}],
                 max_tokens=800, model=config.MODEL_SMART, fallbacks=[],
+                task="assistant", scope_id=guild_id, user_id=author,
+                prompt_version="user-intelligence-v1",
             )
             resp = brain.scrub_ai_output(resp)
             await _send_private(
@@ -4175,6 +4206,8 @@ async def _cmd_roastbattle(message, arg, guild_id, author):
             text = await ai.chat(
                 system, [{"role": "user", "content": prompt}],
                 max_tokens=400, tier="smart",
+                task="creative", scope_id=guild_id, user_id=author,
+                prompt_version="roast-battle-v1",
             )
         except Exception as e:
             await _send(message.channel, embeds.error(f"battle cancelled: {e}"), feedback=False)
@@ -4210,7 +4243,15 @@ async def _cmd_trivia(message, arg, guild_id, author):
         'Return JSON: {"question":"...","answer":"..."} only. No emoji.'
     )
     async with message.channel.typing():
-        spec = await ai.json_call(system, blob, tier="fast")
+        spec = await ai.json_call(
+            system,
+            blob,
+            tier="fast",
+            task="creative",
+            scope_id=guild_id,
+            user_id=author,
+            prompt_version="trivia-v1",
+        )
     if not spec or not spec.get("question"):
         await _send(message.channel, embeds.error("couldn't invent a question."), feedback=False)
         return
@@ -4269,6 +4310,8 @@ async def _cmd_whoami(message, arg, guild_id, author):
             text = await ai.chat(
                 system, [{"role": "user", "content": prompt}],
                 max_tokens=350, tier="smart",
+                task="assistant", scope_id=guild_id, user_id=author,
+                prompt_version="whoami-v1",
             )
         except Exception:
             await _send(message.channel, embeds.error("couldn't generate that private summary."), feedback=False)

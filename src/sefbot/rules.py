@@ -24,7 +24,7 @@ from typing import Deque, Dict, List, Optional, Tuple
 
 import discord
 
-from sefbot import config, db, embeds, staffops
+from sefbot import ai_control, config, db, embeds, staffops
 from sefbot.scope import Scope
 from sefbot.services.llm_client import LLMError, coerce_bool
 from sefbot.services.llm_client import llm as _llm
@@ -766,9 +766,12 @@ async def _llm_confirm_request(message: discord.Message, rule: Rule) -> bool:
             max_tokens=150,
             base_url=config.SAFETY_BASE_URL,
             api_key=config.SAFETY_API_KEY,
+            task="moderation",
+            scope_id=Scope.guild(message.guild.id).key,
+            user_id=str(message.author.id),
         )
         return coerce_bool((result or {}).get("violated"))
-    except (LLMError, TypeError, ValueError, KeyError):
+    except (LLMError, ai_control.AIBudgetExceeded, TypeError, ValueError, KeyError):
         log.warning("rules llm confirmation unavailable for %s", rule.id)
         return True
 

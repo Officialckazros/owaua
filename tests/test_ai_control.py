@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import collections
 import time
 import unittest
 from unittest import mock
@@ -14,12 +15,66 @@ class AIControlTest(unittest.TestCase):
         config.DB_PATH = ":memory:"
         ai_control._health.clear()
         ai_control._usage.clear()
+        ai_control._token_usage.clear()
+        ai_control._provider_attempts.clear()
 
     def tearDown(self) -> None:
         db.close()
         config.DB_PATH = self.old_path
         ai_control._health.clear()
         ai_control._usage.clear()
+        ai_control._token_usage.clear()
+        ai_control._provider_attempts.clear()
+
+    def test_user_budget_cannot_be_bypassed_by_task_or_scope(self) -> None:
+        with mock.patch.object(config, "AI_REQUESTS_PER_MINUTE", 50), mock.patch.object(
+            config, "AI_USER_REQUESTS_PER_MINUTE", 2
+        ):
+            ai_control.check_request_budget("guild:1", "chat", user_id="42")
+            ai_control.check_request_budget("dm:42", "workflow", user_id="42")
+            with self.assertRaises(ai_control.AIBudgetExceeded):
+                ai_control.check_request_budget("guild:2", "vision", user_id="42")
+
+    def test_scope_budget_is_aggregate_across_users_and_tasks(self) -> None:
+        db.guild_settings_set("guild:1", ai_requests_per_minute=2)
+        with mock.patch.object(config, "AI_REQUESTS_PER_MINUTE", 50), mock.patch.object(
+            config, "AI_USER_REQUESTS_PER_MINUTE", 50
+        ):
+            ai_control.check_request_budget("guild:1", "chat", user_id="1")
+            ai_control.check_request_budget("guild:1", "workflow", user_id="2")
+            with self.assertRaises(ai_control.AIBudgetExceeded):
+                ai_control.check_request_budget("guild:1", "vision", user_id="3")
+
+    def test_provider_attempt_token_reservation_is_atomic(self) -> None:
+        with mock.patch.object(config, "AI_PROVIDER_ATTEMPTS_PER_MINUTE", 10), mock.patch.object(
+            config, "AI_TOKEN_BUDGET_PER_MINUTE", 1_000
+        ), mock.patch.object(config, "AI_USER_TOKEN_BUDGET_PER_MINUTE", 1_000):
+            ai_control.reserve_provider_attempt(user_id="42", estimated_tokens=600)
+            with self.assertRaises(ai_control.AIBudgetExceeded):
+                ai_control.reserve_provider_attempt(user_id="42", estimated_tokens=600)
+        self.assertEqual(len(ai_control._provider_attempts), 1)
+        self.assertEqual(len(ai_control._token_usage[("global", "*")]), 1)
+
+    def test_multimodal_estimate_does_not_count_base64_transport_as_text(self) -> None:
+        messages = [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe this"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64," + ("A" * 1_000_000)},
+                },
+            ],
+        }]
+        self.assertLess(ai_control.estimate_chat_tokens("vision", messages), 3_000)
+
+    def test_expired_identity_buckets_are_removed(self) -> None:
+        ai_control._usage[("user", "old")] = collections.deque([1.0])
+        ai_control._token_usage[("user", "old")] = collections.deque([(1.0, 100)])
+        with mock.patch.object(ai_control.time, "monotonic", return_value=100.0):
+            ai_control.check_request_budget("dm:42", "chat", user_id="42")
+        self.assertNotIn(("user", "old"), ai_control._usage)
+        self.assertNotIn(("user", "old"), ai_control._token_usage)
 
     def test_modes_route_by_policy_without_weakening_capabilities(self) -> None:
         ai_control.set_user_mode("42", "reasoning")

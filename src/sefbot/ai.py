@@ -58,7 +58,7 @@ _FATAL_MARKERS = (
     "no openrouter api key", "no gemini api key", "no cerebras api key",
     "no anthropic", "no model available",
 )
-_SAME_MODEL_ATTEMPTS = 3
+_SAME_MODEL_ATTEMPTS = 2
 _MAX_PROVIDER_RESPONSE_BYTES = 4_000_000
 
 ContentPart = Union[str, dict]
@@ -790,8 +790,19 @@ def _anthropic_generate(model, system, messages, max_tokens, temperature) -> str
     return "".join(b.text for b in resp.content if b.type == "text").strip()
 
 
-def _generate(requested, system, messages, max_tokens, temperature,
-              fallbacks=None, trace=None) -> str:
+def _generate(
+    requested,
+    system,
+    messages,
+    max_tokens,
+    temperature,
+    fallbacks=None,
+    trace=None,
+    *,
+    scope_id=None,
+    user_id=None,
+    estimated_tokens=1,
+) -> str:
     """Run the request down a fallback chain.
 
     Quotas are per (provider, org, model), so when one is exhausted a different
@@ -804,7 +815,11 @@ def _generate(requested, system, messages, max_tokens, temperature,
     pool = config.MODEL_FALLBACKS if fallbacks is None else fallbacks
     chain = [requested] + [m for m in pool if m != requested]
     last = None
+    attempts_used = 0
+    attempt_limit = max(1, min(20, int(config.AI_MAX_PROVIDER_ATTEMPTS)))
     for model in chain:
+        if attempts_used >= attempt_limit:
+            break
         if not ai_control.provider_available(model):
             continue
         if _is_mercury(model) and not config.INCEPTION_API_KEY:
@@ -848,8 +863,15 @@ def _generate(requested, system, messages, max_tokens, temperature,
             fn = _gemini_generate
         else:
             fn = _groq_generate
-        for attempt in range(_SAME_MODEL_ATTEMPTS):
+        model_attempts = min(_SAME_MODEL_ATTEMPTS, attempt_limit - attempts_used)
+        for attempt in range(model_attempts):
             started = time.perf_counter()
+            ai_control.reserve_provider_attempt(
+                scope_id=scope_id,
+                user_id=user_id,
+                estimated_tokens=estimated_tokens,
+            )
+            attempts_used += 1
             if trace is not None:
                 trace["attempts"] = int(trace.get("attempts") or 0) + 1
             try:
@@ -882,7 +904,7 @@ def _generate(requested, system, messages, max_tokens, temperature,
                     model, attempt + 1, _SAME_MODEL_ATTEMPTS,
                     type(e).__name__, str(e)[:240],
                 )
-                if _is_transient(e) and attempt < _SAME_MODEL_ATTEMPTS - 1:
+                if _is_transient(e) and attempt < model_attempts - 1:
                     time.sleep(0.4 * (attempt + 1))
                     continue
                 break
@@ -897,6 +919,8 @@ def friendly_error(e: Exception) -> str:
     s = str(e)
     sl = s.lower()
     _LOG.warning("provider call failed (%s): %s", type(e).__name__, s[:400])
+    if isinstance(e, ai_control.AIBudgetExceeded) or "ai spending limit" in sl:
+        return sl.replace("ai spending limit", "AI spending limit", 1)
     if _is_rate_limited(e):
         m = re.search(r"try again in ([0-9hms.]+)", s, re.I)
         wait = f" try again in {m.group(1)}." if m else " give it a few minutes."
@@ -986,20 +1010,33 @@ async def chat(
     if tier == "vision" and fallbacks is None:
         fallbacks = []
 
-    ai_control.check_request_budget(scope_id, decision.task)
+    ai_control.check_request_budget(scope_id, decision.task, user_id=user_id)
+    estimated_tokens = (
+        ai_control.estimate_chat_tokens(system, messages) + max_tokens
+    )
     trace = ai_control.begin_trace(
         task=decision.task,
         scope_id=scope_id,
         route_name=tier,
         requested_model=use_model,
         prompt_version=decision.prompt_version,
-        input_tokens=ai_control.estimate_tokens(system) + ai_control.estimate_tokens(messages),
+        input_tokens=estimated_tokens - max_tokens,
         max_output_tokens=max_tokens,
     )
 
     def _call():
-        return _generate(use_model, system, messages, max_tokens, temperature,
-                         fallbacks=fallbacks, trace=trace)
+        return _generate(
+            use_model,
+            system,
+            messages,
+            max_tokens,
+            temperature,
+            fallbacks=fallbacks,
+            trace=trace,
+            scope_id=scope_id,
+            user_id=user_id,
+            estimated_tokens=estimated_tokens,
+        )
 
     try:
         async with _llm_semaphore():
@@ -1110,7 +1147,13 @@ async def json_call(
     return ai_control.validate_structured(_extract_json(repaired), schema)
 
 
-async def describe_images(image_urls: List[str], caption: str = "") -> str:
+async def describe_images(
+    image_urls: List[str],
+    caption: str = "",
+    *,
+    scope_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> str:
     """Vision pass: short description of attached / embed image URLs.
 
     Prefers inlined base64 data URLs so Groq (etc.) doesn't have to fetch
@@ -1168,11 +1211,15 @@ async def describe_images(image_urls: List[str], caption: str = "") -> str:
                 model=model,
                 tier="vision",
                 fallbacks=[],
+                scope_id=scope_id,
+                user_id=user_id,
             )
             if out and out.strip() and not out.strip().lower().startswith("(vision failed"):
                 if i:
                     print(f"[vision] served by fallback {model}")
                 return out.strip()
+        except ai_control.AIBudgetExceeded:
+            raise
         except Exception as e:
             _LOG.warning("vision provider %s failed (%s)", model, type(e).__name__)
             continue

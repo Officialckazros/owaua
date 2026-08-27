@@ -45,7 +45,15 @@ async def create_command(
         'Return JSON: {"name": "...", "description": "one line", '
         '"behavior": "system prompt for the command"}'
     )
-    spec = await ai.json_call(system, prompt, tier="smart")
+    spec = await ai.json_call(
+        system,
+        prompt,
+        tier="smart",
+        task="workflow",
+        scope_id=guild_id,
+        user_id=author,
+        prompt_version="custom-command-create-v1",
+    )
     if not spec:
         return False, "I couldn't design that command. Try describing it differently."
 
@@ -104,5 +112,9 @@ async def run_command(
         messages=[{"role": "user", "content": user_input or "(no input given)"}],
         max_tokens=600,
         tier="fast",
+        task="workflow",
+        scope_id=guild_id,
+        user_id=user_id or None,
+        prompt_version="custom-command-run-v1",
     )
     return brain.scrub_ai_output(text)
