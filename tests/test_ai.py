@@ -31,7 +31,7 @@ def _http_error(code: int, body: bytes = b"") -> HTTPError:
 class ChoiceTextTest(unittest.TestCase):
     def test_content_wins(self) -> None:
         payload = {"choices": [{"message": {"content": "  hello  "}}]}
-        self.assertEqual(ai._choice_text(payload, "inferx"), "hello")
+        self.assertEqual(ai._choice_text(payload, "deepseek"), "hello")
 
     def test_reasoning_used_when_content_empty(self) -> None:
         payload = {
@@ -42,7 +42,7 @@ class ChoiceTextTest(unittest.TestCase):
                 }
             }]
         }
-        self.assertEqual(ai._choice_text(payload, "inferx"), '{"response": "ok"}')
+        self.assertEqual(ai._choice_text(payload, "deepseek"), '{"response": "ok"}')
 
     def test_openrouter_error_body_raises(self) -> None:
         payload = {"error": {"message": "Provider returned error", "code": 429}}
@@ -53,18 +53,18 @@ class ChoiceTextTest(unittest.TestCase):
 
     def test_empty_choices_raise(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "empty content"):
-            ai._choice_text({"choices": [{"message": {"content": None}}]}, "inferx")
+            ai._choice_text({"choices": [{"message": {"content": None}}]}, "deepseek")
 
 
-class InferxModelTest(unittest.TestCase):
-    def test_alias_maps_to_catalog_id(self) -> None:
+class DeepseekModelTest(unittest.TestCase):
+    def test_legacy_inferx_aliases_migrate_to_official_model(self) -> None:
         self.assertEqual(
-            ai._inferx_upstream_model("ix:deepseek-v4-flash"),
-            "deepseek-v4-flash-0731",
+            config.canonical_model("ix:deepseek-v4-flash-0731"),
+            "deepseek-v4-flash",
         )
         self.assertEqual(
-            ai._inferx_upstream_model("ix:deepseek-v4-flash-0731"),
-            "deepseek-v4-flash-0731",
+            config.canonical_model("deepseek-v4-flash-0371"),
+            "deepseek-v4-flash",
         )
 
 
@@ -83,23 +83,23 @@ class ExtractJsonTest(unittest.TestCase):
 
 class TransientTest(unittest.TestCase):
     def test_empty_content_is_retryable(self) -> None:
-        self.assertTrue(ai._is_transient(RuntimeError("inferx: empty content")))
+        self.assertTrue(ai._is_transient(RuntimeError("deepseek: empty content")))
 
     def test_timeout_is_retryable(self) -> None:
-        self.assertTrue(ai._is_transient(RuntimeError("inferx request failed (timeout)")))
+        self.assertTrue(ai._is_transient(RuntimeError("deepseek request failed (timeout)")))
         self.assertTrue(ai._is_transient(URLError("timed out")))
 
     def test_auth_is_not_retryable(self) -> None:
-        self.assertFalse(ai._is_transient(RuntimeError("inferx request failed (401)")))
-        self.assertTrue(ai._is_fatal(RuntimeError("no inferx api key configured")))
+        self.assertFalse(ai._is_transient(RuntimeError("deepseek request failed (401)")))
+        self.assertTrue(ai._is_fatal(RuntimeError("no deepseek api key configured")))
 
     def test_404_is_not_retryable(self) -> None:
-        self.assertFalse(ai._is_transient(RuntimeError("inferx request failed (404)")))
+        self.assertFalse(ai._is_transient(RuntimeError("deepseek request failed (404)")))
 
 
 class FriendlyErrorTest(unittest.TestCase):
     def test_timeout_is_not_a_generic_hiccup(self) -> None:
-        msg = ai.friendly_error(RuntimeError("inferx request failed (timeout)"))
+        msg = ai.friendly_error(RuntimeError("deepseek request failed (timeout)"))
         self.assertIn("too long", msg)
 
     def test_rate_limit_still_named(self) -> None:
@@ -108,7 +108,7 @@ class FriendlyErrorTest(unittest.TestCase):
 
     def test_unknown_stays_hiccup(self) -> None:
         self.assertEqual(
-            ai.friendly_error(RuntimeError("inferx: empty content")),
+            ai.friendly_error(RuntimeError("deepseek: empty content")),
             "my brain hiccuped. try again in a moment",
         )
 
@@ -120,15 +120,15 @@ class GenerateRetryTest(unittest.TestCase):
         def fake(model, system, messages, max_tokens, temperature):
             calls["n"] += 1
             if calls["n"] < 3:
-                raise RuntimeError("inferx: empty content")
+                raise RuntimeError("deepseek: empty content")
             return '{"response": "recovered"}'
 
-        with mock.patch.object(ai, "_inferx_generate", fake), \
+        with mock.patch.object(ai, "_deepseek_generate", fake), \
              mock.patch.object(ai.time, "sleep"), \
              mock.patch.object(config, "MODEL_FALLBACKS", []), \
-             mock.patch.object(config, "INFERX_API_KEY", "test-key"):
+             mock.patch.object(config, "DEEPSEEK_API_KEY", "test-key"):
             out = ai._generate(
-                "ix:deepseek-v4-flash-0731",
+                "deepseek-v4-flash",
                 "sys",
                 [{"role": "user", "content": "hi"}],
                 100,
@@ -146,12 +146,12 @@ class GenerateRetryTest(unittest.TestCase):
                 return ""
             return "ok"
 
-        with mock.patch.object(ai, "_inferx_generate", fake), \
+        with mock.patch.object(ai, "_deepseek_generate", fake), \
              mock.patch.object(ai.time, "sleep"), \
              mock.patch.object(config, "MODEL_FALLBACKS", []), \
-             mock.patch.object(config, "INFERX_API_KEY", "test-key"):
+             mock.patch.object(config, "DEEPSEEK_API_KEY", "test-key"):
             out = ai._generate(
-                "ix:deepseek-v4-flash-0731",
+                "deepseek-v4-flash",
                 "sys",
                 [{"role": "user", "content": "hi"}],
                 100,
@@ -161,8 +161,8 @@ class GenerateRetryTest(unittest.TestCase):
         self.assertEqual(calls["n"], 2)
 
 
-class ChatWithoutThinkingTest(unittest.TestCase):
-    def test_sends_thinking_disabled_and_catalog_model(self) -> None:
+class OfficialDeepseekChatTest(unittest.TestCase):
+    def test_sends_thinking_disabled_to_official_api(self) -> None:
         captured = {}
 
         def fake_urlopen(req, timeout=0):
@@ -179,16 +179,17 @@ class ChatWithoutThinkingTest(unittest.TestCase):
             )
 
         with mock.patch("sefbot.ai.urllib.request.urlopen", fake_urlopen), \
-             mock.patch.object(config, "INFERX_API_KEY", "test-key"):
-            text = ai._inferx_generate(
-                "ix:deepseek-v4-flash",
+             mock.patch.object(config, "DEEPSEEK_API_KEY", "test-key"):
+            text = ai._deepseek_generate(
+                "deepseek-v4-flash",
                 "sys",
                 [{"role": "user", "content": "hi"}],
                 200,
                 0.4,
             )
         self.assertEqual(text, '{"response": "hi"}')
-        self.assertEqual(captured["body"]["model"], "deepseek-v4-flash-0731")
+        self.assertEqual(captured["url"], "https://api.deepseek.com/v1/chat/completions")
+        self.assertEqual(captured["body"]["model"], "deepseek-v4-flash")
         self.assertEqual(captured["body"]["thinking"], {"type": "disabled"})
         self.assertGreaterEqual(captured["timeout"], 45)
 
@@ -210,9 +211,9 @@ class ChatWithoutThinkingTest(unittest.TestCase):
             )
 
         with mock.patch("sefbot.ai.urllib.request.urlopen", fake_urlopen), \
-             mock.patch.object(config, "INFERX_API_KEY", "test-key"):
-            text = ai._inferx_generate(
-                "ix:deepseek-v4-flash-0731",
+             mock.patch.object(config, "DEEPSEEK_API_KEY", "test-key"):
+            text = ai._deepseek_generate(
+                "deepseek-v4-flash",
                 "sys",
                 [{"role": "user", "content": "hi"}],
                 200,

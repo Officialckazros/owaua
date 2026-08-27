@@ -2143,7 +2143,7 @@ async def _cmd_help(message, arg, guild_id, author):
         f"**owner** `{p}ckazros <anything>` — do it; standing orders (speak Hebrew, etc.) stick until `{p}ckazros clear`\n"
         f"**language** `{p}language [name]` — replies in that language (`{p}language hebrew`; `{p}language reset`)\n"
         f"**mode** `{p}mode freaky` `{p}mode normal` — toggle horny mommy mode for this user\n"
-        f"**model** `{p}model` · `{p}model inferx|groq` — show/switch this server's brain model\n"
+        f"**model** `{p}model` · `{p}model deepseek|groq` — show/switch this server's brain model\n"
         f"**kb** `{p}kb` `{p}kb search <q>` · mods: `{p}kb add <topic> | <text>` (or attach a file)\n"
         f"**grow** `{p}request` `{p}commands` `{p}stats` `{p}lessons` `{p}reflect`\n"
         f"**privacy** `{p}privacy status|opt-in|opt-out|export|delete` — private data controls\n"
@@ -3289,7 +3289,7 @@ async def _cmd_model(message, arg, guild_id, author):
     if not raw or low in ("help", "?", "status", "list", "show"):
         body = (
             "this server's brain runs on " + config.model_display(current) + ".\n\n"
-            f"switch with `/model` (InferX DeepSeek, Nemotron, or any live Groq chat "
+            f"switch with `/model` (official DeepSeek, Nemotron, or any live Groq chat "
             f"model). `{p}model reset` is not a prefix switch — pick from `/model`."
         )
         await _send(message.channel, embeds.say(body, title="model"), feedback=False)

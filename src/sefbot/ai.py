@@ -53,7 +53,7 @@ _TRANSIENT_MARKERS = _ROTATE_ON + (
     "provider returned error", "overloaded",
 )
 _FATAL_MARKERS = (
-    "401", "invalid api key", "no groq api key", "no inferx api key",
+    "401", "invalid api key", "no groq api key",
     "no celeris api key", "no inception", "no deepseek api key",
     "no openrouter api key", "no gemini api key", "no cerebras api key",
     "no anthropic", "no model available",
@@ -676,7 +676,7 @@ def _post_json(url: str, headers: dict, payload: dict, timeout: float, provider:
         url, data=data, headers=headers,
     )
     try:
-        # Host is a configured provider base (InferX/DeepSeek), not user input.
+        # Host is a configured provider base, not user input.
         with urllib.request.urlopen(req, timeout=timeout) as response:  # noqa: S310
             return json.loads(_read_limited(response))
     except urllib.error.HTTPError as e:
@@ -722,7 +722,7 @@ def _chat_without_thinking(
 
 
 def _deepseek_generate(model, system, messages, max_tokens, temperature) -> str:
-    """DeepSeek (OpenAI-compatible). Used by !ask and the assistant command."""
+    """Call DeepSeek's official OpenAI-compatible API."""
     if not config.DEEPSEEK_API_KEY:
         raise RuntimeError("no deepseek api key configured")
     return _chat_without_thinking(
@@ -732,7 +732,7 @@ def _deepseek_generate(model, system, messages, max_tokens, temperature) -> str:
             "Content-Type": "application/json",
             "User-Agent": "sefbot/1.0",
         },
-        model,
+        config.canonical_model(model),
         system,
         messages,
         max_tokens,
@@ -741,48 +741,8 @@ def _deepseek_generate(model, system, messages, max_tokens, temperature) -> str:
     )
 
 
-def _is_inferx(model: str) -> bool:
-    return str(model).strip().lower().startswith("ix:")
-
-
-def _inferx_upstream_model(model: str) -> str:
-    """Map `ix:` aliases onto the InferX catalog id."""
-    m = str(model or "").strip()
-    if m.lower().startswith("ix:"):
-        m = m[3:]
-    if m in ("deepseek-v4-flash", "deepseek-v4-flash-latest", "deepseek-v4",
-             "deepseek-flash", ""):
-        return "deepseek-v4-flash-0731"
-    return m or "deepseek-v4-flash-0731"
-
-
-def _inferx_generate(model, system, messages, max_tokens, temperature) -> str:
-    """InferX (OpenAI-compatible). Default brain: DeepSeek V4 Flash."""
-    if not config.INFERX_API_KEY:
-        raise RuntimeError("no inferx api key configured")
-    return _chat_without_thinking(
-        config.INFERX_BASE_URL + "/chat/completions",
-        {
-            "Authorization": f"Bearer {config.INFERX_API_KEY}",
-            "Content-Type": "application/json",
-            "User-Agent": "sefbot/1.0",
-        },
-        _inferx_upstream_model(model),
-        system,
-        messages,
-        max_tokens,
-        temperature,
-        "inferx",
-    )
-
-
 def deepseek_configured() -> bool:
-    """True if the configured DEEPSEEK_MODEL can actually run (its key is set)."""
-    model = config.DEEPSEEK_MODEL or ""
-    if _is_inferx(model):
-        return bool(config.INFERX_API_KEY)
-    if _is_openrouter(model):
-        return bool(_openrouter_key(model))
+    """True when the official DeepSeek API credential is configured."""
     return bool(config.DEEPSEEK_API_KEY)
 
 
@@ -861,8 +821,6 @@ def _generate(requested, system, messages, max_tokens, temperature,
             continue
         if _is_deepseek(model) and not config.DEEPSEEK_API_KEY:
             continue
-        if _is_inferx(model) and not config.INFERX_API_KEY:
-            continue
         if (
             not _is_mercury(model)
             and not _is_celeris(model)
@@ -871,7 +829,6 @@ def _generate(requested, system, messages, max_tokens, temperature,
             and not _is_openrouter(model)
             and not _is_cerebras(model)
             and not _is_deepseek(model)
-            and not _is_inferx(model)
             and not _clients
         ):
             continue
@@ -885,8 +842,6 @@ def _generate(requested, system, messages, max_tokens, temperature,
             fn = _cerebras_generate
         elif _is_openrouter(model):
             fn = _openrouter_generate
-        elif _is_inferx(model):
-            fn = _inferx_generate
         elif _is_deepseek(model):
             fn = _deepseek_generate
         elif _is_gemini(model):

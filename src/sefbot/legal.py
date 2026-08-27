@@ -226,7 +226,7 @@ There is no advertising SDK in the bot.</p>
 <li>Data Discord itself stores (messages, profiles, IPs Discord sees, audit
 logs). See Discord's privacy policy.</li>
 <li>Logs or training use by Groq, OpenRouter, Google, Anthropic, DeepSeek,
-Cerebras, Inception, Inferx, Celeris, Tavily, DuckDuckGo, QuickChart, or
+Cerebras, Inception, Celeris, Tavily, DuckDuckGo, QuickChart, or
 whoever else this instance's environment variables point at. Those are their
 policies. This operator cannot delete copies they keep.</li>
 <li>Other bots in the same server.</li>
@@ -397,7 +397,7 @@ chunks (delimited as untrusted reference data); an exact-user/exact-scope
 compressed continuity summary when dual-consented history is long enough; and your current message.
 That bundle is sent to whichever chat provider is configured for the
 route (examples the code knows: Groq, OpenRouter, Google Gemini, Anthropic,
-DeepSeek, Cerebras, Inception Mercury, Inferx, Celeris, plus any
+DeepSeek, Cerebras, Inception Mercury, Celeris, plus any
 OpenAI-compatible <code>SEFBOT_LLM_BASE_URL</code>).</p>
 <p>Other outbound calls, only when you or a staff feature use them:</p>
 <ul>

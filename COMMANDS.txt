@@ -19,7 +19,7 @@ Notes:
 - Per-user relationship score, private nickname, grudge.
 - Reads only consented context when the guild history feature is enabled.
 - Every reply is an embed. Never uses emoji in its text.
-- One model for everything: DeepSeek V4 Flash via InferX (image vision uses a
+- One model for everything: DeepSeek V4 Flash via the official API (image vision uses a
   separate free multimodal model).
 
 ------------------------------------------------------------------------------
@@ -201,5 +201,5 @@ tos break unblock all    Unblock all ToS blocks (confirm) + DM each.
 
 ==============================================================================
  Growth axes: memories · lessons · commands · quotes · relationships · level
- Model: DeepSeek V4 Flash via InferX (default everywhere); vision = free multimodal
+ Model: DeepSeek V4 Flash via the official API (default everywhere); vision = free multimodal
 ==============================================================================

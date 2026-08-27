@@ -109,7 +109,7 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("choice", parameters)
         values = [choice.value for choice in parameters["choice"].choices]
         names = [choice.name for choice in parameters["choice"].choices]
-        self.assertIn("inferx", values)
+        self.assertIn("deepseek", values)
         self.assertIn("big", values)
         for model_id, label in config.GROQ_CHAT_MODELS:
             self.assertIn(model_id, values)

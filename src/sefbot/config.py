@@ -83,14 +83,22 @@ DEEPSEEK_BASE_URL = (
     os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com/v1"
 ).rstrip("/")
 
-INFERX_API_KEY = (os.getenv("INFERX_API_KEY") or "").strip()
-INFERX_BASE_URL = (
-    os.getenv("INFERX_BASE_URL") or "https://model.inferx.net/endpoints/v1"
-).rstrip("/")
+OFFICIAL_DEEPSEEK_MODEL = "deepseek-v4-flash"
+_configured_deepseek_model = (
+    os.getenv("DEEPSEEK_MODEL") or OFFICIAL_DEEPSEEK_MODEL
+).strip()
+if _configured_deepseek_model.lower() in {
+    "inferx",
+    "ix:deepseek-v4-flash",
+    "ix:deepseek-v4-flash-0371",
+    "ix:deepseek-v4-flash-0731",
+    "deepseek-v4-flash-0371",
+    "deepseek-v4-flash-0731",
+}:
+    _configured_deepseek_model = OFFICIAL_DEEPSEEK_MODEL
+DEEPSEEK_MODEL = _configured_deepseek_model
 
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "ix:deepseek-v4-flash-0731")
-
-DEFAULT_MODEL = "ix:deepseek-v4-flash-0731"
+DEFAULT_MODEL = OFFICIAL_DEEPSEEK_MODEL
 
 MODEL_SMART = DEFAULT_MODEL
 MODEL_FAST = DEFAULT_MODEL
@@ -188,11 +196,17 @@ GROQ_CHAT_MODELS = (
 )
 
 MODEL_SWITCHER = {
+    # Keep old picker/database values as migrations onto the official API.
     "inferx": DEFAULT_MODEL,
-    "deepseek": DEFAULT_MODEL,
     "ix": DEFAULT_MODEL,
     "ix:deepseek-v4-flash": DEFAULT_MODEL,
+    "ix:deepseek-v4-flash-0371": DEFAULT_MODEL,
     "ix:deepseek-v4-flash-0731": DEFAULT_MODEL,
+    "deepseek": DEFAULT_MODEL,
+    "official": DEFAULT_MODEL,
+    "deepseek-v4-flash": DEFAULT_MODEL,
+    "deepseek-v4-flash-0371": DEFAULT_MODEL,
+    "deepseek-v4-flash-0731": DEFAULT_MODEL,
     "big": MODEL_BIG,
     "nemotron": MODEL_BIG,
     "ultra": MODEL_BIG,
@@ -245,8 +259,8 @@ def model_display(model: str) -> str:
     model = canonical_model(model)
     if model == MODEL_BIG:
         return "free big-brain — NVIDIA Nemotron 3 Ultra 550B (1M context)"
-    if model in (DEFAULT_MODEL, "ix:deepseek-v4-flash", "ix:deepseek-v4-flash-0731"):
-        return "InferX DeepSeek V4 Flash (`ix:deepseek-v4-flash-0731`)"
+    if model == DEFAULT_MODEL:
+        return "DeepSeek V4 Flash — official API (`deepseek-v4-flash`)"
     label = _GROQ_LABELS.get(model)
     if label:
         return f"{label} (`{model}`)"
@@ -499,7 +513,6 @@ def validate_runtime(*, require_discord: bool = True, require_web_legal: bool = 
         ("INCEPTION_BASE_URL", INCEPTION_BASE_URL),
         ("CELERIS_BASE_URL", CELERIS_BASE_URL),
         ("DEEPSEEK_BASE_URL", DEEPSEEK_BASE_URL),
-        ("INFERX_BASE_URL", INFERX_BASE_URL),
         ("SEFBOT_LLM_BASE_URL", LLM_BASE_URL),
         ("SEFBOT_GROQ_BASE_URL", GROQ_BASE_URL),
         ("SEFBOT_SAFETY_BASE_URL", SAFETY_BASE_URL),

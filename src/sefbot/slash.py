@@ -1643,7 +1643,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
 
     model_choices = [
         app_commands.Choice(
-            name="InferX DeepSeek V4 Flash (default)", value="inferx"
+            name="Official DeepSeek V4 Flash (default)", value="deepseek"
         ),
         app_commands.Choice(
             name="Free Nemotron 3 Ultra 550B (1M context)", value="big"
@@ -1720,7 +1720,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             groq_names = ", ".join(label for _mid, label in config.GROQ_CHAT_MODELS)
             await interaction.response.send_message(embed=embeds.say(
                 "this server's brain runs on " + config.model_display(current) + "\n\n"
-                "switch with `/model` (InferX, Nemotron, or any live Groq chat model: "
+                "switch with `/model` (official DeepSeek, Nemotron, or any live Groq chat model: "
                 + groq_names + ").", title="model"))
             return
         if interaction.guild is None:
@@ -3430,7 +3430,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             "`/request` — invent a new command, then `/use` it\n"
             "`/commands` · `/vibecheck` · `/mood` · `/stats` · `/forget`\n"
             "`/mode` — toggle horny mommy mode for yourself (`/mode freaky` or `/mode normal`)\n"
-            "`/model` — switch the brain (InferX DeepSeek, Nemotron, or any Groq chat model)\n"
+            "`/model` — switch the brain (official DeepSeek, Nemotron, or any Groq chat model)\n"
             "prefix: `!privacy` · `!dmblock` · `!dmunblock` for privacy / DM opt-out"
         )
         await interaction.response.send_message(embed=embeds.say(body, title="SefBot"))
