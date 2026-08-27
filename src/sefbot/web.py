@@ -40,6 +40,7 @@ from sefbot.sites import (
     SITE_FLAG,
     apply_site_headers,
     attach_site_routes,
+    hostname_of,
     resolve_sites_root,
     serve_public_site,
 )
@@ -366,16 +367,33 @@ def create_app(
         client_max_size=300_000,
     )
 
-    async def landing(_request: web.Request) -> web.Response:
+    def legacy_legal_redirect(request: web.Request) -> web.HTTPPermanentRedirect | None:
+        """Move the former public legal host without breaking old bookmarks."""
+        if hostname_of(request) in {"kozzyx.org", "www.kozzyx.org"}:
+            location = f"https://wearegays.net{request.path}"
+            if request.query_string:
+                location = f"{location}?{request.query_string}"
+            return web.HTTPPermanentRedirect(location=location)
+        return None
+
+    async def landing(request: web.Request) -> web.Response:
+        if redirect := legacy_legal_redirect(request):
+            raise redirect
         return _html_response(_landing_page())
 
-    async def terms(_request: web.Request) -> web.Response:
+    async def terms(request: web.Request) -> web.Response:
+        if redirect := legacy_legal_redirect(request):
+            raise redirect
         return _html_response(_terms_page(contact))
 
-    async def privacy(_request: web.Request) -> web.Response:
+    async def privacy(request: web.Request) -> web.Response:
+        if redirect := legacy_legal_redirect(request):
+            raise redirect
         return _html_response(_privacy_page(contact))
 
     async def accept_terms_get(request: web.Request) -> web.Response:
+        if redirect := legacy_legal_redirect(request):
+            raise redirect
         token = str(request.query.get("token") or "")
         if not re.fullmatch(r"[A-Za-z0-9_-]{40,80}", token):
             return _html_response(

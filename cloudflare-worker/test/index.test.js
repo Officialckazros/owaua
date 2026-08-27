@@ -14,7 +14,7 @@ test("rejects unknown paths and methods without contacting upstream", async () =
     throw new Error("should not be called");
   };
   try {
-    const missing = await worker.fetch(new Request("https://kozzyx.org/private"), {});
+    const missing = await worker.fetch(new Request("https://wearegays.net/private"), {});
     assert.equal(missing.status, 404);
     assert.equal(missing.headers.get("X-Frame-Options"), "DENY");
     assert.equal(missing.headers.get("Cache-Control"), "no-store");
@@ -26,17 +26,17 @@ test("rejects unknown paths and methods without contacting upstream", async () =
     assert.equal(wrongHost.status, 404);
 
     const insecure = await worker.fetch(
-      new Request("http://kozzyx.org/sefbot"),
+      new Request("http://wearegays.net/sefbot"),
       {},
     );
     assert.equal(insecure.status, 400);
 
     const post = await worker.fetch(
-      new Request("https://kozzyx.org/sefbot", { method: "POST", body: "data" }),
+      new Request("https://wearegays.net/sefbot", { method: "POST", body: "data" }),
       {},
     );
     assert.equal(post.status, 405);
-    assert.equal(post.headers.get("Allow"), "GET, HEAD");
+    assert.equal(post.headers.get("Allow"), "GET, HEAD, POST");
     assert.equal(calls, 0);
   } finally {
     globalThis.fetch = originalFetch;
@@ -56,7 +56,7 @@ test("forwards only allowlisted metadata and drops query strings", async () => {
     });
   };
   try {
-    const request = new Request("https://kozzyx.org/sefbot/terms?token=secret", {
+    const request = new Request("https://wearegays.net/sefbot/terms?token=secret", {
       headers: {
         Authorization: "Bearer caller-secret",
         Cookie: "session=secret",
@@ -91,9 +91,9 @@ test("rewrites same-origin redirects and does not proxy an external location", a
       },
     });
   try {
-    const request = new Request("https://kozzyx.org/opsef-tos.html");
+    const request = new Request("https://wearegays.net/sefbot/tos");
     const local = await worker.fetch(request, { SEFBOT_ORIGIN: ORIGIN });
-    assert.equal(local.headers.get("Location"), "https://kozzyx.org/sefbot/terms");
+    assert.equal(local.headers.get("Location"), "https://wearegays.net/sefbot/terms");
 
     external = true;
     const blocked = await worker.fetch(request, { SEFBOT_ORIGIN: ORIGIN });
@@ -104,14 +104,14 @@ test("rewrites same-origin redirects and does not proxy an external location", a
 });
 
 test("rejects unsafe origins and sanitizes upstream failures", async () => {
-  const badOrigin = await worker.fetch(new Request("https://kozzyx.org/sefbot"), {
+  const badOrigin = await worker.fetch(new Request("https://wearegays.net/sefbot"), {
     SEFBOT_ORIGIN: "http://127.0.0.1:8080/path?secret=value",
   });
   assert.equal(badOrigin.status, 502);
   assert.equal(await badOrigin.text(), "Service unavailable");
 
   const untrustedOrigin = await worker.fetch(
-    new Request("https://kozzyx.org/sefbot"),
+      new Request("https://wearegays.net/sefbot"),
     { SEFBOT_ORIGIN: "https://attacker.example" },
   );
   assert.equal(untrustedOrigin.status, 502);
@@ -121,7 +121,7 @@ test("rejects unsafe origins and sanitizes upstream failures", async () => {
     new Response("database password: secret", { status: 500 });
   try {
     const result = await worker.fetch(
-      new Request("https://kozzyx.org/readyz"),
+      new Request("https://wearegays.net/readyz"),
       { SEFBOT_ORIGIN: ORIGIN },
     );
     assert.equal(result.status, 502);
@@ -138,7 +138,7 @@ test("HEAD responses never include an upstream body", async () => {
     new Response("content", { headers: { "Content-Type": "text/html" } });
   try {
     const result = await worker.fetch(
-      new Request("https://kozzyx.org/sefbot", { method: "HEAD" }),
+      new Request("https://wearegays.net/sefbot", { method: "HEAD" }),
       { SEFBOT_ORIGIN: ORIGIN },
     );
     assert.equal(result.status, 200);
@@ -156,7 +156,7 @@ test("preserves bounded readiness JSON and rejects response type confusion", asy
       headers: { "Content-Type": "application/json" },
     });
   try {
-    const request = new Request("https://kozzyx.org/readyz");
+    const request = new Request("https://wearegays.net/readyz");
     const pending = await worker.fetch(request, { SEFBOT_ORIGIN: ORIGIN });
     assert.equal(pending.status, 503);
     assert.deepEqual(await pending.json(), {
@@ -190,6 +190,40 @@ test("preserves bounded readiness JSON and rejects response type confusion", asy
       });
     const oversized = await worker.fetch(request, { SEFBOT_ORIGIN: ORIGIN });
     assert.equal(oversized.status, 502);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("forwards only a validated acceptance token and authenticates the form POST", async () => {
+  const originalFetch = globalThis.fetch;
+  const token = "a".repeat(40);
+  const captured = [];
+  globalThis.fetch = async (url, init) => {
+    captured.push({ url: url.toString(), init });
+    return new Response("<h1>Terms</h1>", {
+      headers: { "Content-Type": "text/html" },
+    });
+  };
+  try {
+    const get = await worker.fetch(
+      new Request(`https://wearegays.net/sefbot/terms/accept?token=${token}`),
+      { SEFBOT_ORIGIN: ORIGIN },
+    );
+    assert.equal(get.status, 200);
+    assert.equal(captured[0].url, `${ORIGIN}/sefbot/terms/accept?token=${token}`);
+
+    const post = await worker.fetch(
+      new Request("https://wearegays.net/sefbot/terms/accept", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: `token=${token}&agree=yes`,
+      }),
+      { SEFBOT_ORIGIN: ORIGIN, ORIGIN_AUTH_SECRET: "s".repeat(32) },
+    );
+    assert.equal(post.status, 200);
+    assert.equal(captured[1].init.headers.get("X-SefBot-Origin-Auth"), "s".repeat(32));
+    assert.equal(await new Response(captured[1].init.body).text(), `token=${token}&agree=yes`);
   } finally {
     globalThis.fetch = originalFetch;
   }

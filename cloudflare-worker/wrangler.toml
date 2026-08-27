@@ -4,16 +4,12 @@ compatibility_date = "2026-07-01"
 account_id = "114651c9288b7d9012b396fe66737d16"
 
 routes = [
-  { pattern = "kozzyx.org/sefbot*", zone_name = "kozzyx.org" },
-  { pattern = "www.kozzyx.org/sefbot*", zone_name = "kozzyx.org" },
-  { pattern = "kozzyx.org/opsef-tos.html", zone_name = "kozzyx.org" },
-  { pattern = "www.kozzyx.org/opsef-tos.html", zone_name = "kozzyx.org" },
-  { pattern = "kozzyx.org/opsef-privacy.html", zone_name = "kozzyx.org" },
-  { pattern = "www.kozzyx.org/opsef-privacy.html", zone_name = "kozzyx.org" },
-  { pattern = "kozzyx.org/healthz", zone_name = "kozzyx.org" },
-  { pattern = "www.kozzyx.org/healthz", zone_name = "kozzyx.org" },
-  { pattern = "kozzyx.org/readyz", zone_name = "kozzyx.org" },
-  { pattern = "www.kozzyx.org/readyz", zone_name = "kozzyx.org" },
+  { pattern = "wearegays.net/sefbot*", zone_name = "wearegays.net" },
+  { pattern = "www.wearegays.net/sefbot*", zone_name = "wearegays.net" },
+  { pattern = "wearegays.net/healthz", zone_name = "wearegays.net" },
+  { pattern = "www.wearegays.net/healthz", zone_name = "wearegays.net" },
+  { pattern = "wearegays.net/readyz", zone_name = "wearegays.net" },
+  { pattern = "www.wearegays.net/readyz", zone_name = "wearegays.net" },
 ]
 
 [vars]

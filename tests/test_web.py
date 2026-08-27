@@ -452,10 +452,22 @@ class PublicSiteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("wag-home", await response.text())
 
     async def test_legal_routes_stay_hardened_on_public_hosts(self) -> None:
-        response = await self.client.get("/sefbot", headers={"Host": "kozzyx.org"})
+        response = await self.client.get("/sefbot", headers={"Host": "wearegays.net"})
         self.assertEqual(response.status, 200)
         self.assertIn("OpSef", await response.text())
         self.assertIn("default-src 'none'", response.headers["Content-Security-Policy"])
+
+    async def test_legacy_legal_host_redirects_to_wearegays(self) -> None:
+        response = await self.client.get(
+            "/sefbot/terms?source=bookmark",
+            headers={"Host": "kozzyx.org"},
+            allow_redirects=False,
+        )
+        self.assertEqual(response.status, 308)
+        self.assertEqual(
+            response.headers["Location"],
+            "https://wearegays.net/sefbot/terms?source=bookmark",
+        )
 
     async def test_dotfiles_and_traversal_are_rejected(self) -> None:
         blocked = await self.client.get("/secret.env", headers={"Host": "kozzyx.org"})

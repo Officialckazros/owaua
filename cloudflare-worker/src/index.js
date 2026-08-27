@@ -1,6 +1,6 @@
 const DEFAULT_ORIGIN = "https://portal.daki.cc";
 const ALLOWED_ORIGINS = new Set([DEFAULT_ORIGIN]);
-const PUBLIC_HOSTS = new Set(["kozzyx.org", "www.kozzyx.org"]);
+const PUBLIC_HOSTS = new Set(["wearegays.net", "www.wearegays.net"]);
 const UPSTREAM_TIMEOUT_MS = 8_000;
 const MAX_UPSTREAM_BYTES = 512 * 1024;
 const STATUS_COMPONENTS = new Set(["service", "discord", "database"]);
@@ -9,6 +9,7 @@ const PUBLIC_PATHS = new Set([
   "/sefbot",
   "/sefbot/",
   "/sefbot/terms",
+  "/sefbot/terms/accept",
   "/sefbot/privacy",
   "/sefbot/tos",
   "/opsef-tos.html",
@@ -21,10 +22,11 @@ const STYLE_HASH = "n/KWVDWzPnaDdVPU+wL3c/kqpG3S+iT7l3H/+a+XrUI=";
 
 function securityHeaders(path, contentType, cacheable = false) {
   const health = path === "/healthz" || path === "/readyz";
+  const formAction = path === "/sefbot/terms/accept" ? "'self'" : "'none'";
   return {
     "Cache-Control": !health && cacheable ? "public, max-age=300" : "no-store",
     "Content-Security-Policy":
-      `default-src 'none'; base-uri 'none'; form-action 'none'; ` +
+      `default-src 'none'; base-uri 'none'; form-action ${formAction}; ` +
       `style-src 'sha256-${STYLE_HASH}'; frame-ancestors 'none'`,
     "Content-Type": contentType,
     "Cross-Origin-Opener-Policy": "same-origin",
@@ -64,7 +66,7 @@ function parseOrigin(rawOrigin) {
   return origin;
 }
 
-function upstreamHeaders(request, publicUrl, path) {
+function upstreamHeaders(request, publicUrl, path, env) {
   const headers = new Headers({
     Accept:
       path === "/healthz" || path === "/readyz"
@@ -77,6 +79,13 @@ function upstreamHeaders(request, publicUrl, path) {
   const requestId = request.headers.get("CF-Ray");
   if (requestId && /^[A-Za-z0-9-]{1,64}$/.test(requestId)) {
     headers.set("X-Request-ID", requestId);
+  }
+  if (path === "/sefbot/terms/accept" && request.method === "POST") {
+    if (typeof env.ORIGIN_AUTH_SECRET !== "string" || env.ORIGIN_AUTH_SECRET.length < 32) {
+      throw new TypeError("missing acceptance proxy secret");
+    }
+    headers.set("X-SefBot-Origin-Auth", env.ORIGIN_AUTH_SECRET);
+    headers.set("Content-Type", "application/x-www-form-urlencoded");
   }
   return headers;
 }
@@ -182,7 +191,11 @@ async function proxiedResponse(path, upstream, target, publicUrl, method) {
     ? "application/json; charset=utf-8"
     : "text/html; charset=utf-8";
   const headers = new Headers(
-    securityHeaders(path, contentType, !expectedJson && upstream.status === 200),
+    securityHeaders(
+      path,
+      contentType,
+      !expectedJson && upstream.status === 200 && PUBLIC_PATHS.has(path) && path !== "/sefbot/terms/accept",
+    ),
   );
 
   if (!expectedJson) {
@@ -250,9 +263,10 @@ export default {
     if (publicUrl.protocol !== "https:") {
       return response(path, "HTTPS is required", 400);
     }
-    if (request.method !== "GET" && request.method !== "HEAD") {
+    const acceptsTerms = path === "/sefbot/terms/accept" && request.method === "POST";
+    if (request.method !== "GET" && request.method !== "HEAD" && !acceptsTerms) {
       const rejected = response(path, "Method not allowed", 405);
-      rejected.headers.set("Allow", "GET, HEAD");
+      rejected.headers.set("Allow", "GET, HEAD, POST");
       return rejected;
     }
 
@@ -260,6 +274,13 @@ export default {
     try {
       const origin = parseOrigin(env.SEFBOT_ORIGIN);
       target = new URL(path, origin);
+      if (path === "/sefbot/terms/accept" && request.method === "GET") {
+        const token = publicUrl.searchParams.get("token") || "";
+        if (!/^[A-Za-z0-9_-]{40,80}$/.test(token) || [...publicUrl.searchParams.keys()].some((key) => key !== "token")) {
+          return response(path, "Invalid acceptance link", 400);
+        }
+        target.searchParams.set("token", token);
+      }
     } catch {
       return response(path, "Service unavailable", 502);
     }
@@ -269,7 +290,8 @@ export default {
     try {
       const upstream = await fetch(target, {
         method: request.method,
-        headers: upstreamHeaders(request, publicUrl, path),
+        headers: upstreamHeaders(request, publicUrl, path, env),
+        body: acceptsTerms ? request.body : undefined,
         redirect: "manual",
         signal: controller.signal,
       });

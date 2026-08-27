@@ -151,8 +151,8 @@ returned through the dashboard.
 
 ## Privacy, legal pages, and service health
 
-- Terms: [kozzyx.org/sefbot/terms](https://kozzyx.org/sefbot/terms)
-- Privacy: [kozzyx.org/sefbot/privacy](https://kozzyx.org/sefbot/privacy)
+- Terms: [wearegays.net/sefbot/terms](https://wearegays.net/sefbot/terms)
+- Privacy: [wearegays.net/sefbot/privacy](https://wearegays.net/sefbot/privacy)
 - `/privacy status|opt-in|opt-out|export|delete` remains private and available without accepting the ToS. ToS acceptance is not raw-history consent.
 - Moderation, server rules, raw history, and voice transcription are disabled by default. Voice transcription additionally requires participant consent in the exact guild.
 - The built-in HTTP service exposes `/healthz` for liveness and `/readyz` for sanitized Discord/database readiness. `SEFBOT_PRIVACY_CONTACT` defaults to `ckazros@kozzyx.org`; `PORT` defaults to `8080`.

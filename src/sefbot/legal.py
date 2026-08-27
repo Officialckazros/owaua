@@ -15,7 +15,7 @@ from typing import Final
 
 LEGAL_VERSION: Final = "3.7"
 LEGAL_EFFECTIVE_DATE: Final = "27 August 2026"
-PUBLIC_BASE_URL: Final = "https://kozzyx.org/sefbot"
+PUBLIC_BASE_URL: Final = "https://wearegays.net/sefbot"
 TERMS_URL: Final = f"{PUBLIC_BASE_URL}/terms"
 PRIVACY_URL: Final = f"{PUBLIC_BASE_URL}/privacy"
 

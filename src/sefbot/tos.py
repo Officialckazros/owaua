@@ -1,7 +1,7 @@
 """OpSef Terms of Service — acceptance gate + violation detection.
 
 Canonical page:
-  https://kozzyx.org/sefbot/terms
+  https://wearegays.net/sefbot/terms
 
 Users must open a short-lived Discord-bound link, read the public page, and
 accept the current version there before normal bot use.
