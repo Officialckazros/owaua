@@ -1,9 +1,10 @@
-const DEFAULT_ORIGIN = "https://portal.daki.cc";
+// This is the app's Daki allocation, not the Daki control-panel origin.
+const DEFAULT_ORIGIN = "http://paid5.daki.cc:4204";
 const ALLOWED_ORIGINS = new Set([DEFAULT_ORIGIN]);
 const PUBLIC_HOSTS = new Set(["wearegays.net", "www.wearegays.net"]);
 const UPSTREAM_TIMEOUT_MS = 8_000;
 const MAX_UPSTREAM_BYTES = 512 * 1024;
-const STATUS_COMPONENTS = new Set(["service", "discord", "database"]);
+const STATUS_COMPONENTS = new Set(["service", "discord", "database", "malware_scanner"]);
 
 const PUBLIC_PATHS = new Set([
   "/sefbot",
@@ -52,10 +53,10 @@ function response(path, body, status, contentType = "text/plain; charset=utf-8")
 function parseOrigin(rawOrigin) {
   const origin = new URL(rawOrigin || DEFAULT_ORIGIN);
   if (
-    origin.protocol !== "https:" ||
+    origin.protocol !== "http:" ||
     origin.username ||
     origin.password ||
-    (origin.port && origin.port !== "443") ||
+    origin.port !== "4204" ||
     origin.pathname !== "/" ||
     origin.search ||
     origin.hash ||
@@ -66,7 +67,7 @@ function parseOrigin(rawOrigin) {
   return origin;
 }
 
-function upstreamHeaders(request, publicUrl, path, env) {
+function upstreamHeaders(request, publicUrl, path) {
   const headers = new Headers({
     Accept:
       path === "/healthz" || path === "/readyz"
@@ -79,13 +80,6 @@ function upstreamHeaders(request, publicUrl, path, env) {
   const requestId = request.headers.get("CF-Ray");
   if (requestId && /^[A-Za-z0-9-]{1,64}$/.test(requestId)) {
     headers.set("X-Request-ID", requestId);
-  }
-  if (path === "/sefbot/terms/accept" && request.method === "POST") {
-    if (typeof env.ORIGIN_AUTH_SECRET !== "string" || env.ORIGIN_AUTH_SECRET.length < 32) {
-      throw new TypeError("missing acceptance proxy secret");
-    }
-    headers.set("X-SefBot-Origin-Auth", env.ORIGIN_AUTH_SECRET);
-    headers.set("Content-Type", "application/x-www-form-urlencoded");
   }
   return headers;
 }
@@ -263,10 +257,9 @@ export default {
     if (publicUrl.protocol !== "https:") {
       return response(path, "HTTPS is required", 400);
     }
-    const acceptsTerms = path === "/sefbot/terms/accept" && request.method === "POST";
-    if (request.method !== "GET" && request.method !== "HEAD" && !acceptsTerms) {
+    if (request.method !== "GET" && request.method !== "HEAD") {
       const rejected = response(path, "Method not allowed", 405);
-      rejected.headers.set("Allow", "GET, HEAD, POST");
+      rejected.headers.set("Allow", "GET, HEAD");
       return rejected;
     }
 
@@ -290,8 +283,7 @@ export default {
     try {
       const upstream = await fetch(target, {
         method: request.method,
-        headers: upstreamHeaders(request, publicUrl, path, env),
-        body: acceptsTerms ? request.body : undefined,
+        headers: upstreamHeaders(request, publicUrl, path),
         redirect: "manual",
         signal: controller.signal,
       });

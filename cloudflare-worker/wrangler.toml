@@ -13,4 +13,4 @@ routes = [
 ]
 
 [vars]
-SEFBOT_ORIGIN = "https://portal.daki.cc"
+SEFBOT_ORIGIN = "http://paid5.daki.cc:4204"
