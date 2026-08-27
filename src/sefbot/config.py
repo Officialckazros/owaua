@@ -338,6 +338,11 @@ LURK_IDLE_SECONDS = _int("SEFBOT_LURK_IDLE_SECONDS", 600)
 EMBED_COLOR = int(os.getenv("SEFBOT_EMBED_COLOR", "0x5865F2"), 0)
 
 AI_MAX_CONCURRENCY = _int("SEFBOT_AI_MAX_CONCURRENCY", 10)
+AI_REQUESTS_PER_MINUTE = _int("SEFBOT_AI_REQUESTS_PER_MINUTE", 120)
+AI_CONTEXT_MAX_CHARS = _int("SEFBOT_AI_CONTEXT_MAX_CHARS", 48_000)
+AI_CIRCUIT_FAILURES = _int("SEFBOT_AI_CIRCUIT_FAILURES", 3)
+AI_CIRCUIT_COOLDOWN_SECONDS = _float("SEFBOT_AI_CIRCUIT_COOLDOWN_SECONDS", 60.0)
+AI_STRUCTURED_REPAIR = _bool("SEFBOT_AI_STRUCTURED_REPAIR", True)
 CHAT_MIN_INTERVAL = _float("SEFBOT_CHAT_MIN_INTERVAL", 2.5)
 
 
@@ -359,8 +364,20 @@ SAFETY_BASE_URL = (os.getenv("SEFBOT_SAFETY_BASE_URL") or "https://openrouter.ai
 SAFETY_API_KEY = (os.getenv("SEFBOT_SAFETY_API_KEY") or OPENROUTER_API_KEY).strip()
 MULTILINGUAL_MODEL = os.getenv("SEFBOT_MULTILINGUAL_MODEL", "openai/gpt-oss-20b")
 WHISPER_MODEL = os.getenv("SEFBOT_WHISPER_MODEL", "whisper-large-v3-turbo")
-TTS_MODEL = os.getenv("SEFBOT_TTS_MODEL", "orpheus-3-0.1b-ft")
-TTS_VOICE = os.getenv("SEFBOT_TTS_VOICE", "tara")
+# Groq retired the original Orpheus preview model and its ``tara`` voice.
+# Keep these aligned with the supported Groq speech endpoint defaults so a
+# standard deployment can use /say without an extra environment override.
+_LEGACY_TTS_MODEL = "orpheus-3-0.1b-ft"
+_GROQ_ORPHEUS_ENGLISH_MODEL = "canopylabs/orpheus-v1-english"
+TTS_MODEL = os.getenv("SEFBOT_TTS_MODEL", _GROQ_ORPHEUS_ENGLISH_MODEL)
+TTS_VOICE = os.getenv("SEFBOT_TTS_VOICE", "troy")
+# Existing deployments may still have the retired defaults stored as environment
+# variables. Translate only that known-invalid pair; explicit supported custom
+# values remain untouched.
+if TTS_MODEL == _LEGACY_TTS_MODEL:
+    TTS_MODEL = _GROQ_ORPHEUS_ENGLISH_MODEL
+    if TTS_VOICE == "tara":
+        TTS_VOICE = "troy"
 
 MODLOG_CHANNEL = (os.getenv("SEFBOT_MODLOG_CHANNEL") or "").strip()
 MULTILINGUAL_CHANNELS = [

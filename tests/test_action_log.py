@@ -1,4 +1,5 @@
 import unittest
+from io import BytesIO
 from types import SimpleNamespace
 from unittest import mock
 
@@ -227,6 +228,58 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("private message body", embed.description)
         self.assertIn("**Author:**", embed.description)
         self.assertIn("**Channel:**", embed.description)
+
+    async def test_deleted_previewable_media_is_relayed_for_discord_preview(self):
+        author = SimpleNamespace(
+            id=55, name="Member", display_name="Member", mention="<@55>",
+            roles=[], bot=False,
+        )
+        attachment = SimpleNamespace(
+            filename="clip.mp4", content_type="video/mp4",
+            url="https://cdn.discordapp.com/attachments/1/2/clip.mp4",
+            to_file=mock.AsyncMock(return_value=discord.File(BytesIO(b"video"), filename="clip.mp4")),
+        )
+        message = SimpleNamespace(
+            id=100, guild=self.guild, channel=self.guild.source_channel,
+            author=author, content="watch this", attachments=[attachment],
+        )
+
+        with mock.patch(
+            "sefbot.community.recent_audit_entry",
+            new=mock.AsyncMock(return_value=None),
+        ):
+            await community.message_delete(message)
+
+        attachment.to_file.assert_awaited_once_with(use_cached=True)
+        kwargs = self.guild.log_channel.send.await_args.kwargs
+        self.assertEqual(kwargs["files"][0].filename, "clip.mp4")
+        self.assertIn(attachment.url, kwargs["embed"].description)
+
+    async def test_non_media_deleted_attachment_remains_a_link_only(self):
+        author = SimpleNamespace(
+            id=55, name="Member", display_name="Member", mention="<@55>",
+            roles=[], bot=False,
+        )
+        attachment = SimpleNamespace(
+            filename="report.pdf", content_type="application/pdf",
+            url="https://cdn.discordapp.com/attachments/1/2/report.pdf",
+            to_file=mock.AsyncMock(),
+        )
+        message = SimpleNamespace(
+            id=100, guild=self.guild, channel=self.guild.source_channel,
+            author=author, content="report", attachments=[attachment],
+        )
+
+        with mock.patch(
+            "sefbot.community.recent_audit_entry",
+            new=mock.AsyncMock(return_value=None),
+        ):
+            await community.message_delete(message)
+
+        attachment.to_file.assert_not_awaited()
+        kwargs = self.guild.log_channel.send.await_args.kwargs
+        self.assertIsNone(kwargs["files"])
+        self.assertIn(attachment.url, kwargs["embed"].description)
 
     def test_catalog_exposes_complete_typed_logging_controls(self):
         settings = MODULES["action_log"]["settings"]

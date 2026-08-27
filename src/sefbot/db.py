@@ -27,7 +27,7 @@ from sefbot import config, profile_search
 from sefbot.module_catalog import default_server_settings, merge_server_settings
 from sefbot.scope import is_dm_scope, is_guild_scope
 
-LATEST_SCHEMA_VERSION = 9
+LATEST_SCHEMA_VERSION = 10
 MAX_RETENTION_DAYS = 30
 _TOS_NETWORK_RETENTION_SECONDS = MAX_RETENTION_DAYS * 86_400
 _db_lock = threading.RLock()
@@ -110,7 +110,12 @@ CREATE TABLE IF NOT EXISTS memories (
     guild_id   TEXT,
     importance REAL DEFAULT 0.5,
     created    REAL NOT NULL,
-    updated    REAL
+    updated    REAL,
+    category   TEXT NOT NULL DEFAULT 'fact',
+    expires    REAL,
+    superseded_by INTEGER,
+    use_count  INTEGER NOT NULL DEFAULT 0,
+    last_used  REAL
 );
 CREATE TABLE IF NOT EXISTS lessons (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -147,6 +152,25 @@ CREATE TABLE IF NOT EXISTS interactions (
     guild_id TEXT,
     created  REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS ai_traces (
+    trace_id        TEXT PRIMARY KEY,
+    scope_id        TEXT NOT NULL,
+    task            TEXT NOT NULL,
+    route           TEXT NOT NULL,
+    requested_model TEXT,
+    served_model    TEXT,
+    prompt_version  TEXT,
+    status          TEXT NOT NULL,
+    latency_ms      INTEGER NOT NULL DEFAULT 0,
+    input_tokens    INTEGER NOT NULL DEFAULT 0,
+    output_tokens   INTEGER NOT NULL DEFAULT 0,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    fallbacks       INTEGER NOT NULL DEFAULT 0,
+    error_type      TEXT,
+    created         REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_traces_scope_created
+ON ai_traces(scope_id,created DESC);
 CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -168,6 +192,14 @@ CREATE TABLE IF NOT EXISTS conversations (
     role     TEXT NOT NULL,
     content  TEXT NOT NULL,
     created  REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS conversation_summaries (
+    user_id       TEXT NOT NULL,
+    guild_id      TEXT NOT NULL,
+    summary       TEXT NOT NULL,
+    source_through REAL NOT NULL DEFAULT 0,
+    updated       REAL NOT NULL,
+    PRIMARY KEY (user_id,guild_id)
 );
 CREATE TABLE IF NOT EXISTS quotes (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -585,6 +617,16 @@ def _migrate(c: sqlite3.Connection) -> None:
                 c.execute("ALTER TABLE memories ADD COLUMN importance REAL DEFAULT 0.5")
             if "updated" not in cols:
                 c.execute("ALTER TABLE memories ADD COLUMN updated REAL")
+            if "category" not in cols:
+                c.execute("ALTER TABLE memories ADD COLUMN category TEXT NOT NULL DEFAULT 'fact'")
+            if "expires" not in cols:
+                c.execute("ALTER TABLE memories ADD COLUMN expires REAL")
+            if "superseded_by" not in cols:
+                c.execute("ALTER TABLE memories ADD COLUMN superseded_by INTEGER")
+            if "use_count" not in cols:
+                c.execute("ALTER TABLE memories ADD COLUMN use_count INTEGER NOT NULL DEFAULT 0")
+            if "last_used" not in cols:
+                c.execute("ALTER TABLE memories ADD COLUMN last_used REAL")
 
             lesson_cols = _table_columns(c, "lessons")
             if "scope_id" not in lesson_cols:
@@ -2019,9 +2061,39 @@ def convo_get(user_id: str, guild_id: str, limit: int = None) -> List[dict]:
     return [dict(r) for r in reversed(rows)]
 
 
+def conversation_summary_get(user_id: str, guild_id: str) -> dict | None:
+    row = conn().execute(
+        "SELECT summary,source_through,updated FROM conversation_summaries "
+        "WHERE user_id=? AND guild_id=?",
+        (str(user_id), str(guild_id)),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def conversation_summary_set(
+    user_id: str, guild_id: str, summary: str, source_through: float
+) -> None:
+    if not history_storage_allowed(str(user_id), str(guild_id)):
+        return
+    text = str(summary or "").strip()[:4_000]
+    if not text:
+        return
+    conn().execute(
+        "INSERT INTO conversation_summaries(user_id,guild_id,summary,source_through,updated) "
+        "VALUES(?,?,?,?,?) ON CONFLICT(user_id,guild_id) DO UPDATE SET "
+        "summary=excluded.summary,source_through=excluded.source_through,updated=excluded.updated",
+        (str(user_id), str(guild_id), text, float(source_through), now()),
+    )
+    conn().commit()
+
+
 def convo_clear(user_id: str, guild_id: str) -> int:
     cur = conn().execute(
         "DELETE FROM conversations WHERE user_id=? AND guild_id=?",
+        (user_id, guild_id),
+    )
+    conn().execute(
+        "DELETE FROM conversation_summaries WHERE user_id=? AND guild_id=?",
         (user_id, guild_id),
     )
     conn().commit()
@@ -2031,6 +2103,10 @@ def convo_clear(user_id: str, guild_id: str) -> int:
 def convo_clear_user(user_id: str) -> int:
     cur = conn().execute(
         "DELETE FROM conversations WHERE user_id=?",
+        (str(user_id),),
+    )
+    conn().execute(
+        "DELETE FROM conversation_summaries WHERE user_id=?",
         (str(user_id),),
     )
     conn().commit()
@@ -2116,7 +2192,10 @@ def _tokens(text: str) -> set:
     return set(_WORD.findall((text or "").lower()))
 
 
-def add_memory(content, author, guild_id, subject="server", importance=0.5) -> int:
+def add_memory(
+    content, author, guild_id, subject="server", importance=0.5,
+    *, category: str = "fact", expires: float | None = None,
+) -> int:
     """Insert a memory, merging into a near-duplicate if one exists."""
     content = (content or "").strip()
     if not content:
@@ -2124,6 +2203,13 @@ def add_memory(content, author, guild_id, subject="server", importance=0.5) -> i
     subject = normalize_subject(subject, default_user=author)
     guild_id = str(guild_id) if guild_id is not None else None
     importance = max(0.0, min(1.0, float(importance)))
+    category = str(category or "fact").strip().lower()
+    if category not in {
+        "identity", "preference", "project", "relationship", "habit",
+        "future_plan", "server_fact", "temporary", "fact",
+    }:
+        category = "fact"
+    expires = float(expires) if expires is not None else None
     existing = memories_about(subject, guild_id)
     new_tok = _tokens(content)
     if new_tok:
@@ -2137,16 +2223,17 @@ def add_memory(content, author, guild_id, subject="server", importance=0.5) -> i
                 new_imp = min(1.0, new_imp + 0.05)
                 text = content if len(content) >= len(row["content"]) else row["content"]
                 conn().execute(
-                    "UPDATE memories SET content=?, importance=?, updated=?, author=? WHERE id=?",
-                    (text, new_imp, now(), author, row["id"]),
+                    "UPDATE memories SET content=?, importance=?, updated=?, author=?,"
+                    "category=?,expires=COALESCE(?,expires) WHERE id=?",
+                    (text, new_imp, now(), author, category, expires, row["id"]),
                 )
                 conn().commit()
                 _invalidate_memory_cache(subject=subject, scope_id=guild_id)
                 return row["id"]
     cur = conn().execute(
-        "INSERT INTO memories(subject,content,author,guild_id,importance,created,updated) "
-        "VALUES(?,?,?,?,?,?,?)",
-        (subject, content, author, guild_id, importance, now(), now()),
+        "INSERT INTO memories(subject,content,author,guild_id,importance,created,updated,"
+        "category,expires) VALUES(?,?,?,?,?,?,?,?,?)",
+        (subject, content, author, guild_id, importance, now(), now(), category, expires),
     )
     conn().commit()
     _invalidate_memory_cache(subject=subject, scope_id=guild_id)
@@ -2199,8 +2286,9 @@ def memories_about(subject: str, guild_id: Optional[str]) -> List[sqlite3.Row]:
         return []
     rows = conn().execute(
         "SELECT * FROM memories WHERE subject=? AND guild_id=? "
+        "AND superseded_by IS NULL AND (expires IS NULL OR expires>?) "
         "ORDER BY importance DESC, created DESC",
-        (subject, gid),
+        (subject, gid, now()),
     ).fetchall()
     _mem_cache_set(key, rows)
     return rows
@@ -2214,7 +2302,11 @@ def scope_memories(guild_id: Optional[str]) -> List[sqlite3.Row]:
     cached = _mem_cache_get(key)
     if cached is not None:
         return cached
-    rows = conn().execute("SELECT * FROM memories WHERE guild_id=?", (gid,)).fetchall()
+    rows = conn().execute(
+        "SELECT * FROM memories WHERE guild_id=? AND superseded_by IS NULL "
+        "AND (expires IS NULL OR expires>?)",
+        (gid, now()),
+    ).fetchall()
     _mem_cache_set(key, rows)
     return rows
 
@@ -2223,6 +2315,34 @@ def get_memory(mem_id: int) -> Optional[sqlite3.Row]:
     return conn().execute(
         "SELECT * FROM memories WHERE id=?", (int(mem_id),)
     ).fetchone()
+
+
+def mark_memories_used(memory_ids: list[int]) -> None:
+    ids = sorted({int(value) for value in memory_ids if int(value) > 0})[:100]
+    if not ids:
+        return
+    placeholders = ",".join("?" for _ in ids)
+    conn().execute(
+        f"UPDATE memories SET use_count=use_count+1,last_used=? "  # noqa: S608
+        f"WHERE id IN ({placeholders})",
+        (now(), *ids),
+    )
+    conn().commit()
+    _invalidate_memory_cache()
+
+
+def supersede_memory(old_id: int, new_id: int, *, subject: str, scope_id: str) -> bool:
+    if int(old_id) == int(new_id):
+        return False
+    cur = conn().execute(
+        "UPDATE memories SET superseded_by=?,updated=? WHERE id=? AND subject=? "
+        "AND guild_id=? AND superseded_by IS NULL",
+        (int(new_id), now(), int(old_id), normalize_subject(subject), str(scope_id)),
+    )
+    conn().commit()
+    if cur.rowcount:
+        _invalidate_memory_cache(subject=normalize_subject(subject), scope_id=str(scope_id))
+    return bool(cur.rowcount)
 
 
 def forget_memory(mem_id: int) -> bool:
@@ -2421,6 +2541,66 @@ def log_interaction(kind, author, guild_id) -> None:
         (kind, author, guild_id, now()),
     )
     conn().commit()
+
+
+def ai_trace_record(
+    *, trace_id: str, scope_id: str, task: str, route: str,
+    requested_model: str, served_model: str, prompt_version: str,
+    status: str, latency_ms: int, input_tokens: int, output_tokens: int,
+    attempts: int, fallbacks: int, error_type: str = "",
+) -> None:
+    """Persist metadata only; prompt and response text are never accepted."""
+    if not bool(guild_settings(scope_id).get("ai_tracing_enabled", True)):
+        return
+    conn().execute(
+        "INSERT OR REPLACE INTO ai_traces("
+        "trace_id,scope_id,task,route,requested_model,served_model,prompt_version,"
+        "status,latency_ms,input_tokens,output_tokens,attempts,fallbacks,error_type,created"
+        ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            trace_id, scope_id, task, route, requested_model, served_model,
+            prompt_version, status, max(0, int(latency_ms)), max(0, int(input_tokens)),
+            max(0, int(output_tokens)), max(0, int(attempts)), max(0, int(fallbacks)),
+            str(error_type or "")[:80], now(),
+        ),
+    )
+    conn().commit()
+
+
+def ai_traces_recent(scope_id: str, limit: int = 20) -> list[dict]:
+    rows = conn().execute(
+        "SELECT trace_id,task,route,requested_model,served_model,prompt_version,status,"
+        "latency_ms,input_tokens,output_tokens,attempts,fallbacks,error_type,created "
+        "FROM ai_traces WHERE scope_id=? ORDER BY created DESC LIMIT ?",
+        (str(scope_id), max(1, min(100, int(limit)))),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def ai_trace_summary(scope_id: str, hours: int = 24) -> dict:
+    cutoff = now() - max(1, min(720, int(hours))) * 3600
+    row = conn().execute(
+        "SELECT COUNT(*) requests,"
+        "SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) successes,"
+        "SUM(CASE WHEN fallbacks>0 THEN 1 ELSE 0 END) fallback_requests,"
+        "COALESCE(AVG(latency_ms),0) average_latency_ms,"
+        "COALESCE(SUM(input_tokens),0) input_tokens,"
+        "COALESCE(SUM(output_tokens),0) output_tokens "
+        "FROM ai_traces WHERE scope_id=? AND created>=?",
+        (str(scope_id), cutoff),
+    ).fetchone()
+    data = dict(row) if row is not None else {}
+    requests = int(data.get("requests") or 0)
+    successes = int(data.get("successes") or 0)
+    return {
+        "requests": requests,
+        "successes": successes,
+        "success_rate": round((successes / requests * 100.0) if requests else 100.0, 1),
+        "fallback_requests": int(data.get("fallback_requests") or 0),
+        "average_latency_ms": round(float(data.get("average_latency_ms") or 0), 1),
+        "input_tokens": int(data.get("input_tokens") or 0),
+        "output_tokens": int(data.get("output_tokens") or 0),
+    }
 
 
 def stats() -> dict:
@@ -2792,12 +2972,25 @@ def privacy_set_opt_in(user_id: str, scope_id: str, opted_in: bool) -> None:
 
 
 def privacy_remove_scope_history(user_id: str, scope_id: str) -> int:
-    cur = conn().execute(
-        "DELETE FROM server_messages WHERE user_id=? AND guild_id=?",
-        (str(user_id), str(scope_id)),
-    )
-    conn().commit()
-    return max(0, int(cur.rowcount))
+    uid = str(user_id)
+    scope = str(scope_id)
+    c = conn()
+    removed = 0
+    with _db_lock:
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            for sql in (
+                "DELETE FROM server_messages WHERE user_id=? AND guild_id=?",
+                "DELETE FROM conversations WHERE user_id=? AND guild_id=?",
+                "DELETE FROM conversation_summaries WHERE user_id=? AND guild_id=?",
+            ):
+                cur = c.execute(sql, (uid, scope))
+                removed += max(0, int(cur.rowcount))
+            c.commit()
+        except Exception:
+            c.rollback()
+            raise
+    return removed
 
 
 def history_storage_allowed(user_id: str, scope_id: str) -> bool:
@@ -2838,6 +3031,19 @@ def privacy_export(user_id: str) -> dict:
         "conversations": [
             dict(r) for r in c.execute(
                 "SELECT * FROM conversations WHERE user_id=?", (uid,)
+            ).fetchall()
+        ],
+        "conversation_summaries": [
+            dict(r) for r in c.execute(
+                "SELECT * FROM conversation_summaries WHERE user_id=?", (uid,)
+            ).fetchall()
+        ],
+        "ai_traces": [
+            dict(r) for r in c.execute(
+                "SELECT trace_id,scope_id,task,route,requested_model,served_model,"
+                "prompt_version,status,latency_ms,input_tokens,output_tokens,attempts,"
+                "fallbacks,error_type,created FROM ai_traces WHERE scope_id=?",
+                (f"dm:{uid}",),
             ).fetchall()
         ],
         "relationships": [
@@ -2929,6 +3135,10 @@ def privacy_delete_user(user_id: str) -> dict[str, int]:
     delete_queries = {
         "memories": ("DELETE FROM memories WHERE subject=? OR author=?", (uid, uid)),
         "conversations": ("DELETE FROM conversations WHERE user_id=?", (uid,)),
+        "conversation_summaries": (
+            "DELETE FROM conversation_summaries WHERE user_id=?", (uid,)
+        ),
+        "ai_traces": ("DELETE FROM ai_traces WHERE scope_id=?", (f"dm:{uid}",)),
         "relationships": ("DELETE FROM relationships WHERE user_id=?", (uid,)),
         "quotes": ("DELETE FROM quotes WHERE author=? OR about=?", (uid, uid)),
         "feedback": ("DELETE FROM feedback WHERE author=?", (uid,)),
@@ -3031,8 +3241,14 @@ def cleanup_expired_content(retention_days: int = MAX_RETENTION_DAYS) -> dict[st
             counts["server_messages"] = max(0, int(cur.rowcount))
             cur = c.execute("DELETE FROM conversations WHERE created<?", (cutoff,))
             counts["conversations"] = max(0, int(cur.rowcount))
+            cur = c.execute("DELETE FROM conversation_summaries WHERE updated<?", (cutoff,))
+            counts["conversation_summaries"] = max(0, int(cur.rowcount))
             cur = c.execute("DELETE FROM feedback WHERE created<?", (cutoff,))
             counts["feedback"] = max(0, int(cur.rowcount))
+            cur = c.execute("DELETE FROM ai_traces WHERE created<?", (cutoff,))
+            counts["ai_traces"] = max(0, int(cur.rowcount))
+            cur = c.execute("DELETE FROM memories WHERE expires IS NOT NULL AND expires<=?", (now(),))
+            counts["expired_memories"] = max(0, int(cur.rowcount))
             cur = c.execute(
                 "DELETE FROM assistant_action_history WHERE created<?", (cutoff,)
             )
@@ -3070,6 +3286,7 @@ def cleanup_expired_content(retention_days: int = MAX_RETENTION_DAYS) -> dict[st
         except Exception:
             c.rollback()
             raise
+    _invalidate_memory_cache()
     return counts
 
 
@@ -3081,7 +3298,15 @@ def cleanup_guild_content(guild_id: str, retention_days: int) -> dict[str, int]:
     statements = {
         "server_messages": ("DELETE FROM server_messages WHERE guild_id=? AND created<?", (gid, cutoff)),
         "conversations": ("DELETE FROM conversations WHERE guild_id=? AND created<?", (gid, cutoff)),
+        "conversation_summaries": (
+            "DELETE FROM conversation_summaries WHERE guild_id=? AND updated<?", (gid, cutoff)
+        ),
         "feedback": ("DELETE FROM feedback WHERE scope_id=? AND created<?", (gid, cutoff)),
+        "ai_traces": ("DELETE FROM ai_traces WHERE scope_id=? AND created<?", (gid, cutoff)),
+        "expired_memories": (
+            "DELETE FROM memories WHERE guild_id=? AND expires IS NOT NULL AND expires<=?",
+            (gid, now()),
+        ),
         "assistant_action_history": (
             "DELETE FROM assistant_action_history WHERE scope_id=? AND created<?",
             (gid, cutoff),
@@ -3106,6 +3331,7 @@ def cleanup_guild_content(guild_id: str, retention_days: int) -> dict[str, int]:
         except Exception:
             c.rollback()
             raise
+    _invalidate_memory_cache(scope_id=gid)
     return counts
 
 

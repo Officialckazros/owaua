@@ -453,6 +453,39 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(choice["value"] == "" for choice in model["choices"]))
         self.assertGreaterEqual(len(payload["modules"]), 32)
 
+    async def test_ai_health_is_authenticated_scoped_and_content_free(self):
+        cookie, _csrf = await self._login()
+        db.ai_trace_record(
+            trace_id="ai_dashboard",
+            scope_id="guild:123456789012345678",
+            task="workflow",
+            route="expert",
+            requested_model="model-a",
+            served_model="model-b",
+            prompt_version="workflow-v1",
+            status="success",
+            latency_ms=250,
+            input_tokens=120,
+            output_tokens=40,
+            attempts=2,
+            fallbacks=1,
+        )
+        denied = await self.client.get(
+            "/dashboard/api/guild/123456789012345678/ai-health"
+        )
+        self.assertEqual(denied.status, 401)
+        response = await self.client.get(
+            "/dashboard/api/guild/123456789012345678/ai-health",
+            headers={"Cookie": cookie},
+        )
+        self.assertEqual(response.status, 200, await response.text())
+        payload = await response.json()
+        self.assertEqual(payload["usage"]["requests"], 1)
+        self.assertEqual(payload["usage"]["fallback_requests"], 1)
+        self.assertEqual(payload["recent"][0]["trace_id"], "ai_dashboard")
+        self.assertNotIn("prompt", payload["recent"][0])
+        self.assertNotIn("response", payload["recent"][0])
+
     async def test_server_settings_round_trip_validation_csrf_and_audit(self):
         cookie, csrf = await self._login()
         headers = {

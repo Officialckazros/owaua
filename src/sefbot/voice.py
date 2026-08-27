@@ -44,7 +44,8 @@ _SAMPLE_RATE = 48000
 _CHANNELS = 2
 _SAMPLE_WIDTH = 2
 _BYTES_PER_SECOND = _SAMPLE_RATE * _CHANNELS * _SAMPLE_WIDTH
-_MAX_TTS_CHARACTERS = 1000
+# Groq's current Orpheus endpoint accepts a maximum of 200 input characters.
+_MAX_TTS_CHARACTERS = 200
 _MAX_TTS_AUDIO_BYTES = 10 * 1024 * 1024
 _MAX_STT_AUDIO_BYTES = 4 * 1024 * 1024
 _MAX_STT_QUEUE_BYTES = 16 * 1024 * 1024
@@ -661,7 +662,7 @@ async def _leave_locked(interaction: discord.Interaction) -> Tuple[bool, str]:
 
 
 async def say(interaction: discord.Interaction, text: str) -> Tuple[bool, str]:
-    """Synthesize text with Orpheus TTS and play it in the current voice channel."""
+    """Synthesize text with the supported Groq Orpheus API and play it."""
     guild = interaction.guild
     if guild is None:
         return False, "this only works in a server."
@@ -700,6 +701,7 @@ async def say(interaction: discord.Interaction, text: str) -> Tuple[bool, str]:
                 config.TTS_MODEL,
                 text,
                 voice=config.TTS_VOICE,
+                response_format="wav",
                 api_key=config.GROQ_API_KEY,
                 base_url=config.GROQ_BASE_URL,
             )

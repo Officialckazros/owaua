@@ -13,8 +13,8 @@ from __future__ import annotations
 import html
 from typing import Final
 
-LEGAL_VERSION: Final = "3.6"
-LEGAL_EFFECTIVE_DATE: Final = "26 August 2026"
+LEGAL_VERSION: Final = "3.7"
+LEGAL_EFFECTIVE_DATE: Final = "27 August 2026"
 PUBLIC_BASE_URL: Final = "https://kozzyx.org/sefbot"
 TERMS_URL: Final = f"{PUBLIC_BASE_URL}/terms"
 PRIVACY_URL: Final = f"{PUBLIC_BASE_URL}/privacy"
@@ -246,7 +246,8 @@ downloaded. Voice features read voice-state (who is in which channel).</p>
 Discord log-channel embeds for server audit entries and observed gateway
 events. Depending on that server's dashboard choices, these can include actor
 and target ids, roles, channel activity, reasons, before/after values, edited or
-deleted message text, attachment links, reactions, command use, voice-state
+deleted message text, attachment links, and copies of previewable media,
+reactions, command use, voice-state
 changes, and bounded samples from bulk deletions. These embeds are sent back to
 the administrator-selected Discord log channel and are not copied into a separate
 OpSef SQLite action-log table. Discord controls how long those channel messages
@@ -281,13 +282,15 @@ an OpSef acceptance record.</p>
 <tr><td>tos_acceptances</td><td>Discord user id, legal version, accepted/review/rejected status, keyed network token, timestamps, and a short risk code when review is required</td><td>When the web acceptance form is submitted or the operator resolves a review</td></tr>
 <tr><td>server_messages</td><td>Message id, guild/channel ids and names, user id, username, display name, text content, optional bad-word flags, time</td><td>Under the ordinary dual consent gate, or for accessible text in an explicitly configured archival guild</td></tr>
 <tr><td>conversations</td><td>Short user/bot turns, truncated to 1500 characters, kept to about 20 turns each way by default</td><td>Same dual gate as raw history</td></tr>
-<tr><td>memories</td><td>Facts about a subject (your id or "server"), author id, guild/scope, importance, timestamps</td><td>When the bot or a moderator saves a memory; scoped to that guild or DM</td></tr>
+<tr><td>conversation_summaries</td><td>An AI-compressed continuity summary, user id, exact scope, source-through and update times</td><td>After enough new dual-consented turns; it never replaces durable memories</td></tr>
+<tr><td>memories</td><td>Facts about a subject (your id or "server"), author id, guild/scope, importance, category, optional expiry/supersession, use count, and timestamps</td><td>When the bot or a moderator saves a memory; scoped to that guild or DM</td></tr>
 <tr><td>lessons</td><td>Short style/behavior notes distilled from feedback, with a scope id</td><td>When enough feedback exists and distillation runs; these are guild-level, not owned by one user</td></tr>
 <tr><td>feedback</td><td>Your message, the bot reply, thumbs up/down or a correction note, your id, scope</td><td>When you rate a reply</td></tr>
 <tr><td>relationships</td><td>Per-user, per-guild bond score, optional nickname, optional grudge text</td><td>As the bot updates how it treats you in that server</td></tr>
 <tr><td>quotes</td><td>Saved lines, who they are about, who saved them, guild id</td><td>When someone saves a quote</td></tr>
 <tr><td>commands</td><td>Community command name, prompt spec, author id, guild, use count</td><td>When a command is requested/approved</td></tr>
 <tr><td>interactions</td><td>Kind of interaction, author, guild, time (counts, not full text)</td><td>As you use features</td></tr>
+<tr><td>ai_traces</td><td>Random trace id, exact scope, task/route, requested and serving model ids, prompt version, success/error type, latency, estimated token counts, attempts and fallback count. No prompt or response content.</td><td>When privacy-safe AI tracing is enabled for that server; used for health and cost diagnostics</td></tr>
 <tr><td>guild_settings</td><td>Persona, lurk, swear level/jar, allowed channels, history/moderation/rules/STT flags, retention days, log channel ids, optional reply-language default</td><td>When administrators configure the server</td></tr>
 <tr><td>swear_jar_counts</td><td>Guild id, user id, aggregate swear count, last update time; no message text or matched words</td><td>When a server administrator enables the swear jar and a message contains locally detected profanity</td></tr>
 <tr><td>action_audit</td><td>Actor id, scope, action type, target id, parameters (JSON, capped), status, result, times</td><td>On confirmed <code>/act</code> and similar gated actions</td></tr>
@@ -298,7 +301,7 @@ an OpSef acceptance record.</p>
 <tr><td>afk_statuses / afk_notes</td><td>Server/user ids, AFK reason, prior nickname, notification preference, and notes deliberately left by members</td><td>While AFK is enabled; status and delivered notes are removed on return</td></tr>
 <tr><td>user_levels / daily_claims</td><td>Per-server XP, level, message count, XP cooldown, daily claim time and streak</td><td>When Levels/Economy is enabled and used</td></tr>
 <tr><td>dynamic_blocks</td><td>Blocked user id, source (manual/ToS/other), reason, category, SHA-256 prefix of evidence, guild/channel ids, strike notes, last 10 history events</td><td>On ToS hard-block or operator block</td></tr>
-<tr><td>user flags (kv)</td><td>ToS version accepted and when; reject time; strike counters; emergency-block flag; DM-block flag; freaky-mode flag; reply-language preference; per-guild STT consent flags</td><td>As those features are used</td></tr>
+<tr><td>user flags (kv)</td><td>ToS version accepted and when; reject time; strike counters; emergency-block flag; DM-block flag; freaky-mode and fast/balanced/reasoning AI-mode flags; reply-language preference; per-guild STT consent flags</td><td>As those features are used</td></tr>
 <tr><td>economy_accounts / work_cooldowns</td><td>Toy currency balance and work timestamps</td><td>If you use those commands</td></tr>
 <tr><td>kb_docs</td><td>Knowledge-base passages for a guild (text chunks, topic, source)</td><td>When mods ingest files or <code>!kb add</code></td></tr>
 <tr><td>dm_contacts</td><td>User id, display name, last DM time — used by the operator DM CLI</td><td>When the operator DMs you through the bot account</td></tr>
@@ -316,7 +319,7 @@ commands cannot accept. It is not raw-history consent. The tests assert that.</l
 the administrator to enable <code>history_enabled</code> <em>and</em> you to
 <code>/privacy opt-in</code> for that exact guild id. In DMs, opt-in alone is
 enough (there is no guild admin). If either gate is off, conversation turns
-and server_messages are not stored, and live channel context is not pulled
+and conversation summaries and server_messages are not stored, and live channel context is not pulled
 into the prompt.</li>
 <li><strong>Dedicated archival guild exception:</strong> the host may configure
 an explicit guild id in <code>SEFBOT_ARCHIVE_GUILD_IDS</code>. In that disclosed
@@ -390,7 +393,8 @@ until you export or delete them.</p>
 persona; server mood; your relationship score/nickname/grudge; swear-level;
 guild lessons; your speaker profile; memories about you in that exact scope;
 recent stored conversation turns; matching server memories; knowledge-base
-chunks (delimited as untrusted reference data); and your current message.
+chunks (delimited as untrusted reference data); an exact-user/exact-scope
+compressed continuity summary when dual-consented history is long enough; and your current message.
 That bundle is sent to whichever chat provider is configured for the
 route (examples the code knows: Groq, OpenRouter, Google Gemini, Anthropic,
 DeepSeek, Cerebras, Inception Mercury, Inferx, Celeris, plus any
@@ -433,7 +437,7 @@ do not include user, guild, or provider payloads.</p>
 
 <h2>6. Retention</h2>
 <ul>
-<li>Raw history and conversation turns: at most 30 days
+<li>Raw history, conversation turns, compressed conversation summaries, and AI trace metadata: at most 30 days
 (<code>SEFBOT_RETENTION_DAYS</code>, hard-capped at 30). Startup deletes
 older rows before the bot reports ready. Legacy raw history from older
 schema versions is purged on migrate. Raw message text in an explicitly
@@ -450,7 +454,9 @@ Once closed, resolved, disabled, or delivered, their typed community records
 follow the server's content-retention cleanup.</li>
 <li>Memories, lessons, quotes, relationships, command specs, economy,
 swear-jar totals, consents, and guild settings stay until deleted or no longer
-needed to run the bot.</li>
+needed to run the bot. A memory with an explicit expiry is hidden after that time
+and removed during cleanup; superseded memories remain visible to export/inspection
+until deleted.</li>
 <li>Action-audit rows stay for abuse investigation. They are not wiped by
 <code>/privacy delete</code>.</li>
 <li>ToS block records keep hashed evidence, not the original message
@@ -473,7 +479,8 @@ status, links.</li>
 <li><code>/privacy opt-in</code> / <code>opt-out</code> — this exact
 scope only.</li>
 <li><code>/privacy export</code> — a private JSON file of data owned by,
-authored by, or explicitly about you: consents, memories, conversations,
+authored by, or explicitly about you: consents, memories, conversations and their summaries,
+DM-scoped AI trace metadata,
 relationships, quotes, feedback, interactions, raw messages, DM contact
 row, dynamic block metadata, and swear-jar totals. Oversized exports are
 gzip-compressed. The export includes your web ToS acceptance status and keyed
@@ -481,7 +488,7 @@ network token while retained. Subject-linked cases, notes, appeals, incidents, t
 onboarding records use the same community-record ownership coverage. This is
 not a complete dump of the database.</li>
 <li><code>/privacy delete</code> — after a confirmation click, deletes
-your memories, conversations, relationships, quotes, feedback,
+your memories, conversations, conversation summaries, DM-scoped AI traces, relationships, quotes, feedback,
 interactions, raw messages, consents, authored community commands,
 economy, DM contact, CLI sessions, ToS web challenges/acceptance records,
 ordinary dynamic block row, and user flags

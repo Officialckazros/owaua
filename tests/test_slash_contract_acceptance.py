@@ -33,9 +33,41 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("privacy", self.commands)
         self.assertIn("act", self.commands)
         self.assertIn("language", self.commands)
+        self.assertIn("profile", self.commands)
+        self.assertNotIn("whoami", self.commands)
         self.assertIn("lang", self.commands)
         self.assertIn("mode", self.commands)
         self.assertEqual(len(self.commands), 100)
+
+    async def test_profile_shows_fetched_banner_and_display_avatar(self) -> None:
+        command = self.commands["profile"]
+        target = SimpleNamespace(
+            id=123,
+            name="example",
+            global_name="Example User",
+            display_name="Example User",
+            bot=False,
+            created_at=discord.utils.utcnow(),
+            joined_at=None,
+            display_avatar=SimpleNamespace(url="https://cdn.example/avatar.png"),
+        )
+        fetched = SimpleNamespace(
+            banner=SimpleNamespace(url="https://cdn.example/banner.png"),
+            accent_color=None,
+        )
+        interaction = SimpleNamespace(
+            user=target,
+            client=SimpleNamespace(fetch_user=mock.AsyncMock(return_value=fetched)),
+            response=SimpleNamespace(send_message=mock.AsyncMock()),
+        )
+
+        await command.callback(interaction)
+
+        interaction.client.fetch_user.assert_awaited_once_with(123)
+        embed = interaction.response.send_message.await_args.kwargs["embed"]
+        self.assertEqual(embed.thumbnail.url, "https://cdn.example/avatar.png")
+        self.assertEqual(embed.image.url, "https://cdn.example/banner.png")
+        self.assertIn("https://cdn.example/banner.png", embed.description)
 
     def test_nsfw_command_is_discord_marked_guild_only_and_count_bounded(self) -> None:
         command = self.commands["nsfw"]
@@ -109,9 +141,8 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
     def test_ai_workflows_extend_existing_commands_without_exceeding_discord_limit(self) -> None:
         ask = {parameter.name: parameter for parameter in self.commands["ask"].parameters}
         workflows = [choice.value for choice in ask["workflow"].choices]
-        self.assertEqual(len(workflows), 21)
-        self.assertIn("fact_check", workflows)
-        self.assertIn("moderation_triage", workflows)
+        self.assertEqual(workflows, [])
+        self.assertIsNotNone(ask["workflow"].autocomplete)
 
         recap = {parameter.name: parameter for parameter in self.commands["recap"].parameters}
         recap_modes = [choice.value for choice in recap["mode"].choices]

@@ -21,6 +21,7 @@ import discord
 from sefbot import (
     actions,
     ai,
+    ai_control,
     ai_workflows,
     archive,
     auditlog,
@@ -1754,6 +1755,10 @@ async def _chat(
                     config.MODEL_NSFW_FALLBACKS if channel_nsfw
                     else (config.MODEL_FREAKY_FALLBACKS if freaky else None)
                 ),
+                schema="brain_response",
+                task="assistant" if assistant else "chat",
+                scope_id=guild_id,
+                user_id=author,
             )
         except Exception as e:
             await memory_task
@@ -1801,6 +1806,9 @@ async def _chat(
                         guild_id, assistant=assistant, freaky=freaky,
                         channel_nsfw=channel_nsfw,
                     ),
+                    task="assistant" if assistant else "chat",
+                    scope_id=guild_id,
+                    user_id=author,
                 )
             except Exception as e:
                 await memory_task
@@ -1827,7 +1835,9 @@ async def _chat(
         async with message.channel.typing():
             try:
                 woven, search_sources = await brain.answer_with_search(
-                    system, user_turn, str(data["web_search"]))
+                    system, user_turn, str(data["web_search"]),
+                    scope_id=guild_id, user_id=author,
+                )
                 if woven:
                     response = woven
             except Exception as e:
@@ -1870,6 +1880,10 @@ async def _chat(
     if db.history_storage_allowed(author, guild_id):
         db.convo_add(author, guild_id, "user", query)
         db.convo_add(author, guild_id, "bot", response)
+        asyncio.create_task(
+            brain.refresh_conversation_summary(author, guild_id),
+            name=f"conversation-summary:{author}:{guild_id}",
+        )
 
     # Ordinary chat stays response-only. Explicit assistant turns may render one
     # invoker-bound proposal, but execution still requires a human click.
@@ -2914,6 +2928,7 @@ async def _cmd_ai(message, arg, guild_id, author):
                 source,
                 extra_instruction=instruction,
                 is_staff=is_staff,
+                user_id=author,
             )
         except (ValueError, PermissionError, RuntimeError) as exc:
             await _send(message.channel, embeds.error(str(exc)), feedback=False)
@@ -3208,12 +3223,22 @@ async def _cmd_mode(message, arg, guild_id, author):
     if not raw or low in ("help", "?", "status"):
         current = brain.freaky_enabled(author)
         state = "freaky mommy mode is ON" if current else "freaky mommy mode is OFF"
+        ai_mode = ai_control.user_mode(author, guild_id)
         await _send(
             message.channel,
             embeds.say(
-                f"{state}. use `{p}mode freaky` to turn it on or `{p}mode normal` to turn it off.",
+                f"{state}. AI mode is **{ai_mode}**. Use `{p}mode freaky|normal` "
+                f"and `{p}mode ai-fast|ai-balanced|ai-reasoning`.",
                 title="mode",
             ),
+            feedback=False,
+        )
+        return
+    if low in {"ai-fast", "ai-balanced", "ai-reasoning"}:
+        selected = ai_control.set_user_mode(author, low.removeprefix("ai-"))
+        await _send(
+            message.channel,
+            embeds.ok(f"AI mode set to **{selected}** for you."),
             feedback=False,
         )
         return
@@ -3236,7 +3261,7 @@ async def _cmd_mode(message, arg, guild_id, author):
     await _send(
         message.channel,
         embeds.error(
-            f"usage: `{p}mode freaky` or `{p}mode normal`. currently: `{p}mode help`."
+            f"usage: `{p}mode freaky|normal|ai-fast|ai-balanced|ai-reasoning`."
         ),
         feedback=False,
     )
@@ -4335,7 +4360,10 @@ async def _cmd_privacy(message, arg, guild_id, author):
         removed = db.privacy_remove_scope_history(author, guild_id)
         await _send_private(
             message,
-            embeds.ok(f"consent revoked for this scope; removed {removed} raw message record(s)."),
+            embeds.ok(
+                f"consent revoked for this scope; removed {removed} raw history "
+                "and conversation record(s)."
+            ),
         )
         return
     if sub == "export":

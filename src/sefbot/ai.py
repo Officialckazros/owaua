@@ -25,7 +25,7 @@ from typing import List, Optional, Union
 
 from groq import Groq
 
-from sefbot import config
+from sefbot import ai_control, config, db
 
 _LOG = logging.getLogger(__name__)
 
@@ -831,7 +831,7 @@ def _anthropic_generate(model, system, messages, max_tokens, temperature) -> str
 
 
 def _generate(requested, system, messages, max_tokens, temperature,
-              fallbacks=None) -> str:
+              fallbacks=None, trace=None) -> str:
     """Run the request down a fallback chain.
 
     Quotas are per (provider, org, model), so when one is exhausted a different
@@ -845,6 +845,8 @@ def _generate(requested, system, messages, max_tokens, temperature,
     chain = [requested] + [m for m in pool if m != requested]
     last = None
     for model in chain:
+        if not ai_control.provider_available(model):
+            continue
         if _is_mercury(model) and not config.INCEPTION_API_KEY:
             continue
         if _is_celeris(model) and not config.CELERIS_API_KEY:
@@ -892,10 +894,21 @@ def _generate(requested, system, messages, max_tokens, temperature,
         else:
             fn = _groq_generate
         for attempt in range(_SAME_MODEL_ATTEMPTS):
+            started = time.perf_counter()
+            if trace is not None:
+                trace["attempts"] = int(trace.get("attempts") or 0) + 1
             try:
                 out = fn(model, system, messages, max_tokens, temperature)
                 if not out or not str(out).strip():
                     raise RuntimeError(f"{model}: empty content")
+                ai_control.record_provider_result(
+                    model,
+                    success=True,
+                    latency_ms=(time.perf_counter() - started) * 1000,
+                )
+                if trace is not None:
+                    trace["served_model"] = model
+                    trace["fallbacks"] = 0 if model == requested else 1
                 if model != requested:
                     print(f"[failover] {requested} exhausted -> served by {model}")
                 elif attempt:
@@ -903,6 +916,12 @@ def _generate(requested, system, messages, max_tokens, temperature,
                 return out
             except Exception as e:
                 last = e
+                ai_control.record_provider_result(
+                    model,
+                    success=False,
+                    latency_ms=(time.perf_counter() - started) * 1000,
+                    error=e,
+                )
                 _LOG.warning(
                     "provider %s attempt %s/%s failed (%s): %s",
                     model, attempt + 1, _SAME_MODEL_ATTEMPTS,
@@ -980,6 +999,10 @@ async def chat(
     model: Optional[str] = None,
     tier: str = "smart",
     fallbacks: Optional[List[str]] = None,
+    task: str = "chat",
+    scope_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    prompt_version: Optional[str] = None,
 ) -> str:
     """Run a chat completion and return the text.
 
@@ -987,6 +1010,18 @@ async def chat(
     Message content may be a string or a list of multimodal content parts.
     Pass `fallbacks=[]` to disable the default text-model chain (needed for vision).
     """
+    decision = ai_control.route(
+        task,
+        requested_tier=tier,
+        user_id=user_id,
+        scope_id=scope_id,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        prompt_version=prompt_version,
+    )
+    tier = decision.tier
+    max_tokens = decision.max_tokens
+    temperature = decision.temperature
     use_model = model or _resolve_model(tier)
     if fallbacks is None:
         if tier == "expert":
@@ -996,12 +1031,29 @@ async def chat(
     if tier == "vision" and fallbacks is None:
         fallbacks = []
 
+    ai_control.check_request_budget(scope_id, decision.task)
+    trace = ai_control.begin_trace(
+        task=decision.task,
+        scope_id=scope_id,
+        route_name=tier,
+        requested_model=use_model,
+        prompt_version=decision.prompt_version,
+        input_tokens=ai_control.estimate_tokens(system) + ai_control.estimate_tokens(messages),
+        max_output_tokens=max_tokens,
+    )
+
     def _call():
         return _generate(use_model, system, messages, max_tokens, temperature,
-                         fallbacks=fallbacks)
+                         fallbacks=fallbacks, trace=trace)
 
-    async with _llm_semaphore():
-        return await _run(_call)
+    try:
+        async with _llm_semaphore():
+            output = await _run(_call)
+    except Exception as exc:
+        ai_control.finish_trace(trace, status="error", error=exc)
+        raise
+    ai_control.finish_trace(trace, status="success", output_text=output)
+    return output
 
 
 async def structured(
@@ -1012,6 +1064,11 @@ async def structured(
     tier: str = "smart",
     model: Optional[str] = None,
     fallbacks: Optional[List[str]] = None,
+    schema: Optional[str] = None,
+    task: str = "chat",
+    scope_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    prompt_version: Optional[str] = None,
 ) -> Optional[dict]:
     """Multi-turn chat that must return a single JSON object (the brain's reply)."""
     raw = await chat(
@@ -1022,8 +1079,34 @@ async def structured(
         temperature=temperature,
         tier=tier,
         fallbacks=fallbacks,
+        task=task,
+        scope_id=scope_id,
+        user_id=user_id,
+        prompt_version=prompt_version,
     )
-    return _extract_json(raw)
+    parsed = ai_control.validate_structured(_extract_json(raw), schema)
+    repair_enabled = config.AI_STRUCTURED_REPAIR
+    if scope_id:
+        repair_enabled = repair_enabled and bool(
+            db.guild_settings(scope_id).get("ai_structured_repair", True)
+        )
+    if parsed is not None or not repair_enabled:
+        return parsed
+    repair_system = (
+        "Repair malformed JSON into one valid JSON object. Preserve only information "
+        "already present. Never add actions, facts, fields, or claims. Return JSON only."
+    )
+    repaired = await chat(
+        repair_system,
+        [{"role": "user", "content": str(raw)[:12_000]}],
+        max_tokens=min(max_tokens, 1_000),
+        temperature=0.0,
+        tier="fast",
+        task="structured_repair",
+        scope_id=scope_id,
+        user_id=user_id,
+    )
+    return ai_control.validate_structured(_extract_json(repaired), schema)
 
 
 async def json_call(
@@ -1031,6 +1114,11 @@ async def json_call(
     prompt: str,
     max_tokens: int = 800,
     tier: str = "smart",
+    schema: Optional[str] = None,
+    task: str = "workflow",
+    scope_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    prompt_version: Optional[str] = None,
 ) -> Optional[dict]:
     """Ask the model for a single JSON object and parse it."""
     system = system + "\n\nRespond with ONLY a single valid JSON object, no prose."
@@ -1040,8 +1128,31 @@ async def json_call(
         max_tokens=max_tokens,
         temperature=0.3,
         tier=tier,
+        task=task,
+        scope_id=scope_id,
+        user_id=user_id,
+        prompt_version=prompt_version,
     )
-    return _extract_json(raw)
+    parsed = ai_control.validate_structured(_extract_json(raw), schema)
+    repair_enabled = config.AI_STRUCTURED_REPAIR
+    if scope_id:
+        repair_enabled = repair_enabled and bool(
+            db.guild_settings(scope_id).get("ai_structured_repair", True)
+        )
+    if parsed is not None or not repair_enabled:
+        return parsed
+    repaired = await chat(
+        "Repair malformed JSON into one valid JSON object. Preserve only existing data. "
+        "Do not add fields, facts, actions, or claims. Return JSON only.",
+        [{"role": "user", "content": str(raw)[:12_000]}],
+        max_tokens=min(max_tokens, 1_000),
+        temperature=0.0,
+        tier="fast",
+        task="structured_repair",
+        scope_id=scope_id,
+        user_id=user_id,
+    )
+    return ai_control.validate_structured(_extract_json(repaired), schema)
 
 
 async def describe_images(image_urls: List[str], caption: str = "") -> str:

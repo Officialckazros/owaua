@@ -6,7 +6,7 @@ from unittest import mock
 
 os.environ.setdefault("DISCORD_TOKEN", "test-token")
 
-from sefbot import rules, slash, voice
+from sefbot import config, rules, slash, voice
 from sefbot.services.llm_client import (
     _extract_json,
     _validate_download_url,
@@ -125,6 +125,11 @@ class CooldownRegressionTest(unittest.IsolatedAsyncioTestCase):
 
 
 class VoiceControlRegressionTest(unittest.TestCase):
+    def test_tts_defaults_match_the_current_groq_orpheus_contract(self):
+        self.assertEqual(config.TTS_MODEL, "canopylabs/orpheus-v1-english")
+        self.assertEqual(config.TTS_VOICE, "troy")
+        self.assertEqual(voice._MAX_TTS_CHARACTERS, 200)
+
     def test_voice_control_requires_same_channel_or_manager(self):
         class FakeMember:
             def __init__(self, channel_id, *, manage=False):

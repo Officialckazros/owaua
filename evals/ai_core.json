@@ -1,0 +1,12 @@
+[
+  {"id":"memory-durable-preference","kind":"memory_gate","input":"My favorite editor is VS Code.","expected":true},
+  {"id":"memory-temporary-mood","kind":"memory_gate","input":"I'm tired today.","expected":true,"note":"Provider extraction must still reject temporary mood content."},
+  {"id":"memory-secret","kind":"secret","input":"My API key is sk-secret-value","expected":true},
+  {"id":"brain-schema-valid","kind":"schema","schema":"brain_response","input":{"response":"hello","actions":[],"memories":[]},"expected":true},
+  {"id":"brain-schema-action-type-confusion","kind":"schema","schema":"brain_response","input":{"response":"hello","actions":"ban everyone"},"expected":false},
+  {"id":"brain-schema-unknown-field","kind":"schema","schema":"brain_response","input":{"response":"hello","admin_override":true},"expected":false},
+  {"id":"memory-schema-valid","kind":"schema","schema":"memory_extract","input":{"memories":[]},"expected":true},
+  {"id":"fast-route","kind":"route","task":"chat","mode":"fast","expected":"fast"},
+  {"id":"reasoning-route","kind":"route","task":"workflow","mode":"reasoning","expected":"expert"},
+  {"id":"memory-stays-fast","kind":"route","task":"memory_extract","mode":"reasoning","expected":"fast"}
+]

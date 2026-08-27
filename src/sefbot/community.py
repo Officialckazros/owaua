@@ -473,19 +473,52 @@ def _render(template: object, *, member=None, guild=None, channel=None, extra=No
     return text[:2000]
 
 
-async def _safe_send(channel, content: str = "", *, embed=None, everyone: bool = False):
+async def _safe_send(channel, content: str = "", *, embed=None, files=None, everyone: bool = False):
     if channel is None or not hasattr(channel, "send"):
         return None
     try:
         return await channel.send(
             content=content[:2000] or None,
             embed=embed,
+            files=files or None,
             allowed_mentions=discord.AllowedMentions(
                 everyone=everyone, users=True, roles=everyone, replied_user=False
             ),
         )
     except (discord.Forbidden, discord.HTTPException):
         return None
+
+
+def _previewable_attachment(attachment: discord.Attachment) -> bool:
+    """Whether Discord can natively render an attachment in an audit-log post."""
+    content_type = str(getattr(attachment, "content_type", "") or "").lower()
+    if content_type.startswith(("image/", "video/", "audio/")):
+        return True
+    filename = str(getattr(attachment, "filename", "") or "").lower()
+    return filename.endswith((
+        ".apng", ".avif", ".gif", ".jpeg", ".jpg", ".mov", ".mp3", ".mp4",
+        ".mpeg", ".ogg", ".png", ".wav", ".webm", ".webp",
+    ))
+
+
+async def _log_media_files(message: discord.Message) -> list[discord.File]:
+    """Copy previewable deleted-message media into the configured private log.
+
+    Attachment CDN URLs can disappear after a deletion. Re-uploading the same
+    media to the action-log message lets Discord render its normal image, audio,
+    or video UI, without storing attachment bytes in the bot database.
+    """
+    files: list[discord.File] = []
+    for attachment in list(getattr(message, "attachments", None) or [])[:10]:
+        if not _previewable_attachment(attachment):
+            continue
+        try:
+            files.append(await attachment.to_file(use_cached=True))
+        except (discord.HTTPException, OSError, ValueError):
+            # Preserve the normal attachment link even if Discord's CDN has
+            # already expired or a media download cannot be relayed.
+            continue
+    return files
 
 
 async def _http_get(url: str, *, json_response: bool = True, headers: dict | None = None):
@@ -719,6 +752,7 @@ async def _log(
     details: list[str] | None = None,
     event_id: object = None,
     color: int | None = None,
+    files: list[discord.File] | None = None,
 ):
     config = _cfg(guild, "action_log")
     if not config["enabled"]:
@@ -783,7 +817,11 @@ async def _log(
     if settings.get("include_ids", True) and event_id is not None:
         footer.append(f"Event ID: {event_id}")
     embed.set_footer(text=" • ".join(footer)[:2048])
-    await _safe_send(destination, embed=embeds.fit_total(embed))
+    posted = await _safe_send(destination, embed=embeds.fit_total(embed), files=files)
+    if posted is None and files:
+        # A relay can fail for an expired CDN object or Discord upload limit.
+        # The audit event itself must still be recorded with its safe file links.
+        await _safe_send(destination, embed=embeds.fit_total(embed))
 
 
 async def _handle_afk(message: discord.Message) -> None:
@@ -1203,6 +1241,11 @@ async def message_delete(message: discord.Message) -> None:
     if settings.get("include_attachments", True) and message.attachments:
         files = "\n".join(str(attachment.url) for attachment in message.attachments[:10])
         lines.append(f"**Files:**\n{files}")
+    media_files = (
+        await _log_media_files(message)
+        if settings.get("include_attachments", True) and message.attachments
+        else None
+    )
     await _log(
         message.guild,
         "message",
@@ -1214,6 +1257,7 @@ async def message_delete(message: discord.Message) -> None:
         reason=getattr(entry, "reason", None),
         details=_audit_extra_lines(getattr(entry, "extra", None)) if entry else None,
         event_id=getattr(entry, "id", None) or message.id,
+        files=media_files,
     )
 
 

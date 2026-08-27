@@ -102,7 +102,8 @@ MODES
 MEMORY, BOND, GROWTH
 - `{p}teach` / `/teach`: store a fact about yourself; manage-server can store
   a server fact. No storing other people's lives for them.
-- `{p}memories` `/memories` `{p}about` `{p}whoami`: what you remember.
+- `{p}memories` `/memories` `{p}about`: what you remember. `/profile` shows
+  Discord account and server profile details; `{p}whoami` is the AI roast version.
 - `{p}memory` `/memory` `{p}forget` `/forget`: confirmation-gated edit/erase.
 - `{p}bond` `{p}relationship` `/bond`: score, nickname, grudge.
 - `{p}rivalries`: best/worst bonds here.

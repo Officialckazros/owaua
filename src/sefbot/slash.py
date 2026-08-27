@@ -26,6 +26,7 @@ from discord import app_commands
 from sefbot import (
     actions,
     ai,
+    ai_control,
     ai_workflows,
     archive,
     auditlog,
@@ -609,6 +610,10 @@ async def _generate_reply(
                 config.MODEL_NSFW_FALLBACKS if channel_nsfw
                 else (config.MODEL_FREAKY_FALLBACKS if freaky else None)
             ),
+            schema="brain_response",
+            task="assistant" if assistant else "chat",
+            scope_id=guild_id,
+            user_id=author,
         )
     except Exception as e:
         await memory_task
@@ -651,6 +656,9 @@ async def _generate_reply(
                     config.MODEL_NSFW_FALLBACKS if channel_nsfw
                     else (config.MODEL_FREAKY_FALLBACKS if freaky else None)
                 ),
+                task="assistant" if assistant else "chat",
+                scope_id=guild_id,
+                user_id=author,
             )
         except Exception as e:
             await memory_task
@@ -672,7 +680,9 @@ async def _generate_reply(
     if data.get("web_search"):
         try:
             woven, search_sources = await brain.answer_with_search(
-                system, user_turn, str(data["web_search"]))
+                system, user_turn, str(data["web_search"]),
+                scope_id=guild_id, user_id=author,
+            )
             if woven:
                 response = woven
         except Exception as e:
@@ -719,6 +729,10 @@ async def _generate_reply(
     if db.privacy_opted_in(author, guild_id):
         db.convo_add(author, guild_id, "user", query)
         db.convo_add(author, guild_id, "bot", response)
+        asyncio.create_task(
+            brain.refresh_conversation_summary(author, guild_id),
+            name=f"conversation-summary:{author}:{guild_id}",
+        )
 
     # Ordinary chat never executes model-emitted Discord actions.
     summaries: list[str] = []
@@ -989,6 +1003,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 source,
                 extra_instruction=instruction,
                 is_staff=_is_mod(interaction),
+                user_id=str(interaction.user.id),
             )
         except (ValueError, PermissionError, RuntimeError) as exc:
             await interaction.followup.send(embed=embeds.error(str(exc)), ephemeral=True)
@@ -1640,11 +1655,14 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
     )
     model_choices = model_choices[:25]
 
-    @tree.command(name="mode", description="Toggle horny mommy mode for yourself.")
-    @app_commands.describe(choice="freaky to enable, normal to disable, or omit for status")
+    @tree.command(name="mode", description="Set your persona and AI speed/reasoning modes.")
+    @app_commands.describe(choice="persona mode, AI mode, or status")
     @app_commands.choices(choice=[
         app_commands.Choice(name="freaky", value="freaky"),
         app_commands.Choice(name="normal", value="normal"),
+        app_commands.Choice(name="AI fast", value="ai-fast"),
+        app_commands.Choice(name="AI balanced", value="ai-balanced"),
+        app_commands.Choice(name="AI reasoning", value="ai-reasoning"),
         app_commands.Choice(name="status", value="status"),
     ])
     @anywhere
@@ -1654,9 +1672,12 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         low = (choice or "status").strip().lower()
         if low in ("", "status", "help", "?"):
             state = "ON" if brain.freaky_enabled(author) else "OFF"
+            ai_mode = ai_control.user_mode(author, _guild_id(interaction))
             await interaction.response.send_message(
                 embed=embeds.say(
-                    f"freaky mommy mode is {state}. use `/mode freaky` or `/mode normal`.",
+                    f"freaky mommy mode is {state}. AI mode is **{ai_mode}**. "
+                    "Use `/mode freaky`, `/mode normal`, `/mode ai-fast`, "
+                    "`/mode ai-balanced`, or `/mode ai-reasoning`.",
                     title="mode",
                 )
             )
@@ -1673,8 +1694,17 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 embed=embeds.ok("freaky mommy mode disabled. back to normal chaos.")
             )
             return
+        if low in {"ai-fast", "ai-balanced", "ai-reasoning"}:
+            selected = ai_control.set_user_mode(author, low.removeprefix("ai-"))
+            await interaction.response.send_message(
+                embed=embeds.ok(f"AI mode set to **{selected}** for you."),
+                ephemeral=True,
+            )
+            return
         await interaction.response.send_message(
-            embed=embeds.error(f"usage: `{p}mode freaky` or `{p}mode normal`."),
+            embed=embeds.error(
+                f"usage: `{p}mode freaky|normal|ai-fast|ai-balanced|ai-reasoning`."
+            ),
             ephemeral=True,
         )
 
@@ -1790,7 +1820,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         ]
         await interaction.followup.send(embeds=results)
 
-    @tree.command(name="ask", description="Ask directly or run one of 21 read-only AI workflows.")
+    @tree.command(name="ask", description="Ask directly or run one of 41 read-only AI workflows.")
     @app_commands.describe(
         question="what to ask",
         mode="reasoning = best model (GPT OSS 120B), fast = Groq GPT-OSS 20B",
@@ -1806,13 +1836,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         question: Optional[str] = None,
         mode: Literal["reasoning", "fast"] = "reasoning",
         attachment: Optional[discord.Attachment] = None,
-        workflow: Optional[Literal[
-            "summarize", "explain", "simplify", "rewrite", "proofread",
-            "expand", "translate", "brainstorm", "outline", "action_items",
-            "meeting_notes", "decisions", "study_guide", "quiz", "pros_cons",
-            "sentiment", "classify", "extract_data", "reply_draft",
-            "fact_check", "moderation_triage",
-        ]] = None,
+        workflow: Optional[str] = None,
         instruction: Optional[str] = None,
         private: bool = False,
     ):
@@ -1919,6 +1943,10 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                     temperature=0.4,
                     model=config.DEEPSEEK_MODEL,
                     fallbacks=[],
+                    task="workflow",
+                    scope_id=_guild_id(interaction),
+                    user_id=str(interaction.user.id),
+                    prompt_version="direct-ask-v2",
                 )
             except Exception as e:
                 await interaction.followup.send(embed=embeds.error("deepseek: " + ai.friendly_error(e)))
@@ -1927,6 +1955,23 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         await interaction.followup.send(
             embed=embeds.say(text, title=f"ask · {mode}"), ephemeral=private
         )
+
+    @ask_cmd.autocomplete("workflow")
+    async def ask_workflow_autocomplete(
+        interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        needle = str(current or "").strip().lower().replace(" ", "_")
+        include_staff = _is_mod(interaction)
+        matches = [
+            (name, spec.label)
+            for name, spec in ai_workflows.WORKFLOWS.items()
+            if (include_staff or not spec.staff_only)
+            and (not needle or needle in name or needle in spec.label.lower())
+        ]
+        return [
+            app_commands.Choice(name=f"{label} ({name})"[:100], value=name)
+            for name, label in matches[:25]
+        ]
 
     @tree.command(name="models", description="Alias for /model.")
     @app_commands.describe(choice="which model to use (empty = show current)")
@@ -2069,8 +2114,8 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             removed = db.privacy_remove_scope_history(uid, current_scope)
             await interaction.response.send_message(
                 embed=embeds.ok(
-                    f"storage consent revoked for this scope; removed {removed} raw message "
-                    "record(s). Explicit memories remain available for export/deletion."
+                    f"storage consent revoked for this scope; removed {removed} raw history "
+                    "and conversation record(s). Explicit memories remain available for export/deletion."
                 ),
                 ephemeral=True,
             )
@@ -2790,9 +2835,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         await interaction.response.send_message(embed=embeds.error(
             f"unknown kb action `{sub}`. try `/kb`, `/kb search <q>`, `/kb add <topic> | <text>`, `/kb clear [topic]`"), ephemeral=True)
 
-    @tree.command(name="memory", description="Show, edit, compact, or erase scoped memories.")
+    @tree.command(name="memory", description="Show, inspect, edit, compact, or erase scoped memories.")
     @app_commands.describe(
-        action="show, edit, compact, or erase",
+        action="show, inspect, edit, compact, or erase",
         user="optional user for show/compact/erase",
         memory_id="memory id for edit",
         value="replacement text for edit",
@@ -2810,6 +2855,60 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
 
         if sub in {"show", "list"}:
             await memories_cmd.callback(interaction, user)
+            return
+
+        if sub in {"inspect", "explain", "why"}:
+            if memory_id is None:
+                await interaction.response.send_message(
+                    embed=embeds.error("use `/memory inspect memory_id:<id>`."),
+                    ephemeral=True,
+                )
+                return
+            row = db.get_memory(memory_id)
+            if row is None or str(row["guild_id"] or "") != current_scope:
+                await interaction.response.send_message(
+                    embed=embeds.error("no memory with that id in this scope."),
+                    ephemeral=True,
+                )
+                return
+            if str(row["subject"]) != str(interaction.user.id) and not _has_manage_messages(interaction):
+                await interaction.response.send_message(
+                    embed=embeds.error("Manage Messages is required to inspect another subject's memory."),
+                    ephemeral=True,
+                )
+                return
+            created = int(float(row["created"] or 0))
+            updated = int(float(row["updated"] or 0))
+            last_used = int(float(row["last_used"] or 0))
+            expires = int(float(row["expires"] or 0))
+            superseded = row["superseded_by"]
+            reason = {
+                "identity": "durable identity",
+                "preference": "stable preference",
+                "project": "ongoing project",
+                "relationship": "lasting relationship context",
+                "habit": "recurring habit",
+                "future_plan": "future plan",
+                "temporary": "time-limited context",
+                "server_fact": "server knowledge",
+            }.get(str(row["category"] or "fact"), "durable fact")
+            details = [
+                f"**Content:** {str(row['content'])[:1800]}",
+                f"**Stored because:** {reason}",
+                f"**Category:** `{row['category'] or 'fact'}`",
+                f"**Importance:** {float(row['importance'] or 0):.2f}",
+                f"**Scope:** `{current_scope}`",
+                f"**Created:** <t:{created}:R>" if created else "**Created:** unknown",
+                f"**Updated:** <t:{updated}:R>" if updated else "**Updated:** never",
+                f"**Used in replies:** {int(row['use_count'] or 0)}",
+                f"**Last used:** <t:{last_used}:R>" if last_used else "**Last used:** never",
+                f"**Expires:** <t:{expires}:R>" if expires else "**Expires:** never",
+                f"**Superseded by:** #{int(superseded)}" if superseded else "**Superseded:** no",
+            ]
+            await interaction.response.send_message(
+                embed=embeds.say("\n".join(details), title=f"memory #{memory_id}"),
+                ephemeral=True,
+            )
             return
 
         if sub == "edit":
@@ -2922,7 +3021,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
 
         if sub not in ("erase", "clear", "wipe", "delete"):
             await interaction.response.send_message(
-                embed=embeds.error("use `/memory show`, `/memory edit`, `/memory compact`, or `/memory erase`."),
+                embed=embeds.error("use `/memory show`, `/memory inspect`, `/memory edit`, `/memory compact`, or `/memory erase`."),
                 ephemeral=True,
             )
             return
@@ -3226,36 +3325,53 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             db.kv_set(game_key, "")
         interaction.client.loop.create_task(_reveal())
 
-    @tree.command(name="whoami", description="Have SefBot roast what it knows about you.")
+    @tree.command(name="profile", description="Show a user's Discord profile, avatar, and banner.")
+    @app_commands.describe(user="user to inspect (optional; defaults to you)")
     @anywhere
-    async def whoami_cmd(interaction: discord.Interaction):
-        guild_id = _guild_id(interaction)
-        facts = db.memories_about(str(interaction.user.id), guild_id)
-        rel = db.relationship_get(str(interaction.user.id), guild_id)
-        fact_txt = "\n".join(f"- {f['content']}" for f in facts[:12]) or "(blank slate)"
-        system = (
-            ((db.guild_settings(guild_id).get("persona") or "").strip() or config.PERSONA)
-            + "\n\nBased on memories + relationship, tell this person who they are to you — funny, sharp, 4-8 lines. No emoji."
-        )
-        prompt = (
-            f"Name: {_display_name(interaction.user)}\n"
-            f"Bond: {rel.get('bond_label')} ({float(rel.get('score') or 0):+.2f})\n"
-            f"Nickname: {rel.get('nickname') or 'none'}\n"
-            f"Grudge: {rel.get('grudge') or 'none'}\n"
-            f"Memories:\n{fact_txt}"
-        )
-        await interaction.response.defer(thinking=True, ephemeral=True)
+    async def profile_cmd(interaction: discord.Interaction, user: Optional[discord.User] = None):
+        target = user or interaction.user
+        fetched = target
+        # Discord only includes banner/accent data in a fetched user object. Keep
+        # the resolved Member as the display source so server avatars and roles
+        # are not lost in guild interactions.
         try:
-            text = await ai.chat(system, [{"role": "user", "content": prompt}], max_tokens=350, tier="smart")
-        except Exception:
-            await interaction.followup.send(
-                embed=embeds.error("profile generation failed."), ephemeral=True
-            )
-            return
-        text = brain.scrub_ai_output(text)
-        await interaction.followup.send(
-            embed=embeds.say(text, title="who you are to me"), ephemeral=True
-        )
+            fetched = await interaction.client.fetch_user(target.id)
+        except (discord.Forbidden, discord.HTTPException, discord.NotFound):
+            pass
+
+        avatar = getattr(getattr(target, "display_avatar", None), "url", None)
+        banner = getattr(getattr(fetched, "banner", None), "url", None)
+        created_at = getattr(target, "created_at", None)
+        joined_at = getattr(target, "joined_at", None)
+        lines = [
+            f"**Username:** `@{getattr(target, 'name', 'unknown')}`",
+            f"**User ID:** `{target.id}`",
+            f"**Account created:** {discord.utils.format_dt(created_at, style='D') if created_at else 'unknown'}",
+        ]
+        global_name = getattr(target, "global_name", None)
+        if global_name and global_name != getattr(target, "name", None):
+            lines.insert(1, f"**Display name:** {global_name}")
+        if joined_at:
+            lines.append(f"**Joined this server:** {discord.utils.format_dt(joined_at, style='D')}")
+        if isinstance(target, discord.Member):
+            roles = [role.mention for role in target.roles if role.name != "@everyone"]
+            lines.append(f"**Roles:** {', '.join(roles[:20]) if roles else '(none)'}")
+            if target.top_role and target.top_role.name != "@everyone":
+                lines.append(f"**Top role:** {target.top_role.mention}")
+        lines.append(f"**Bot:** {'yes' if getattr(target, 'bot', False) else 'no'}")
+        if banner:
+            lines.append(f"[Open banner]({banner})")
+        accent = getattr(fetched, "accent_color", None)
+        if accent and not banner:
+            lines.append(f"**Accent color:** `{accent}`")
+
+        embed = embeds.say("\n".join(lines), title=f"profile · {_display_name(target)}")
+        if avatar:
+            embed.set_thumbnail(url=str(avatar))
+            embed.set_author(name=_display_name(target), icon_url=str(avatar))
+        if banner:
+            embed.set_image(url=str(banner))
+        await interaction.response.send_message(embed=embed)
 
     @tree.command(name="lessons", description="See what SefBot has learned.")
     @anywhere
@@ -3299,10 +3415,11 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             "i'm SefBot. i start dumb and get smarter as you use me. i remember things "
             "about you and my mood shifts with the convo.\n\n"
             "`/privacy` — storage consent, private export, and complete deletion\n"
+            "`/profile` — show a user's Discord avatar, banner, account age, and server details\n"
             "`/userinfo` — your own scoped activity; moderators can inspect current-guild users\n"
             "`/server` — moderator-only aggregate server report\n"
             "`/chat` — talk to me (react up/down on my reply to teach me)\n"
-            "`/ask workflow:<type>` — 21 read-only workflows for summaries, rewriting, analysis, study, drafts and grounded fact checks\n"
+            "`/ask workflow:<type>` — 41 read-only workflows for writing, study, planning, risk, privacy, security, incidents and grounded fact checks\n"
             "Message menu `Apps` — summarize, explain, extract action items or fact-check one message\n"
             "`/assistant` — one-shot helpful mode (roles etc.); normal chat stays chaotic\n"
             "`/ckazros` — owner-only do-anything; standing orders (e.g. speak Hebrew) stick\n"
@@ -3896,9 +4013,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
     @_cooldown(1, 5)
     async def say_cmd(interaction: discord.Interaction, text: str):
         normalized = str(text or "").strip()
-        if not normalized or len(normalized) > 500:
+        if not normalized or len(normalized) > 200:
             await interaction.response.send_message(
-                embed=embeds.error("speech text must be 1-500 characters."), ephemeral=True
+                embed=embeds.error("speech text must be 1-200 characters."), ephemeral=True
             )
             return
 

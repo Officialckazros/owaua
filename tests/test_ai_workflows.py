@@ -11,11 +11,14 @@ from sefbot.module_catalog import merge_server_settings
 
 class WorkflowCatalogTest(unittest.TestCase):
     def test_catalog_has_many_named_read_only_workflows(self) -> None:
-        self.assertEqual(len(ai_workflows.WORKFLOWS), 21)
+        self.assertEqual(len(ai_workflows.WORKFLOWS), 41)
         self.assertIn("fact_check", ai_workflows.WORKFLOWS)
         self.assertIn("moderation_triage", ai_workflows.WORKFLOWS)
         self.assertTrue(ai_workflows.WORKFLOWS["moderation_triage"].staff_only)
         self.assertTrue(ai_workflows.WORKFLOWS["fact_check"].uses_search)
+        self.assertIn("root_cause", ai_workflows.WORKFLOWS)
+        self.assertIn("privacy_review", ai_workflows.WORKFLOWS)
+        self.assertIn("test_plan", ai_workflows.WORKFLOWS)
 
     def test_aliases_and_prefix_syntax_normalize(self) -> None:
         self.assertEqual(ai_workflows.normalize_task("fact-check"), "fact_check")
@@ -39,6 +42,11 @@ class WorkflowCatalogTest(unittest.TestCase):
             "ai_channel_context_messages": -5,
             "ai_fact_check_search": False,
             "ai_staff_triage": False,
+            "ai_mode_default": "reasoning",
+            "ai_requests_per_minute": 9999,
+            "ai_context_chars": 1,
+            "ai_structured_repair": False,
+            "ai_tracing_enabled": False,
         })
         self.assertFalse(merged["ai_workflows_enabled"])
         self.assertEqual(merged["ai_default_tone"], "detailed")
@@ -47,6 +55,11 @@ class WorkflowCatalogTest(unittest.TestCase):
         self.assertEqual(merged["ai_channel_context_messages"], 5)
         self.assertFalse(merged["ai_fact_check_search"])
         self.assertFalse(merged["ai_staff_triage"])
+        self.assertEqual(merged["ai_mode_default"], "reasoning")
+        self.assertEqual(merged["ai_requests_per_minute"], 600)
+        self.assertEqual(merged["ai_context_chars"], 12_000)
+        self.assertFalse(merged["ai_structured_repair"])
+        self.assertFalse(merged["ai_tracing_enabled"])
 
     def test_channel_formatting_is_bounded_and_attributed(self) -> None:
         messages = [

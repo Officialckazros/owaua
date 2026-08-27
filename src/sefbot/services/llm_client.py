@@ -22,13 +22,14 @@ import json
 import logging
 import random
 import socket
+import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlsplit
 
 import httpx
 
-from sefbot import config
+from sefbot import ai_control, config
 
 log = logging.getLogger("sefbot.services.llm")
 
@@ -218,10 +219,20 @@ class LLMClient:
     ) -> Dict[str, Any]:
         """POST JSON with retries + exponential backoff on 429/5xx/timeouts."""
         attempts = self.max_retries if retries is None else retries
+        health_key = str(payload.get("model") or url)[:160]
+        if not ai_control.provider_available(health_key):
+            raise LLMError("provider circuit is temporarily open")
         for attempt in range(attempts + 1):
+            started = time.perf_counter()
             try:
                 resp = await self._client.post(url, headers=headers, json=payload)
             except _RETRYABLE_EXC as e:
+                ai_control.record_provider_result(
+                    health_key,
+                    success=False,
+                    latency_ms=(time.perf_counter() - started) * 1000,
+                    error=e,
+                )
                 if attempt >= attempts:
                     error_id = uuid.uuid4().hex[:10]
                     log.error(
@@ -234,19 +245,43 @@ class LLMClient:
                 await asyncio.sleep(_retry_delay(None, attempt))
                 continue
             if resp.status_code in _RETRY_STATUS and attempt < attempts:
+                ai_control.record_provider_result(
+                    health_key,
+                    success=False,
+                    latency_ms=(time.perf_counter() - started) * 1000,
+                    error=LLMError(f"HTTP {resp.status_code}"),
+                )
                 log.warning("llm http %s (attempt %s)", resp.status_code, attempt + 1)
                 await asyncio.sleep(_retry_delay(resp, attempt))
                 continue
             if resp.status_code >= 400:
+                ai_control.record_provider_result(
+                    health_key,
+                    success=False,
+                    latency_ms=(time.perf_counter() - started) * 1000,
+                    error=LLMError(f"HTTP {resp.status_code}"),
+                )
                 error_id = uuid.uuid4().hex[:10]
                 log.error("llm http failure id=%s status=%s", error_id, resp.status_code)
                 raise LLMError(f"provider returned HTTP {resp.status_code} (error {error_id})")
             if len(resp.content) > _MAX_PROVIDER_RESPONSE_BYTES:
                 raise LLMError("provider response exceeded the size limit")
             try:
-                return resp.json()
+                data = resp.json()
             except json.JSONDecodeError as e:
+                ai_control.record_provider_result(
+                    health_key,
+                    success=False,
+                    latency_ms=(time.perf_counter() - started) * 1000,
+                    error=e,
+                )
                 raise LLMError("provider returned invalid JSON") from e
+            ai_control.record_provider_result(
+                health_key,
+                success=True,
+                latency_ms=(time.perf_counter() - started) * 1000,
+            )
+            return data
         raise LLMError("provider request exhausted retries")
 
     async def _chat_completion(
@@ -585,8 +620,8 @@ class LLMClient:
         model: str,
         text: str,
         *,
-        voice: str = "tara",
-        response_format: str = "mp3",
+        voice: str = "troy",
+        response_format: str = "wav",
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
     ) -> bytes:
@@ -597,7 +632,10 @@ class LLMClient:
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         payload = {
             "model": model,
-            "input": text[:2000],
+            # Groq's current Orpheus API accepts at most 200 characters.
+            # Callers validate this too; retaining the bound here prevents a
+            # future caller from submitting an invalid provider request.
+            "input": text[:200],
             "voice": voice,
             "response_format": response_format,
         }

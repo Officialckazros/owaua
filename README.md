@@ -11,7 +11,7 @@ Built on top of [JayyDoesDev/airo](https://github.com/JayyDoesDev/airo), with a 
 
 ## How it grows
 
-- **Memory** — explicit memories are isolated to an exact guild or private scope. Users control raw-history consent separately with `/privacy`.
+- **Memory** — explicit memories are isolated to an exact guild or private scope. Hybrid retrieval ranks relevance, importance, recency, category and prior usefulness; time-limited facts expire and newer facts can supersede contradictions without crossing scopes. Users control raw-history consent separately with `/privacy` and can use `/memory inspect` to see why a record exists.
 - **Lessons** — feedback and deliberate corrections can be distilled into scoped behavior rather than a cross-server global prompt.
 - **Commands** — community command requests are stored as bounded prompt data, never executable host code.
 
@@ -95,7 +95,10 @@ automation, support, engagement, feeds, content, utilities and administration.
 The **Settings** page also exposes every guild-scoped core control used by the
 runtime: persona, chat model, language, response tier, command channels, lurk,
 history and retention, moderation review, rules review, private staff channels,
-and voice transcription. Channel and role fields use the selected server's live
+voice transcription, AI routing mode, request/context budgets, structured repair,
+and privacy-safe tracing. The Overview page reports AI success/fallback rates,
+estimated token usage, latency, and provider circuit state without retaining prompt
+or response contents. Channel and role fields use the selected server's live
 Discord resources. Host credentials, OAuth secrets, database paths, bind ports,
 and provider API keys intentionally remain deployment settings rather than being
 exposed to server managers.
@@ -162,7 +165,9 @@ returned through the dashboard.
 
 A second, self-contained model layer (`services/llm_client.py`) that talks to an OpenAI-compatible endpoint over `httpx`. Point `SEFBOT_LLM_BASE_URL` / `SEFBOT_LLM_API_KEY` at your inference provider and set the model ids in `.env` (see `.env.example`).
 
-- **AI workflow toolkit** — `/ask workflow:<type>` and `!ai <type> [text]` provide 21 read-only workflows: summarize, explain, simplify, rewrite, proofread, expand, translate, brainstorm, outline, action items, meeting notes, decisions, study guide, quiz, pros/cons, sentiment, classification, structured extraction, reply drafting, grounded fact checking, and staff-only moderation triage. Prefix workflows can use explicit text, a replied message, or a bounded text attachment. Model output links are defanged; fact-check links come only from validated search results.
+- **AI control plane** — every primary chat request goes through task policies, fast/balanced/reasoning routing, typed capability limits, rolling provider health, circuit breakers, bounded request/context budgets, prompt versions, strict structured-output validation, one safe repair attempt, and metadata-only tracing. `/mode ai-fast|ai-balanced|ai-reasoning` selects a personal route without exposing provider credentials or weakening feature policy.
+- **AI workflow toolkit** — `/ask workflow:<type>` uses searchable autocomplete and `!ai <type> [text]` exposes 41 read-only workflows. Alongside writing, summarization, study, extraction and grounded fact checking, it includes timelines, requirements, risk registers, root-cause analysis, decision briefs, counterarguments, comparisons, prioritization, research/test plans, release notes, incident reports, privacy/security/accessibility reviews, rubrics, flashcards, Socratic questions, user stories and executive briefs. Prefix workflows can use explicit text, a replied message, or a bounded text attachment. Model output links are defanged; fact-check links come only from validated search results.
+- **Long-conversation continuity** — opted-in history is incrementally compressed into an exact-user/exact-scope continuity summary while recent raw turns remain available. Summaries never replace durable memories, are treated as untrusted context, follow retention/export/deletion controls, and are erased by conversation reset.
 - **Channel/thread intelligence** — `/recap mode:<type>` and `!aichannel <type>` analyze only recent messages from members who opted in, and only while server history is enabled. Available modes include summaries, action items, meeting notes, decisions, sentiment, and advisory staff triage. The message `Apps` menu also provides private summarize, explain, action-item, and fact-check shortcuts.
 - **`/ask <question> [mode=reasoning|fast]`** — one-shot Q&A. `reasoning` uses the configured best model (`SEFBOT_CHAT_MODEL`); `fast` uses the configured Groq fast model (`SEFBOT_FAST_MODEL`). Cooldown-protected.
 - **`/act <natural language>`** — moderators can ask for one typed action such as a timeout or ban. The bot shows an ephemeral, mention-safe preview bound to that invoker; only a confirmation within two minutes can proceed. The executor then re-resolves the target and rechecks the exact permission, bot capability, and role hierarchy. Schemas live in `function_registry.py`.
@@ -205,9 +210,11 @@ All bot code lives in `src/sefbot/` (run with `PYTHONPATH=src python -m sefbot.b
 - `kb.py` — scoped, bounded knowledge-base ingestion and FTS5/BM25 retrieval
 - `fuck_religion.py` — seeds the KB with a starter corpus or a folder of text
 - `ai.py` — async Groq wrapper for chat and structured JSON
+- `ai_control.py` — task policies, routing, budgets, circuit breakers, prompt versions, context assembly, validation and sanitized tracing
 - `ai_workflows.py` — bounded read-only workflow catalog, grounded fact checks, channel formatting, and prompt/data isolation
 - `config.py` — env config and the persona
 - `services/llm_client.py` — async httpx LLM wrapper (chat, tools, vision, STT, TTS) with retries
+- `evals/ai_core.json` / `scripts/run_ai_evals.py` — provider-free AI routing, schema and memory safety regression suite
 - `function_registry.py` — tool schemas + permission-gated executors for `/act`
 - `moderation.py` — passive Safety GPT moderation, DM warnings, mod-log
 - `multilingual.py` — langdetect routing to Llama 3.3 70B

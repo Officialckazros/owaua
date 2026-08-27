@@ -375,6 +375,13 @@ SERVER_SETTINGS: Final[dict[str, dict]] = {
         "default": "balanced",
         "choices": ["concise", "balanced", "detailed"],
     },
+    "ai_mode_default": {
+        "label": "Default AI mode",
+        "description": "Balanced routes automatically; fast favors latency; reasoning favors the expert route where supported.",
+        "kind": "choice",
+        "default": "balanced",
+        "choices": ["fast", "balanced", "reasoning"],
+    },
     "ai_default_language": {
         "label": "AI workflow language",
         "description": "Optional output language for AI workflows. Empty follows the source or request.",
@@ -407,6 +414,34 @@ SERVER_SETTINGS: Final[dict[str, dict]] = {
     "ai_staff_triage": {
         "label": "AI staff triage",
         "description": "Allow Manage Server members to request advisory moderation triage. It never enforces automatically.",
+        "kind": "boolean",
+        "default": True,
+    },
+    "ai_requests_per_minute": {
+        "label": "AI requests per minute",
+        "description": "Per-feature server budget that prevents accidental provider and cost spikes.",
+        "kind": "integer",
+        "default": 120,
+        "minimum": 10,
+        "maximum": 600,
+    },
+    "ai_context_chars": {
+        "label": "AI context character budget",
+        "description": "Prompt assembly preserves hard rules and trims lower-priority context first.",
+        "kind": "integer",
+        "default": 48000,
+        "minimum": 12000,
+        "maximum": 120000,
+    },
+    "ai_structured_repair": {
+        "label": "Repair malformed AI JSON",
+        "description": "Allow one bounded fast-model repair attempt after strict validation fails.",
+        "kind": "boolean",
+        "default": True,
+    },
+    "ai_tracing_enabled": {
+        "label": "Privacy-safe AI tracing",
+        "description": "Store bounded request metadata and health outcomes without prompts or response contents.",
         "kind": "boolean",
         "default": True,
     },
