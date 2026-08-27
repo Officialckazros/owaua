@@ -457,6 +457,15 @@ class PublicSiteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("OpSef", await response.text())
         self.assertIn("default-src 'none'", response.headers["Content-Security-Policy"])
 
+    async def test_terms_include_owner_access_discretion(self) -> None:
+        response = await self.client.get("/sefbot/terms", headers={"Host": "wearegays.net"})
+        self.assertEqual(response.status, 200)
+        body = await response.text()
+        self.assertIn("Owner access discretion", body)
+        self.assertIn("at any time, for any reason or no stated reason", body)
+        self.assertIn("including where that person has not violated these Terms", body)
+        self.assertIn("Version 3.8", body)
+
     async def test_legacy_legal_host_redirects_to_wearegays(self) -> None:
         response = await self.client.get(
             "/sefbot/terms?source=bookmark",

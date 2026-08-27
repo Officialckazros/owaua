@@ -13,7 +13,7 @@ from __future__ import annotations
 import html
 from typing import Final
 
-LEGAL_VERSION: Final = "3.7"
+LEGAL_VERSION: Final = "3.8"
 LEGAL_EFFECTIVE_DATE: Final = "27 August 2026"
 PUBLIC_BASE_URL: Final = "https://wearegays.net/sefbot"
 TERMS_URL: Final = f"{PUBLIC_BASE_URL}/terms"
@@ -151,7 +151,19 @@ network match places acceptance into owner review regardless of Discord account
 age; it does not automatically hard-block the matching account. Accounts that
 accepted before the block are also moved into review when the block is created.</p>
 
-<h2>6. Servers and administrators</h2>
+<h2>6. Owner access discretion</h2>
+<p>The bot owner/operator may refuse, restrict, suspend, or permanently end
+any person's access to OpSef at any time, for any reason or no stated reason,
+including where that person has not violated these Terms. The owner may apply
+that decision globally or only to a server, channel, command, feature, or
+other part of the service, and may do so with or without prior notice. No user
+has a right to continued access or to receive a reason for an access decision.
+Attempts to evade an access restriction are prohibited. This discretion is
+subject to applicable law, Discord and Daki rules, and rights that cannot
+legally be waived; blocking access does not remove any applicable privacy or
+data-rights process described in the Privacy Notice.</p>
+
+<h2>7. Servers and administrators</h2>
 <p>Adding OpSef to a server is an administrator decision. Administrators can
 enable or leave disabled raw history, passive moderation, server-rules review,
 voice transcription, and the dashboard community/automation modules. New
@@ -166,7 +178,7 @@ actions. Deterministic rules explicitly configured by administrators (for
 example an account-age autoban or banned-phrase automod rule) are a separate
 automation path.</p>
 
-<h2>7. Third-party services</h2>
+<h2>8. Third-party services</h2>
 <p>Using OpSef means Discord delivers your content to the bot, and the bot
 may send the minimum needed prompt, image, or audio to whatever AI, search,
 speech, or chart providers this instance has configured. Those providers have
@@ -176,19 +188,19 @@ can call.</p>
 download or rehost audio. Charts are rendered by constructing a QuickChart
 URL. Web search may call Tavily and/or DuckDuckGo.</p>
 
-<h2>8. Changes</h2>
+<h2>9. Changes</h2>
 <p>If this document's version string changes, previous acceptances stop
 working. You will have to read the new version and accept again before
 ordinary use. That is how the code works; it is not a courtesy email.</p>
 
-<h2>9. Termination</h2>
+<h2>10. Termination</h2>
 <p>You can stop using the bot, reject the Terms, or run
 <code>/privacy delete</code>. The operator can remove the bot, block you, or
 shut the instance down. Discord can remove the application. Data handling
 after that is described in the Privacy Notice, including what deletion does
 not erase.</p>
 
-<h2>10. No warranty</h2>
+<h2>11. No warranty</h2>
 <p>The service is provided as-is. The operator does not promise fitness for
 a particular purpose, uninterrupted availability, or that outputs are
 accurate or safe to follow. To the extent the law allows, the operator is
@@ -196,7 +208,7 @@ not liable for indirect or consequential loss arising from use of the bot.
 This does not exclude liability that cannot legally be excluded, including
 for death or personal injury caused by negligence where that rule applies.</p>
 
-<h2>11. Contact</h2>
+<h2>12. Contact</h2>
 <p>Questions, privacy requests, and reports: <span>{safe_contact}</span>.</p>
 <p>These Terms are meant to describe the running software. If a sentence
 here and the code disagree, the code is what the bot will do, and that is a
