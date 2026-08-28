@@ -3808,9 +3808,9 @@ def server_messages_get(guild_id: str, message_ids: object) -> dict[str, dict]:
         return {}
     placeholders = ",".join("?" for _ in ids)
     rows = conn().execute(
-        "SELECT message_id,guild_id,channel_id,channel_name,user_id,username,"
+        "SELECT message_id,guild_id,channel_id,channel_name,user_id,username,"  # noqa: S608
         "display_name,content,created FROM server_messages "
-        f"WHERE guild_id=? AND message_id IN ({placeholders})",  # noqa: S608
+        f"WHERE guild_id=? AND message_id IN ({placeholders})",
         (str(guild_id), *ids),
     ).fetchall()
     return {str(row["message_id"]): dict(row) for row in rows}
