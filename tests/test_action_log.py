@@ -203,6 +203,56 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Deleted **3** messages", embed.description)
         self.assertIn("**3** message(s) were not cached", embed.description)
 
+    async def test_raw_delete_recovers_uncached_content_from_scoped_history(self):
+        scope = f"guild:{self.guild.id}"
+        db.record_server_message(
+            "100", scope, self.guild.name, str(self.guild.source_channel.id),
+            self.guild.source_channel.name, "55", "Member", "Member",
+            "content retained outside Discord cache", force=True,
+        )
+        payload = SimpleNamespace(
+            guild_id=self.guild.id, channel_id=self.guild.source_channel.id,
+            message_id=100, cached_message=None,
+        )
+        client = SimpleNamespace(get_guild=lambda guild_id: self.guild)
+
+        with mock.patch(
+            "sefbot.community.recent_audit_entry",
+            new=mock.AsyncMock(return_value=None),
+        ):
+            await community.raw_message_delete(client, payload)
+
+        embed = self.guild.log_channel.send.await_args.kwargs["embed"]
+        self.assertEqual("Recovered uncached message deletion", embed.title)
+        self.assertIn("content retained outside Discord cache", embed.description)
+        self.assertIn("Consent-scoped message history", embed.description)
+
+    async def test_raw_delete_recovery_honors_content_privacy_setting(self):
+        self.settings["include_message_content"] = False
+        db.module_config_set(
+            str(self.guild.id), "action_log", enabled=True,
+            settings=self.settings, actor_id="test",
+        )
+        db.record_server_message(
+            "101", f"guild:{self.guild.id}", self.guild.name,
+            str(self.guild.source_channel.id), self.guild.source_channel.name,
+            "55", "Member", "Member", "hidden recovered content", force=True,
+        )
+        payload = SimpleNamespace(
+            guild_id=self.guild.id, channel_id=self.guild.source_channel.id,
+            message_id=101, cached_message=None,
+        )
+        client = SimpleNamespace(get_guild=lambda guild_id: self.guild)
+
+        with mock.patch(
+            "sefbot.community.recent_audit_entry",
+            new=mock.AsyncMock(return_value=None),
+        ):
+            await community.raw_message_delete(client, payload)
+
+        embed = self.guild.log_channel.send.await_args.kwargs["embed"]
+        self.assertNotIn("hidden recovered content", embed.description)
+
     async def test_message_content_can_be_disabled_without_losing_metadata(self):
         self.settings["include_message_content"] = False
         db.module_config_set(

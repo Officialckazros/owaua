@@ -1308,9 +1308,31 @@ async def raw_message_delete(client: discord.Client, payload: discord.RawMessage
     if guild is None:
         return
     channel = guild.get_channel_or_thread(payload.channel_id)
+    settings = _cfg(guild, "action_log")["settings"]
+    saved = db.server_message_get(Scope.guild(guild.id).key, str(payload.message_id))
     entry = await recent_audit_entry(
         guild, discord.AuditLogAction.message_delete, channel_id=payload.channel_id,
     )
+    if saved is not None:
+        author_id = str(saved["user_id"])
+        author = getattr(guild, "get_member", lambda _id: None)(int(author_id))
+        if author is None:
+            author = discord.Object(id=int(author_id))
+        lines = [
+            f"**Author:** {_log_value(author)}",
+            f"**Channel:** {_log_value(channel or saved['channel_name'])}",
+            "**Source:** Consent-scoped message history",
+        ]
+        if settings.get("include_message_content", True):
+            lines.append(f"**Content:** {_log_content(saved['content'] or '(no text)')}")
+        await _log(
+            guild, "message", "Recovered uncached message deletion", "\n".join(lines),
+            channel=channel, actor=getattr(entry, "user", None) or author, target=author,
+            reason=getattr(entry, "reason", None),
+            details=_audit_extra_lines(getattr(entry, "extra", None)) if entry else None,
+            event_id=getattr(entry, "id", None) or payload.message_id, color=0xED4245,
+        )
+        return
     await _log(
         guild, "message", "Uncached message deleted",
         f"Message `{payload.message_id}` was deleted in {_log_value(channel or payload.channel_id)}. Its content was not present in Discord's local cache.",
@@ -1343,13 +1365,23 @@ async def raw_bulk_message_delete(
     )
     settings = _cfg(guild, "action_log")["settings"]
     sample_size = max(0, min(50, int(settings.get("bulk_delete_sample_size") or 0)))
+    uncached_ids = set(payload.message_ids) - {message.id for message in payload.cached_messages}
+    recovered = db.server_messages_get(Scope.guild(guild.id).key, uncached_ids)
+    if recovered:
+        description += f" **{len(recovered)}** uncached message(s) were recovered from consent-scoped message history."
     if settings.get("include_message_content", True) and sample_size:
         samples = [
             f"• {_log_value(message.author, limit=60)}: {_log_content(message.content or '(attachment/no text)', limit=140).replace(chr(10), ' ')}"
             for message in list(payload.cached_messages)[:sample_size]
         ]
+        remaining = max(0, sample_size - len(samples))
+        samples.extend(
+            f"• {_log_value(row['display_name'] or row['username'], limit=60)}: "
+            f"{_log_content(row['content'] or '(no text)', limit=140).replace(chr(10), ' ')}"
+            for row in list(recovered.values())[:remaining]
+        )
         if samples:
-            description += "\n**Cached sample:**\n" + "\n".join(samples)
+            description += "\n**Recovered/cached sample:**\n" + "\n".join(samples)
     await _log(
         guild, "message", "Bulk message deletion", description,
         channel=channel, actor=getattr(entry, "user", None), target=channel,

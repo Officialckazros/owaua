@@ -3790,6 +3790,32 @@ def record_server_message(
     c.commit()
 
 
+def server_message_get(guild_id: str, message_id: str) -> dict | None:
+    """Return one consent-scoped stored message for an audit-log recovery."""
+    row = conn().execute(
+        "SELECT message_id,guild_id,channel_id,channel_name,user_id,username,"
+        "display_name,content,created FROM server_messages "
+        "WHERE guild_id=? AND message_id=?",
+        (str(guild_id), str(message_id)),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def server_messages_get(guild_id: str, message_ids: object) -> dict[str, dict]:
+    """Return bounded stored-message rows keyed by ID for bulk delete recovery."""
+    ids = list(dict.fromkeys(str(message_id) for message_id in message_ids))[:100]
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    rows = conn().execute(
+        "SELECT message_id,guild_id,channel_id,channel_name,user_id,username,"
+        "display_name,content,created FROM server_messages "
+        f"WHERE guild_id=? AND message_id IN ({placeholders})",  # noqa: S608
+        (str(guild_id), *ids),
+    ).fetchall()
+    return {str(row["message_id"]): dict(row) for row in rows}
+
+
 def _record_server_message_row(
     c: sqlite3.Connection,
     *,

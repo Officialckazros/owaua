@@ -1125,10 +1125,27 @@ async def _handle_swear_jar(
 
 @client.event
 async def on_message(message: discord.Message):
+    # Write consent-approved guild history before any awaited policy work.  A user
+    # can delete a just-sent message before Discord's cache or later handlers see
+    # it; the delete audit can then recover this same privacy-scoped record.
+    if message.guild is not None:
+        if archive.enabled_guild(message.guild.id):
+            await archive.store_live_message(message)
+        elif not message.author.bot and message.content:
+            await asyncio.to_thread(
+                db.record_server_message,
+                str(message.id),
+                Scope.guild(message.guild.id).key,
+                message.guild.name,
+                str(message.channel.id),
+                getattr(message.channel, "name", "unknown"),
+                str(message.author.id),
+                getattr(message.author, "name", str(message.author.id)),
+                getattr(message.author, "display_name", str(message.author.id)),
+                message.content.strip(),
+            )
     if await malware.inspect_message(client, message):
         return
-    if message.guild is not None and archive.enabled_guild(message.guild.id):
-        _start_message_task(archive.store_live_message(message))
     if message.author.bot:
         return
     if await boosters.handle_system_message(message):
@@ -1168,7 +1185,7 @@ async def on_message(message: discord.Message):
     channel_name = getattr(message.channel, "name", "DM")
     username = getattr(message.author, "name", author)
     display_name = getattr(message.author, "display_name", username)
-    if not (message.guild is not None and archive.enabled_guild(message.guild.id)):
+    if message.guild is None:
         db.record_server_message(
             str(message.id),
             guild_id,
