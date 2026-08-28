@@ -427,8 +427,12 @@ locally.</li>
 <code>!language</code> / <code>/language</code>. A server manager can set one
 authoritative guild language for dashboard interface copy, command replies,
 module output, controls, errors, and AI output. Incoming language is also detected on-box with
-<code>langdetect</code> (not an LLM). If the channel is in the configured
-list and no language is set, a translation/reply model may be called.</li>
+<code>langdetect</code> (not an LLM). When a non-English guild language is
+active, product interface strings and outgoing bot text may be sent to the
+configured fast translation model; dashboard form values, member selectors,
+and incident/activity records are excluded from dashboard translation batches.
+If a configured multilingual channel detects another language while no guild
+language is set, a same-language reply model may also be called.</li>
 <li><strong>Safety / rules models</strong>: classifier prompts, not
 open-ended control of the server.</li>
 <li><strong>Malware scanner</strong>: attachment bytes stay on-box and are
