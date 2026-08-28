@@ -37,7 +37,17 @@ _SECRET_RE = re.compile(
 _KNOWN_SERVER_STATES = frozenset({"offline", "running", "starting", "stopping"})
 _DEPLOY_ROOT_FILES = frozenset({"requirements.txt", "requirements.lock"})
 _WEBSITE_IGNORE_NAMES = frozenset(
-    {".DS_Store", ".git", ".gitignore", "__pycache__", "node_modules", "CLAUDE.md"}
+    {
+        ".DS_Store",
+        ".git",
+        ".gitignore",
+        "__pycache__",
+        "node_modules",
+        "CLAUDE.md",
+        # Release artifacts remain in OpSecOS/opsecos iso/ locally, but they are
+        # not website assets and would make the static-site bundle impractical.
+        "opsecos iso",
+    }
 )
 _DAKI_HOST_RE = re.compile(r"(^|\.)daki\.cc$", re.IGNORECASE)
 
