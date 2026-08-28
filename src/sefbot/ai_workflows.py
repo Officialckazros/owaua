@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
-from sefbot import ai, brain, db
+from sefbot import ai, brain, db, multilingual
 
 
 @dataclass(frozen=True)
@@ -147,10 +147,15 @@ def split_prefix_request(raw: str) -> tuple[str | None, str, str]:
 
 def _bounded_settings(scope_id: str) -> dict:
     settings = db.guild_settings(scope_id)
+    guild_language = multilingual.guild_language(scope_id)
     return {
         "enabled": bool(settings.get("ai_workflows_enabled", True)),
         "tone": str(settings.get("ai_default_tone") or "balanced"),
-        "language": str(settings.get("ai_default_language") or "").strip()[:80],
+        "language": (
+            guild_language.label
+            if guild_language is not None and str(settings.get("language") or "").strip()
+            else str(settings.get("ai_default_language") or "").strip()[:80]
+        ),
         "max_chars": max(1_000, min(20_000, int(settings.get("ai_max_input_chars") or 12_000))),
         "search": bool(settings.get("ai_fact_check_search", True)),
         "staff_triage": bool(settings.get("ai_staff_triage", True)),

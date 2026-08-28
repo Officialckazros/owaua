@@ -81,6 +81,15 @@ class WorkflowCatalogTest(unittest.TestCase):
         self.assertNotIn("Bob", text)
         self.assertLessEqual(len(text), 100)
 
+    def test_guild_language_overrides_legacy_workflow_language(self) -> None:
+        with mock.patch.object(
+            ai_workflows.db,
+            "guild_settings",
+            return_value={"language": "ru", "ai_default_language": "Hungarian"},
+        ):
+            settings = ai_workflows._bounded_settings("guild:1")
+        self.assertEqual(settings["language"], "Russian (русский)")
+
 
 class WorkflowRunTest(unittest.IsolatedAsyncioTestCase):
     async def test_regular_workflow_instruction_isolated_and_output_scrubbed(self) -> None:

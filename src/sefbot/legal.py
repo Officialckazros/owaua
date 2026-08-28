@@ -423,9 +423,10 @@ description and a moderation flag.</li>
 URL. No scriptable callbacks.</li>
 <li><strong>Music</strong>: no media fetch; a YouTube search URL is built
 locally.</li>
-<li><strong>Multilingual</strong>: you can set a reply language with
-<code>!language</code> / <code>/language</code> (stored as a user flag, plus
-an optional server default). Incoming language is also detected on-box with
+<li><strong>Multilingual</strong>: you can set a personal/DM reply language with
+<code>!language</code> / <code>/language</code>. A server manager can set one
+authoritative guild language for dashboard interface copy, command replies,
+module output, controls, errors, and AI output. Incoming language is also detected on-box with
 <code>langdetect</code> (not an LLM). If the channel is in the configured
 list and no language is set, a translation/reply model may be called.</li>
 <li><strong>Safety / rules models</strong>: classifier prompts, not

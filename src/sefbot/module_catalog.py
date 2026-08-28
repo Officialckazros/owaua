@@ -238,9 +238,14 @@ MODULES: Final[dict[str, dict]] = {
         "prefix": "", "disabled_commands": [], "allowed_role_ids": [],
         "ignored_role_ids": [], "allowed_channel_ids": [], "ignored_channel_ids": [],
     }, default_enabled=True, implementation="partial"),
-    "localization": _module("Localization", "Administration", "Bot and dashboard language preferences.", {
-        "bot_language": "en", "dashboard_language": "en",
-    }, default_enabled=True),
+    "localization": _module(
+        "Language",
+        "Administration",
+        "One authoritative guild language for the dashboard, commands, replies, errors, and AI.",
+        {},
+        default_enabled=True,
+        implementation="core live",
+    ),
 }
 
 
@@ -271,8 +276,8 @@ SERVER_SETTINGS: Final[dict[str, dict]] = {
         "max_length": 160,
     },
     "language": {
-        "label": "Default reply language",
-        "description": "Language name or code used when a member has no personal preference.",
+        "label": "Guild language",
+        "description": "Authoritative language for this guild's dashboard and every bot output.",
         "kind": "text",
         "default": "",
         "max_length": 80,
@@ -504,6 +509,11 @@ def merge_server_settings(value: object) -> dict:
             text = candidate.strip()
             if kind == "model" and text and not all(
                 char.isalnum() or char in "._:/-" for char in text
+            ):
+                continue
+            if key == "language" and text and (
+                len(text.split()) > 6
+                or not all(char.isalnum() or char in " .()_-'" for char in text)
             ):
                 continue
             clean[key] = text[: int(definition.get("max_length", 4000))]

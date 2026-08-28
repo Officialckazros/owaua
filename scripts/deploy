@@ -708,9 +708,9 @@ def assemble_sites(destination):
     femsec_source = WEBSITE_ROOT / "wearegays.net" / "femsec"
     if femsec_source.is_dir():
         _copy_tree(femsec_source, destination / "femsec")
-    multi = wearegays / "multi.html"
-    if multi.is_file() and not multi.is_symlink():
-        shutil.copy2(multi, wearegays / "index.html")
+    opsef_home = wearegays / "opsef" / "index.html"
+    if opsef_home.is_file() and not opsef_home.is_symlink():
+        shutil.copy2(opsef_home, wearegays / "index.html")
     status_source = WEBSITE_ROOT / "wearedevsstatus"
     if status_source.is_dir():
         status_dir = wearegays / "status"

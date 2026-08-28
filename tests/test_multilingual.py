@@ -1,10 +1,14 @@
 """Reply-language preference: resolve names, persist, inject into the brain."""
 from __future__ import annotations
 
+import asyncio
 import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
+import discord
 
 os.environ.setdefault("PYTHON_DOTENV_DISABLED", "1")
 os.environ.setdefault("DISCORD_TOKEN", "test-token")
@@ -93,17 +97,17 @@ class LanguagePreferenceTest(IsolatedDatabaseTest):
         )
         self.assertNotIn("REPLY LANGUAGE", prompt)
 
-    def test_guild_default_applies_until_personal_override(self) -> None:
+    def test_configured_guild_language_is_authoritative(self) -> None:
         scope = Scope.guild(7).key
         multilingual.set_guild_language(scope, multilingual.resolve("spanish"))
         self.assertEqual(multilingual.effective_language("1", scope).code, "es")
         prompt = brain.build_system("1", "tester", "hi", scope, server_name="lab")
         self.assertIn("Spanish", prompt)
         multilingual.set_user_language("1", multilingual.resolve("japanese"))
-        self.assertEqual(multilingual.effective_language("1", scope).code, "ja")
+        self.assertEqual(multilingual.effective_language("1", scope).code, "es")
         prompt = brain.build_system("1", "tester", "hi", scope, server_name="lab")
-        self.assertIn("Japanese", prompt)
-        self.assertNotIn("Spanish", prompt)
+        self.assertIn("Spanish", prompt)
+        self.assertNotIn("Japanese", prompt)
 
     def test_reset_falls_back_to_guild_then_english(self) -> None:
         scope = Scope.guild(3).key
@@ -127,6 +131,35 @@ class LanguagePreferenceTest(IsolatedDatabaseTest):
     def test_language_names_are_reserved_community_commands(self) -> None:
         self.assertIn("language", customcmds.RESERVED)
         self.assertIn("lang", customcmds.RESERVED)
+
+    def test_discord_payload_localizes_embed_fields_and_components(self) -> None:
+        async def run() -> None:
+            scope = Scope.guild(9).key
+            multilingual.set_guild_language(scope, multilingual.resolve("russian"))
+            embed = discord.Embed(title="Status", description="Everything is ready")
+            embed.add_field(name="Result", value="Saved", inline=False)
+            view = discord.ui.View(timeout=10)
+            view.add_item(discord.ui.Button(label="Confirm"))
+
+            async def translate(values, *_args, **_kwargs):
+                return [f"ru:{value}" for value in values]
+
+            with mock.patch("sefbot.multilingual.translate_many", side_effect=translate):
+                content, localized, _embeds, localized_view = (
+                    await multilingual.localize_discord_payload(
+                        guild_id="9", content="Done", embed=embed, view=view
+                    )
+                )
+
+            self.assertEqual(content, "ru:Done")
+            self.assertEqual(localized.title, "ru:Status")
+            self.assertEqual(localized.description, "ru:Everything is ready")
+            self.assertEqual(localized.fields[0].name, "ru:Result")
+            self.assertEqual(localized.fields[0].value, "ru:Saved")
+            self.assertEqual(localized_view.children[0].label, "ru:Confirm")
+            self.assertEqual(embed.title, "Status")
+
+        asyncio.run(run())
 
 
 if __name__ == "__main__":
