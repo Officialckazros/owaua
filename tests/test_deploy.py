@@ -159,6 +159,7 @@ class DeploymentValidationTests(unittest.TestCase):
             (website / "kozzyx.org" / "css").mkdir()
             (website / "kirmy.org").mkdir()
             (website / "wearegays.net").mkdir()
+            (website / "wearegays.net" / "opsef").mkdir()
             (website / "wearedevsstatus").mkdir()
             (website / "social").mkdir()
             (website / "kozzyx.org" / "pages" / "index.html").write_text(
@@ -170,6 +171,9 @@ class DeploymentValidationTests(unittest.TestCase):
             (website / "kirmy.org" / "index.html").write_text("kirmy", encoding="utf-8")
             (website / "wearegays.net" / "multi.html").write_text(
                 "wag", encoding="utf-8"
+            )
+            (website / "wearegays.net" / "opsef" / "index.html").write_text(
+                "opsef guide", encoding="utf-8"
             )
             (website / "wearegays.net" / "femsec").mkdir()
             (website / "wearegays.net" / "femsec" / "index.html").write_text(
@@ -189,7 +193,7 @@ class DeploymentValidationTests(unittest.TestCase):
             self.assertTrue((assembled / "kozzyx" / "css" / "theme.css").is_file())
             self.assertEqual(
                 (assembled / "wearegays" / "index.html").read_text(encoding="utf-8"),
-                "wag",
+                "opsef guide",
             )
             self.assertTrue((assembled / "wearegays" / "status" / "index.html").is_file())
             self.assertTrue((assembled / "kirmy" / "social" / "index.html").is_file())
