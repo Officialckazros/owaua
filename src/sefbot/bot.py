@@ -142,6 +142,7 @@ class SefBotClient(discord.Client):
         # is marked ready. A failed integrity check aborts startup.
         db.conn()
         db.integrity_check()
+        multilingual.install_discord_localization()
         # Force the bounded, idempotent legacy-state imports before privacy
         # exports/deletions can run, so JSON-era state cannot be missed.
         blocked.list_blocked()
@@ -3208,9 +3209,16 @@ async def _cmd_language(message, arg, guild_id, author):
             await _send(message.channel, embeds.error(err), feedback=False)
             return
         multilingual.set_user_language(author, lang)
+        server = multilingual.guild_language(guild_id)
+        note = (
+            f" saved **{lang.label}** for DMs and servers without a guild language; "
+            f"this server stays in **{server.label}**."
+            if server is not None and message.guild is not None
+            else f" got it. i'll reply to you in **{lang.label}** from now."
+        )
         await _send(
             message.channel,
-            embeds.ok(f"got it. i'll reply to you in **{lang.label}** from now."),
+            embeds.ok(note.strip()),
             feedback=False,
         )
         return
@@ -3219,7 +3227,7 @@ async def _cmd_language(message, arg, guild_id, author):
             await _send(
                 message.channel,
                 embeds.error(
-                    f"that's a server default. in DMs just use `{p}language <name>`."
+                    f"that's a guild language. in DMs just use `{p}language <name>`."
                 ),
                 feedback=False,
             )
@@ -3235,7 +3243,7 @@ async def _cmd_language(message, arg, guild_id, author):
             multilingual.set_guild_language(guild_id, None)
             await _send(
                 message.channel,
-                embeds.ok("cleared the server language default."),
+                embeds.ok("cleared the guild language; this server is back to English."),
                 feedback=False,
             )
             return
@@ -3247,8 +3255,8 @@ async def _cmd_language(message, arg, guild_id, author):
         await _send(
             message.channel,
             embeds.ok(
-                f"server default is now **{lang.label}**. anyone can still "
-                f"`{p}language <name>` to override it for themselves."
+                f"the entire guild is now **{lang.label}** — dashboard, commands, "
+                "modules, errors, controls, and AI output."
             ),
             feedback=False,
         )

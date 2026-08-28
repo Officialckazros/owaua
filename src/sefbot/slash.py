@@ -1572,7 +1572,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
     )
     @app_commands.describe(
         language="name or code; omit to show current; 'reset' clears yours",
-        server="set or clear the server default (Manage Server)",
+        server="set or clear the authoritative guild language (Manage Server)",
     )
     @app_commands.autocomplete(language=_language_autocomplete)
     @anywhere
@@ -1588,7 +1588,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         want_server = bool(server)
         if want_server and interaction.guild is None:
             await interaction.response.send_message(
-                embed=embeds.error("server default only works inside a server."),
+                embed=embeds.error("guild language only works inside a server."),
                 ephemeral=True,
             )
             return
@@ -1615,7 +1615,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             if want_server:
                 multilingual.set_guild_language(guild_id, None)
                 await interaction.response.send_message(
-                    embed=embeds.ok("cleared the server language default.")
+                    embed=embeds.ok("cleared the guild language; this server is back to English.")
                 )
                 return
             multilingual.set_user_language(author, None)
@@ -1636,20 +1636,27 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             multilingual.set_guild_language(guild_id, lang)
             await interaction.response.send_message(
                 embed=embeds.ok(
-                    f"server default is now **{lang.label}**. anyone can still "
-                    f"`/language` to override it for themselves."
+                    f"the entire guild is now **{lang.label}** — dashboard, commands, "
+                    "modules, errors, controls, and AI output."
                 )
             )
             return
         multilingual.set_user_language(author, lang)
+        server_language = multilingual.guild_language(guild_id)
+        note = (
+            f"saved **{lang.label}** for DMs and servers without a guild language; "
+            f"this server stays in **{server_language.label}**."
+            if server_language is not None and interaction.guild is not None
+            else f"got it. i'll reply to you in **{lang.label}** from now."
+        )
         await interaction.response.send_message(
-            embed=embeds.ok(f"got it. i'll reply to you in **{lang.label}** from now.")
+            embed=embeds.ok(note)
         )
 
     @tree.command(name="lang", description="Alias for /language.")
     @app_commands.describe(
         language="name or code; omit to show current; 'reset' clears yours",
-        server="set or clear the server default (Manage Server)",
+        server="set or clear the authoritative guild language (Manage Server)",
     )
     @app_commands.autocomplete(language=_language_autocomplete)
     @anywhere
