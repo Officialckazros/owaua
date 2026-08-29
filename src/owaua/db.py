@@ -186,6 +186,10 @@ CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS first_use_notices (
+    user_id  TEXT PRIMARY KEY,
+    sent_at  REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS relationships (
     user_id    TEXT NOT NULL,
     guild_id   TEXT NOT NULL,
@@ -1241,6 +1245,26 @@ def kv_set(key: str, value) -> None:
         (key, str(value)),
     )
     conn().commit()
+
+
+def claim_first_use_notice(user_id: str) -> bool:
+    """Claim the one-time dashboard/website notice for a user atomically."""
+    uid = str(user_id)
+    c = conn()
+    with _db_lock:
+        cur = c.execute(
+            "INSERT OR IGNORE INTO first_use_notices(user_id,sent_at) VALUES(?,?)",
+            (uid, now()),
+        )
+        c.commit()
+        return cur.rowcount == 1
+
+
+def release_first_use_notice(user_id: str) -> None:
+    """Allow a retry when the one-time notice could not be delivered."""
+    with _db_lock:
+        conn().execute("DELETE FROM first_use_notices WHERE user_id=?", (str(user_id),))
+        conn().commit()
 
 
 _DEFAULT_MOOD = {"label": "neutral", "intensity": 0.4, "valence": 0.0}
@@ -3270,6 +3294,12 @@ def privacy_export(user_id: str) -> dict:
                 (uid,),
             ).fetchall()
         ],
+        "first_use_notice": [
+            dict(r) for r in c.execute(
+                "SELECT user_id,sent_at FROM first_use_notices WHERE user_id=?",
+                (uid,),
+            ).fetchall()
+        ],
     }
 
 
@@ -3309,6 +3339,7 @@ def privacy_delete_user(user_id: str) -> dict[str, int]:
         "swear_jar_counts": ("DELETE FROM swear_jar_counts WHERE user_id=?", (uid,)),
         "booster_members": ("DELETE FROM booster_members WHERE user_id=?", (uid,)),
         "booster_events": ("DELETE FROM booster_events WHERE user_id=?", (uid,)),
+        "first_use_notices": ("DELETE FROM first_use_notices WHERE user_id=?", (uid,)),
     }
     counts: dict[str, int] = {}
     c = conn()

@@ -47,8 +47,8 @@ class SwearJarTests(unittest.TestCase):
             list(executor.map(lambda _index: db.swear_jar_increment("1", "42", 1), range(50)))
         self.assertEqual(db.swear_jar_count("guild:1", "42"), 50)
 
-    def test_dashboard_setting_defaults_off_and_can_be_enabled(self):
-        self.assertFalse(db.guild_settings("guild:1")["swear_jar_enabled"])
+    def test_dashboard_setting_defaults_on_and_can_be_configured(self):
+        self.assertTrue(db.guild_settings("guild:1")["swear_jar_enabled"])
         schema = {field["key"]: field for field in public_server_settings()}
         self.assertEqual(schema["swear_jar_enabled"]["label"], "Swear jar")
         self.assertTrue(

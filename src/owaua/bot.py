@@ -404,6 +404,29 @@ async def _send_private(message, embed) -> None:
         )
 
 
+async def _send_first_use_notice(message) -> None:
+    """Tell a new user about the public site and server dashboard once."""
+    if not db.claim_first_use_notice(str(message.author.id)):
+        return
+    dashboard_root = (config.DASHBOARD_PUBLIC_URL or config.PUBLIC_WEBSITE_URL).rstrip("/")
+    embed = embeds.say(
+        "I have a website and a dashboard you can check out:\n\n"
+        f"Website: {config.PUBLIC_WEBSITE_URL}\n"
+        f"Dashboard: {dashboard_root}/dashboard\n\n"
+        "The dashboard is where server admins can sign in and configure owaua.",
+        title="welcome to owaua",
+    )
+    try:
+        if message.guild is None:
+            await _send(message.channel, embed, feedback=False)
+        else:
+            await message.author.send(embed=embed)
+    except (discord.Forbidden, discord.HTTPException):
+        db.release_first_use_notice(str(message.author.id))
+        if message.guild is not None:
+            await _send(message.channel, embed, feedback=False, reference=message)
+
+
 def _speaker_label(user) -> str:
     uname = getattr(user, "name", None) or "unknown"
     dname = getattr(user, "display_name", None) or uname
@@ -1214,6 +1237,8 @@ async def on_message(message: discord.Message):
         or client.user in message.mentions
         or is_dm
     )
+    if directed:
+        await _send_first_use_notice(message)
     if directed and command_name not in privacy_commands:
         res = tos.check_message(author, content)
         if res:
@@ -1738,7 +1763,7 @@ async def _chat(
     assistant = bool(force_assistant)
     ch = message.channel
     if message.guild is None:
-        channel_nsfw = True
+        channel_nsfw = False
     elif ch is not None and hasattr(ch, "is_nsfw") and callable(ch.is_nsfw):
         try:
             channel_nsfw = bool(ch.is_nsfw())
@@ -1894,7 +1919,8 @@ async def _chat(
                 print(f"[web_search] {e}")
 
     scrubbed = brain.scrub_ai_output(
-        response, title, data.get("memories"), data.get("quotes"), data, assistant=assistant
+        response, title, data.get("memories"), data.get("quotes"), data,
+        assistant=assistant, channel_nsfw=channel_nsfw,
     )
     leak_blocked = scrubbed != (response or "").strip()
     if leak_blocked:
@@ -2201,6 +2227,14 @@ async def _handle_command(message, body, guild_id, author, *, prefix: str | None
 
 async def _cmd_help(message, arg, guild_id, author):
     p = _prefix_for_scope(guild_id)
+    age_restricted = bool(
+        message.guild is not None
+        and rule34.is_age_restricted_channel(message.channel)
+    )
+    age_restricted_help = (
+        f"**age-restricted** `{p}nsfw <character_tag> [1-10]` — available only in this age-restricted channel\n"
+        if age_restricted else ""
+    )
     body = (
         "mention me or DM me to talk. i grow as you use me.\n\n"
         f"**chat** `@me ...` · react 👍/👎 · reply to correct me · i can react with emoji too\n"
@@ -2221,11 +2255,11 @@ async def _cmd_help(message, arg, guild_id, author):
         f"**channel AI** `{p}aichannel summarize|actions|notes|decisions|sentiment|triage` — recent-channel intelligence\n"
         f"**learn** `{p}cybersec <topic>` (smartest model) · `{p}search <query>`\n"
         f"**music** `{p}music <song name>` — returns a validated search/watch link\n"
-        f"**nsfw** `{p}nsfw <character_tag> [1-10]` — Rule34 images; age-restricted channels only\n"
+        f"{age_restricted_help}"
         f"**assistant** `{p}assistant <request>` — confirmed Discord actions; `{p}assistant undo` reverts the last reversible one\n"
         f"**owner** `{p}ckazros <anything>` — do it; standing orders (speak Hebrew, etc.) stick until `{p}ckazros clear`\n"
         f"**language** `{p}language [name]` — replies in that language (`{p}language hebrew`; `{p}language reset`)\n"
-        f"**mode** `{p}mode freaky` `{p}mode normal` — toggle horny mommy mode for this user\n"
+        f"**mode** `{p}mode ai-fast|ai-balanced|ai-reasoning` — choose AI speed/reasoning\n"
         f"**model** `{p}model` · `{p}model deepseek|groq` — show/switch this server's brain model\n"
         f"**kb** `{p}kb` `{p}kb search <q>` · mods: `{p}kb add <topic> | <text>` (or attach a file)\n"
         f"**grow** `{p}request` `{p}commands` `{p}stats` `{p}lessons` `{p}reflect`\n"
@@ -3315,14 +3349,12 @@ async def _cmd_mode(message, arg, guild_id, author):
     raw = (arg or "").strip()
     low = raw.lower()
     if not raw or low in ("help", "?", "status"):
-        current = brain.freaky_enabled(author)
-        state = "freaky mommy mode is ON" if current else "freaky mommy mode is OFF"
         ai_mode = ai_control.user_mode(author, guild_id)
         await _send(
             message.channel,
             embeds.say(
-                f"{state}. AI mode is **{ai_mode}**. Use `{p}mode freaky|normal` "
-                f"and `{p}mode ai-fast|ai-balanced|ai-reasoning`.",
+                f"AI mode is **{ai_mode}**. Use "
+                f"`{p}mode ai-fast|ai-balanced|ai-reasoning`.",
                 title="mode",
             ),
             feedback=False,
@@ -3337,11 +3369,14 @@ async def _cmd_mode(message, arg, guild_id, author):
         )
         return
     if low in ("freaky", "mommy", "horny", "sexy"):
-        brain.set_freaky_mode(author, True)
+        brain.set_freaky_mode(author, False)
         await _send(
             message.channel,
-            embeds.ok("freaky mommy mode enabled. im all yours. say something filthy.")
-            , feedback=False,
+            embeds.error(
+                "that saved persona option is unavailable; age-restricted behavior "
+                "is isolated to Discord-marked age-restricted server channels."
+            ),
+            feedback=False,
         )
         return
     if low in ("normal", "off", "disable", "stop", "reset", "clear"):
@@ -3355,7 +3390,7 @@ async def _cmd_mode(message, arg, guild_id, author):
     await _send(
         message.channel,
         embeds.error(
-            f"usage: `{p}mode freaky|normal|ai-fast|ai-balanced|ai-reasoning`."
+            f"usage: `{p}mode ai-fast|ai-balanced|ai-reasoning`."
         ),
         feedback=False,
     )

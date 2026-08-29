@@ -82,7 +82,7 @@ MODULES: Final[dict[str, dict]] = {
     }),
     "boosters": _module("Booster Perks", "Engagement", "Boost history, greetings, personal roles and channels, rewards, reactions, counters and logs.", {
         "tracking_enabled": True,
-        "greetings_enabled": False, "greet_channel_id": "", "greet_messages": [
+        "greetings_enabled": True, "greet_channel_id": "", "greet_messages": [
             "Thanks {user}! You now have {userboosts} recorded boosts and brought us to {count}."
         ],
         "greet_images": [], "greet_embed": True, "greet_author": "",
@@ -91,21 +91,21 @@ MODULES: Final[dict[str, dict]] = {
         "greet_image": "", "greet_color": "5865f2", "greet_addon": "", "greet_dm": False,
         "greet_include_stats": True, "greet_reaction": "", "react_original": False,
         "react_custom": False,
-        "automatic_role_enabled": False, "automatic_role_id": "", "stop_remove_role_id": "",
+        "automatic_role_enabled": True, "automatic_role_id": "", "stop_remove_role_id": "",
         "personal_roles_enabled": True, "personal_role_min_boosts": 1,
         "personal_role_base_role_id": "", "personal_role_allow_hoist": False,
         "personal_role_allowed_colors": [], "personal_role_prefix": "",
         "personal_role_suffix": "", "personal_role_banned_words": [],
         "qualifying_role_ids": [], "revoke_role_ids": [], "delete_ineligible_personal_role": True,
-        "role_gifts_enabled": False, "role_gift_min_boosts": 1, "role_gift_slots": 1,
+        "role_gifts_enabled": True, "role_gift_min_boosts": 1, "role_gift_slots": 1,
         "boost_level_roles": [], "boost_age_roles": [],
-        "private_channels_enabled": False, "private_channel_category_id": "",
+        "private_channels_enabled": True, "private_channel_category_id": "",
         "private_channel_type": "text", "private_channel_min_boosts": 1,
         "private_channel_friend_slots": 0, "private_channel_invite_min_boosts": 1,
         "private_channel_allow_role_ids": [], "private_channel_deny_role_ids": [],
         "private_channel_manager_access": True,
-        "mention_reactions_enabled": False, "mention_reaction_min_boosts": 1,
-        "emoji_restrictions_enabled": False, "emoji_restrictions": [],
+        "mention_reactions_enabled": True, "mention_reaction_min_boosts": 1,
+        "emoji_restrictions_enabled": True, "emoji_restrictions": [],
         "normal_emoji_role_ids": [], "animated_emoji_role_ids": [], "stat_channels": [],
         "log_channel_id": "", "log_color": "5865f2",
         "log_events": ["boost_add", "boost_remove", "role", "channel"],
@@ -212,8 +212,8 @@ MODULES: Final[dict[str, dict]] = {
     }),
     "welcome": _module("Welcome", "Community", "Channel, DM and image welcomes with variables.", {
         "channel_id": "", "message": "Welcome {user.mention}!", "dm_message": "",
-        "embed": {}, "image_enabled": False, "image_text": "Welcome {user.name}",
-        "journey_enabled": False, "rules_channel_id": "", "rules_ack_role_id": "",
+        "embed": {}, "image_enabled": True, "image_text": "Welcome {user.name}",
+        "journey_enabled": True, "rules_channel_id": "", "rules_ack_role_id": "",
         "role_choices": [], "intro_questions": [], "starter_channel_ids": [],
         "help_followup_hours": 24, "help_message": "Need a hand getting started?",
     }, implementation="core live"),
@@ -222,7 +222,7 @@ MODULES: Final[dict[str, dict]] = {
         "visibility": "staff", "sections": ["growth", "moderation", "engagement", "highlights", "tickets", "feeds", "scheduled_messages"],
     }, default_enabled=True, implementation="core live"),
     "server_health": _module("Server Health Advisor", "Safety", "Explanatory weekly configuration and workflow recommendations that never auto-change settings.", {
-        "weekly_enabled": False, "delivery_channel_id": "", "staff_only": True,
+        "weekly_enabled": True, "delivery_channel_id": "", "staff_only": True,
         "check_permissions": True, "check_logging": True, "check_tickets": True,
         "check_automod_noise": True, "check_booster_drift": True,
     }, default_enabled=True, implementation="core live"),
@@ -296,7 +296,7 @@ SERVER_SETTINGS: Final[dict[str, dict]] = {
             "Only the numeric total is stored."
         ),
         "kind": "boolean",
-        "default": False,
+        "default": True,
     },
     "smart_always": {
         "label": "Prefer smart routing",
@@ -315,7 +315,7 @@ SERVER_SETTINGS: Final[dict[str, dict]] = {
         "label": "Lurk mode",
         "description": "Allow an occasional AI message after the configured channel becomes quiet.",
         "kind": "boolean",
-        "default": False,
+        "default": True,
     },
     "lurk_channel": {
         "label": "Lurk channel",
@@ -327,7 +327,7 @@ SERVER_SETTINGS: Final[dict[str, dict]] = {
         "label": "Server history storage",
         "description": "Opt in to bounded server conversation history for members who also consent.",
         "kind": "boolean",
-        "default": False,
+        "default": True,
     },
     "retention_days": {
         "label": "Content retention days",
@@ -341,7 +341,7 @@ SERVER_SETTINGS: Final[dict[str, dict]] = {
         "label": "AI moderation review",
         "description": "Send model-classified messages to a private staff review channel. Host safety credentials are also required.",
         "kind": "boolean",
-        "default": False,
+        "default": True,
     },
     "modlog_channel": {
         "label": "Private moderation log",
@@ -353,7 +353,7 @@ SERVER_SETTINGS: Final[dict[str, dict]] = {
         "label": "Rules review",
         "description": "Enable deterministic server-rule detection and confirmation-based enforcement.",
         "kind": "boolean",
-        "default": False,
+        "default": True,
     },
     "approval_channel": {
         "label": "Private approval channel",
@@ -365,7 +365,7 @@ SERVER_SETTINGS: Final[dict[str, dict]] = {
         "label": "Voice transcription",
         "description": "Allow consent-gated speech transcription in this server. Host STT support is also required.",
         "kind": "boolean",
-        "default": False,
+        "default": True,
     },
     "ai_workflows_enabled": {
         "label": "AI workflow toolkit",

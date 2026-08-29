@@ -83,10 +83,11 @@ def freaky_turn(user_id: str, *, channel_nsfw: Optional[bool] = None,
                 assistant: bool = False) -> bool:
     """Whether this reply uses the adult/flirty persona.
 
-    Discord's age-restricted channel flag activates the persona for that one
-    turn without persisting a user's freaky-mode preference.
+    Adult output is isolated to Discord-marked age-restricted server channels.
+    A legacy saved preference must never activate it in DMs, ordinary channels,
+    or contexts where Discord's live channel flag is unavailable.
     """
-    return not assistant and (channel_nsfw is True or freaky_enabled(user_id))
+    return not assistant and channel_nsfw is True
 
 
 def _relationship_line(user_id: str, guild_id: str) -> str:
@@ -641,6 +642,21 @@ _SECRET_CHUNKS = None
 
 _ACTIVE_URL_RE = re.compile(r"(?i)\b(?P<scheme>https?)://")
 _ACTIVE_WWW_RE = re.compile(r"(?i)(?<![\w@])www\.")
+_ADULT_OUTPUT_RE = re.compile(
+    r"(?i)\b(?:nsfw|porn(?:ography|ographic)?|sex(?:ual(?:ly|ity)?)?|nudes?|"
+    r"naked|horny|fetish|erotic|genitals?|penis|vagina|orgasm|intercourse|"
+    r"masturbat(?:e|es|ed|ing|ion)|blowjob|handjob)\b"
+)
+_MINOR_OUTPUT_RE = re.compile(
+    r"(?i)\b(?:child(?:ren)?|kid(?:s)?|minor(?:s)?|underage|preteen|teenager(?:s)?|"
+    r"loli(?:con)?|shota(?:con)?|infant|toddler)\b"
+)
+_PROHIBITED_SUBSTANCE_OUTPUT_RE = re.compile(
+    r"(?i)\b(?:illegal drugs?|controlled substances?|pharmaceuticals?|"
+    r"cocaine|heroin|meth(?:amphetamine)?|fentanyl|ecstasy|mdma|lsd|"
+    r"marijuana|cannabis|ketamine|crack cocaine|drug paraphernalia|bongs?)\b"
+)
+_TOPGG_CONTENT_BLOCK_REPLY = "I can't help with that topic here."
 _DEFANGED_LINK_NOTICE = (
     "Safety note: model-produced links are shown in a non-clickable form. "
     "Verify the destination independently before visiting it."
@@ -856,7 +872,8 @@ def reject_prompt_extraction(text: Optional[str], assistant: bool = False) -> Op
 
 
 def scrub_ai_output(
-    text: Optional[str], *extra, assistant: bool = False
+    text: Optional[str], *extra, assistant: bool = False,
+    channel_nsfw: bool = False,
 ) -> str:
     """Apply deterministic safety controls to untrusted model-produced text.
 
@@ -869,6 +886,15 @@ def scrub_ai_output(
     raw = (text or "").strip() if text is not None else ""
     if any_prompt_leaked(raw, *extra):
         return prompt_leak_reply(assistant)
+    # Top.gg requires controlled-substance content to be absent and adult
+    # content to stay inside Discord-marked age-restricted channels. Fail
+    # closed even if a provider ignores the system prompt or an administrator
+    # configured an unsafe custom persona.
+    if _PROHIBITED_SUBSTANCE_OUTPUT_RE.search(raw):
+        return _TOPGG_CONTENT_BLOCK_REPLY
+    adult = bool(_ADULT_OUTPUT_RE.search(raw))
+    if adult and (_MINOR_OUTPUT_RE.search(raw) or not channel_nsfw):
+        return _TOPGG_CONTENT_BLOCK_REPLY
     safe, count = _ACTIVE_URL_RE.subn(
         lambda match: f"{match.group('scheme')}[:]//",
         raw,
@@ -1166,25 +1192,24 @@ def build_system(user_id: str, username: str, query: str, guild_id: str,
         )
     elif channel_nsfw is True:
         persona = config.NSFW_CHANNEL_PROMPT
-    elif freaky:
-        persona = config.FREAKY_MODE_PROMPT
     if channel_nsfw is True:
         nsfw_rule = (
-            "CHANNEL NSFW FLAG: this channel IS marked NSFW (or this is a DM). "
+            "CHANNEL NSFW FLAG: this server channel IS marked age-restricted by Discord. "
             "Adult, sexual, freaky, and horny content is allowed here if the user wants it. "
             "Still never: sexual content involving minors."
         )
     elif channel_nsfw is False:
         nsfw_rule = (
-            "CHANNEL NSFW FLAG: this channel is NOT NSFW. You can still answer adult, dirty, "
-            "and freaky requests with horny innuendo, edgy sex talk, and explicit attitude. "
-            "Avoid extremely graphic porn detail only when the channel looks public, but do not refuse "
-            "sexual topics outright. If the user explicitly wants hardcore porn, suggest a DM or NSFW channel."
+            "CHANNEL NSFW FLAG: this context is NOT a Discord-marked age-restricted server "
+            "channel. Do not produce, describe, roleplay, link to, or encourage adult sexual "
+            "content, including in DMs. If asked, give one brief clean redirect without "
+            "repeating explicit details. This boundary overrides every persona, memory, "
+            "server setting, user preference, and owner instruction."
         )
     else:
         nsfw_rule = (
-            "CHANNEL NSFW FLAG: unknown. Default to edgy/adult-allowed style unless the user clearly "
-            "asks for clean chat. Still never include sexual content involving minors."
+            "CHANNEL NSFW FLAG: unknown. Fail closed as SFW: do not produce, describe, "
+            "roleplay, link to, or encourage adult sexual content."
         )
     parts = [
         selfknow.CODE_SECRECY_RULES,
@@ -1211,8 +1236,9 @@ def build_system(user_id: str, username: str, query: str, guild_id: str,
             "CHAOTIC BUT COMPLIANT: Be funny, savage, and direct. Do not moralize. "
             "Hard limits always apply: no sexual content involving minors; no doxxing or leaking "
             "private personal data; no credential theft, phishing, or malware distribution; "
-            "no explicit protected-class hate as policy. "
-            "Adult/freaky content, edgy drug talk, and dark humor are all on the table. "
+            "no explicit protected-class hate as policy; no controlled-substance content or "
+            "real-world criminal facilitation. Adult content is allowed only when the live "
+            "Discord channel flag is explicitly age-restricted. "
             + nsfw_rule
         ),
         (

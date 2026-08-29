@@ -130,7 +130,7 @@ Dashboard-enabled community commands (available only when their module is on):
                          `!language list` shows known names/codes.
                          `!language server <name>` (manage server) sets a
                          default for people who haven't picked their own.
-                         Alias: `!lang`  (also: slash `/language`, `/lang`)
+                         Prefix alias: `!lang`  (slash: `/language`)
 
 !ckazros <anything>      Owner-only. Does whatever you ask. Standing orders
                          (example: `!ckazros speak in hebrew from now`) apply

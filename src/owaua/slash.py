@@ -579,7 +579,7 @@ async def _generate_reply(
     assistant = bool(force_assistant)
     ch = interaction.channel
     if interaction.guild is None:
-        channel_nsfw = True
+        channel_nsfw = False
     else:
         channel_nsfw = bool(
             getattr(ch, "nsfw", False)
@@ -701,7 +701,8 @@ async def _generate_reply(
         "ckazros" if owner_command else ("assistant" if assistant else None)
     )
     scrubbed = brain.scrub_ai_output(
-        response, title, data.get("memories"), data.get("quotes"), data, assistant=assistant
+        response, title, data.get("memories"), data.get("quotes"), data,
+        assistant=assistant, channel_nsfw=channel_nsfw,
     )
     leak_blocked = scrubbed != (response or "").strip()
     if leak_blocked:
@@ -1673,20 +1674,6 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             embed=embeds.ok(note)
         )
 
-    @tree.command(name="lang", description="Alias for /language.")
-    @app_commands.describe(
-        language="name or code; omit to show current; 'reset' clears yours",
-        server="set or clear the authoritative guild language (Manage Server)",
-    )
-    @app_commands.autocomplete(language=_language_autocomplete)
-    @anywhere
-    async def lang_cmd(
-        interaction: discord.Interaction,
-        language: Optional[str] = None,
-        server: Optional[bool] = False,
-    ):
-        await language_cmd.callback(interaction, language, server)
-
     model_choices = [
         app_commands.Choice(
             name="Official DeepSeek V4 Flash (default)", value="deepseek"
@@ -1701,11 +1688,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
     )
     model_choices = model_choices[:25]
 
-    @tree.command(name="mode", description="Set your persona and AI speed/reasoning modes.")
-    @app_commands.describe(choice="persona mode, AI mode, or status")
+    @tree.command(name="mode", description="Set your AI speed/reasoning mode.")
+    @app_commands.describe(choice="AI mode or status")
     @app_commands.choices(choice=[
-        app_commands.Choice(name="freaky", value="freaky"),
-        app_commands.Choice(name="normal", value="normal"),
         app_commands.Choice(name="AI fast", value="ai-fast"),
         app_commands.Choice(name="AI balanced", value="ai-balanced"),
         app_commands.Choice(name="AI reasoning", value="ai-reasoning"),
@@ -1717,21 +1702,23 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         p = config.PREFIX
         low = (choice or "status").strip().lower()
         if low in ("", "status", "help", "?"):
-            state = "ON" if brain.freaky_enabled(author) else "OFF"
             ai_mode = ai_control.user_mode(author, _guild_id(interaction))
             await interaction.response.send_message(
                 embed=embeds.say(
-                    f"freaky mommy mode is {state}. AI mode is **{ai_mode}**. "
-                    "Use `/mode freaky`, `/mode normal`, `/mode ai-fast`, "
+                    f"AI mode is **{ai_mode}**. Use `/mode ai-fast`, "
                     "`/mode ai-balanced`, or `/mode ai-reasoning`.",
                     title="mode",
                 )
             )
             return
         if low in ("freaky", "mommy", "horny", "sexy"):
-            brain.set_freaky_mode(author, True)
+            brain.set_freaky_mode(author, False)
             await interaction.response.send_message(
-                embed=embeds.ok("freaky mommy mode enabled. im all yours. say something filthy.")
+                embed=embeds.error(
+                    "that saved persona option is unavailable; age-restricted behavior "
+                    "is isolated to Discord-marked age-restricted server channels."
+                ),
+                ephemeral=True,
             )
             return
         if low in ("normal", "off", "disable", "stop", "reset", "clear"):
@@ -1749,7 +1736,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             return
         await interaction.response.send_message(
             embed=embeds.error(
-                f"usage: `{p}mode freaky|normal|ai-fast|ai-balanced|ai-reasoning`."
+                f"usage: `{p}mode ai-fast|ai-balanced|ai-reasoning`."
             ),
             ephemeral=True,
         )
@@ -1990,37 +1977,6 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             for name, label in matches[:25]
         ]
 
-    @tree.command(name="models", description="Alias for /model.")
-    @app_commands.describe(choice="which model to use (empty = show current)")
-    @app_commands.choices(choice=model_choices)
-    @anywhere
-    async def models_cmd(interaction: discord.Interaction, choice: Optional[str] = None):
-        await model_cmd.callback(interaction, choice)
-
-    @tree.command(name="google", description="Alias for /search.")
-    @app_commands.describe(query="what to search")
-    @anywhere
-    async def google_cmd(interaction: discord.Interaction, query: str):
-        await search_cmd.callback(interaction, query)
-
-    @tree.command(name="infosec", description="Alias for /cybersec.")
-    @app_commands.describe(topic="what to learn")
-    @anywhere
-    async def infosec_cmd(interaction: discord.Interaction, topic: str = ""):
-        await cybersec_cmd.callback(interaction, topic)
-
-    @tree.command(name="sec", description="Alias for /cybersec.")
-    @app_commands.describe(topic="what to learn")
-    @anywhere
-    async def sec_cmd(interaction: discord.Interaction, topic: str = ""):
-        await cybersec_cmd.callback(interaction, topic)
-
-    @tree.command(name="song", description="Alias for /music.")
-    @app_commands.describe(song="song name (and optional artist)")
-    @anywhere
-    async def song_cmd(interaction: discord.Interaction, song: str):
-        await music_cmd.callback(interaction, song)
-
     @tree.command(name="about", description="About owaua, its privacy controls, and legal terms.")
     @anywhere
     async def about_cmd(interaction: discord.Interaction):
@@ -2033,41 +1989,6 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             ),
             ephemeral=True,
         )
-
-    @tree.command(name="assist", description="Alias for /assistant.")
-    @app_commands.describe(
-        request="what you want done",
-        attachment="optional .txt file attachment to read",
-    )
-    @anywhere
-    async def assist_cmd(
-        interaction: discord.Interaction,
-        request: Optional[str] = None,
-        attachment: Optional[discord.Attachment] = None,
-    ):
-        await assistant_cmd.callback(interaction, request, attachment)
-
-    @tree.command(name="level", description="Alias for /stats.")
-    @anywhere
-    async def level_cmd(interaction: discord.Interaction):
-        await stats_cmd.callback(interaction)
-
-    @tree.command(name="purge", description="Alias for /nuke.")
-    @app_commands.describe(amount="number of messages to delete")
-    @anywhere
-    async def purge_cmd(interaction: discord.Interaction, amount: int = 10):
-        await nuke_cmd.callback(interaction, amount)
-
-    @tree.command(name="quotes", description="Alias for /quote.")
-    @app_commands.describe(query="subcommand or search text")
-    @anywhere
-    async def quotes_cmd(interaction: discord.Interaction, query: Optional[str] = None):
-        await quote_cmd.callback(interaction, query)
-
-    @tree.command(name="relationship", description="Alias for /rivalries.")
-    @anywhere
-    async def relationship_cmd(interaction: discord.Interaction):
-        await rivalries_cmd.callback(interaction)
 
     @tree.command(name="dmblock", description="Opt out of bot-relayed DMs from other users.")
     @anywhere
@@ -3463,6 +3384,14 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
     @tree.command(name="help", description="How to use owaua.")
     @anywhere
     async def help_cmd(interaction: discord.Interaction):
+        age_restricted = bool(
+            interaction.guild is not None
+            and rule34.is_age_restricted_channel(interaction.channel)
+        )
+        age_restricted_help = (
+            "`/nsfw` — available only in this Discord-marked age-restricted channel\n"
+            if age_restricted else ""
+        )
         body = (
             "i'm owaua. i start dumb and get smarter as you use me. i remember things "
             "about you and my mood shifts with the convo.\n\n"
@@ -3481,7 +3410,8 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             "`/memories` — see what i remember\n"
             "`/request` — invent a new command, then `/use` it\n"
             "`/commands` · `/vibecheck` · `/mood` · `/stats` · `/forget`\n"
-            "`/mode` — toggle horny mommy mode for yourself (`/mode freaky` or `/mode normal`)\n"
+            "`/mode` — choose AI speed/reasoning\n"
+            f"{age_restricted_help}"
             "`/model` — switch the brain (official DeepSeek, Nemotron, or any Groq chat model)\n"
             "prefix: `!privacy` · `!dmblock` · `!dmunblock` for privacy / DM opt-out"
         )

@@ -94,13 +94,47 @@ class FreakyModeTest(unittest.TestCase):
         self.assertFalse(brain.freaky_enabled(uid))
         self.assertTrue(brain.freaky_turn(uid, channel_nsfw=True))
         self.assertFalse(brain.freaky_turn(uid, channel_nsfw=True, assistant=True))
+        brain.set_freaky_mode(uid, True)
+        self.assertFalse(brain.freaky_turn(uid, channel_nsfw=False))
+        self.assertFalse(brain.freaky_turn(uid, channel_nsfw=None))
 
         prompt = brain.build_system(
             uid, "tester", "hi", guild, server_name="lab", channel_nsfw=True
         )
         self.assertIn(config.NSFW_CHANNEL_PROMPT, prompt)
         self.assertNotIn(config.FREAKY_MODE_OFF_PROMPT, prompt)
-        self.assertFalse(brain.freaky_enabled(uid))
+        self.assertTrue(brain.freaky_enabled(uid))
+
+    def test_sfw_and_unknown_prompts_fail_closed_for_adult_content(self) -> None:
+        uid = "42"
+        guild = Scope.guild(7).key
+        brain.set_freaky_mode(uid, True)
+
+        for channel_nsfw in (False, None):
+            with self.subTest(channel_nsfw=channel_nsfw):
+                prompt = brain.build_system(
+                    uid, "tester", "hi", guild,
+                    server_name="lab", channel_nsfw=channel_nsfw,
+                )
+                self.assertNotIn(config.FREAKY_MODE_PROMPT, prompt)
+                marker = "NOT a Discord-marked" if channel_nsfw is False else "Fail closed as SFW"
+                self.assertIn(marker, prompt)
+
+    def test_output_boundary_blocks_adult_outside_age_restricted_channels(self) -> None:
+        blocked = brain.scrub_ai_output("explicit sexual content", channel_nsfw=False)
+        self.assertEqual("I can't help with that topic here.", blocked)
+        allowed = brain.scrub_ai_output("consensual sexual content", channel_nsfw=True)
+        self.assertEqual("consensual sexual content", allowed)
+        minor = brain.scrub_ai_output("sexual content involving a minor", channel_nsfw=True)
+        self.assertEqual("I can't help with that topic here.", minor)
+
+    def test_output_boundary_blocks_controlled_substance_content_everywhere(self) -> None:
+        for channel_nsfw in (False, True):
+            with self.subTest(channel_nsfw=channel_nsfw):
+                self.assertEqual(
+                    "I can't help with that topic here.",
+                    brain.scrub_ai_output("how to buy cocaine", channel_nsfw=channel_nsfw),
+                )
 
     def test_age_restricted_channel_uses_dedicated_model_over_guild_override(self) -> None:
         guild = Scope.guild(7).key

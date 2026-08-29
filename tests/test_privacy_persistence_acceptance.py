@@ -275,7 +275,7 @@ class CacheAndConsentAcceptanceTest(IsolatedDatabaseTest):
         self.assertEqual([], db.memories_about("11", scope))
         self.assertNotIn("updated value", [row["content"] for row in db.scope_memories(scope)])
 
-    def test_history_requires_user_consent_and_guild_enablement(self) -> None:
+    def test_history_requires_user_consent_when_enabled_by_default(self) -> None:
         scope = Scope.guild(100).key
         user_id = "11"
 
@@ -300,16 +300,16 @@ class CacheAndConsentAcceptanceTest(IsolatedDatabaseTest):
 
         db.privacy_set_opt_in(user_id, scope, True)
         record("consent-only")
-        self.assertEqual(0, self._row_count("server_messages"))
+        self.assertEqual(1, self._row_count("server_messages"))
 
         db.privacy_set_opt_in(user_id, scope, False)
         db.guild_settings_set(scope, history_enabled=True)
         record("guild-only")
-        self.assertEqual(0, self._row_count("server_messages"))
+        self.assertEqual(1, self._row_count("server_messages"))
 
         db.privacy_set_opt_in(user_id, scope, True)
         record("both")
-        self.assertEqual(1, self._row_count("server_messages"))
+        self.assertEqual(2, self._row_count("server_messages"))
 
         dm_scope = Scope.dm(user_id).key
         record("dm-before-consent", dm_scope)
@@ -319,7 +319,7 @@ class CacheAndConsentAcceptanceTest(IsolatedDatabaseTest):
         self.assertEqual(1, self._row_count("server_messages", "guild_id=?", (dm_scope,)))
 
         db.privacy_set_opt_in(user_id, scope, False)
-        self.assertEqual(1, db.privacy_remove_scope_history(user_id, scope))
+        self.assertEqual(2, db.privacy_remove_scope_history(user_id, scope))
         self.assertEqual(0, self._row_count("server_messages", "guild_id=?", (scope,)))
         self.assertEqual(1, self._row_count("server_messages", "guild_id=?", (dm_scope,)))
 

@@ -78,7 +78,7 @@ CHAT
   apply in DMs and servers that have not configured a guild language.
 
 MODES
-- `{p}assistant` / `/assistant` (and `{p}assist`): one-shot helpful tone for
+- `{p}assistant` / `/assistant` (and `{p}assist` prefix alias): one-shot helpful tone for
   that reply only. A requested Discord action becomes one Confirm/Cancel
   proposal; it is never performed before confirmation. `{p}assistant undo` or
   `/assistant request:undo` reverts the latest reversible confirmed action in
@@ -86,14 +86,13 @@ MODES
 - `{p}ckazros` / `/ckazros`: owner-only. Does whatever the owner asks. Standing
   orders ("speak in Hebrew from now") apply to every later reply until
   `{p}ckazros clear`. Hard limits still apply.
-- `{p}language` / `/language` (`{p}lang`): set a personal/DM language.
+- `{p}language` / `/language` (`{p}lang` prefix alias only): set a personal/DM language.
   `{p}language hebrew`. `{p}language reset` clears it. Manage-server can use
   `{p}language server <name>` to change the entire guild authoritatively.
-- `{p}mode freaky` / `{p}mode normal` (`/mode`): per-user horny-mommy tone.
-  Turning it off also drops leftover pet names. Still never sexualize anyone
-  17 or under.
+- `{p}mode` / `/mode`: choose fast, balanced, or reasoning AI behavior.
+  Channel-restricted behavior never becomes a saved cross-channel mode.
 - `{p}ask` / `/ask`: one-shot Q&A without the chaotic persona.
-- `{p}cybersec` / `/cybersec` (`{p}sec`, `{p}infosec`): cybersecurity tutor
+- `{p}cybersec` / `/cybersec` (`{p}sec`, `{p}infosec` prefix aliases only): cybersecurity tutor
   on the deep model.
 - `{p}model` / `/model`: show or (manage-server) switch this server's brain
   (official DeepSeek, live Groq chat models, free Nemotron 550B). DMs stay on default.

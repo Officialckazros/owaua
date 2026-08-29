@@ -35,9 +35,49 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("language", self.commands)
         self.assertIn("profile", self.commands)
         self.assertNotIn("whoami", self.commands)
-        self.assertIn("lang", self.commands)
+        for alias in {
+            "lang", "models", "google", "infosec", "sec", "song",
+            "assist", "level", "purge", "quotes", "relationship",
+        }:
+            self.assertNotIn(alias, self.commands)
         self.assertIn("mode", self.commands)
-        self.assertEqual(len(self.commands), 100)
+        self.assertEqual(len(self.commands), 89)
+
+    def test_general_mode_picker_does_not_advertise_adult_personas(self) -> None:
+        command = self.commands["mode"]
+        choice = {parameter.name: parameter for parameter in command.parameters}["choice"]
+        values = [item.value for item in choice.choices]
+        self.assertEqual(values, ["ai-fast", "ai-balanced", "ai-reasoning", "status"])
+
+    async def test_general_help_hides_age_restricted_features_in_sfw_contexts(self) -> None:
+        command = self.commands["help"]
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(),
+            channel=SimpleNamespace(is_nsfw=lambda: False, parent=None),
+            response=SimpleNamespace(send_message=mock.AsyncMock()),
+        )
+
+        await command.callback(interaction)
+
+        embed = interaction.response.send_message.await_args.kwargs["embed"]
+        text = embed.description.casefold()
+        for forbidden in ("/nsfw", "rule34", "freaky", "horny"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, text)
+
+    async def test_general_help_reveals_age_restricted_command_only_in_marked_channel(self) -> None:
+        command = self.commands["help"]
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(),
+            channel=SimpleNamespace(is_nsfw=lambda: True, parent=None),
+            response=SimpleNamespace(send_message=mock.AsyncMock()),
+        )
+
+        await command.callback(interaction)
+
+        embed = interaction.response.send_message.await_args.kwargs["embed"]
+        self.assertIn("/nsfw", embed.description)
+        self.assertIn("age-restricted", embed.description)
 
     async def test_profile_shows_fetched_banner_and_display_avatar(self) -> None:
         command = self.commands["profile"]
@@ -156,35 +196,6 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
         }
         self.assertIn("AI: Summarize", menu_names)
         self.assertIn("AI: Fact-check", menu_names)
-
-    async def test_alias_callbacks_forward_once_to_the_original_command_callback(self) -> None:
-        # alias, original, arguments supplied to alias, arguments expected by original
-        cases = [
-            ("models", "model", (None,), (None,)),
-            ("google", "search", ("query",), ("query",)),
-            ("infosec", "cybersec", ("topic",), ("topic",)),
-            ("sec", "cybersec", ("topic",), ("topic",)),
-            ("song", "music", ("song",), ("song",)),
-            ("assist", "assistant", ("request", None), ("request", None)),
-            ("level", "stats", (), ()),
-            ("purge", "nuke", (17,), (17,)),
-            ("quotes", "quote", ("random",), ("random",)),
-            ("relationship", "rivalries", (), ()),
-            ("lang", "language", (None, False), (None, False)),
-        ]
-        interaction = object()
-        for alias_name, original_name, supplied, expected in cases:
-            with self.subTest(alias=alias_name):
-                original = self.commands[original_name]
-                previous = original._callback
-                forwarded = mock.AsyncMock()
-                original._callback = forwarded
-                try:
-                    await self.commands[alias_name].callback(interaction, *supplied)
-                finally:
-                    original._callback = previous
-                forwarded.assert_awaited_once_with(interaction, *expected)
-
 
 if __name__ == "__main__":
     unittest.main()
