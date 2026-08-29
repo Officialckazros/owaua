@@ -213,6 +213,19 @@ class DeploymentValidationTests(unittest.TestCase):
         with self.assertRaises(deploy_script.DeployError):
             deploy_script.github_commit("bad\nmessage")
 
+    def test_github_dry_run_does_not_stage_or_commit(self) -> None:
+        with (
+            mock.patch.object(deploy_script.shutil, "which", return_value="/usr/bin/git"),
+            mock.patch.object(
+                deploy_script.subprocess,
+                "run",
+                return_value=types.SimpleNamespace(stdout=" M README.md\n"),
+            ) as run,
+        ):
+            deploy_script.github_commit("release command", dry_run=True)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0], ["/usr/bin/git", "status", "--short"])
+
     def test_assemble_sites_flattens_kozzyx_pages_and_promotes_wearegays_index(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             website = Path(directory) / "website"

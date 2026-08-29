@@ -673,7 +673,7 @@ def print_plan(changed, deleted):
         print("No deployable changes found.")
 
 
-def github_commit(commit_message):
+def github_commit(commit_message, dry_run=False):
     """Commit all repository changes and push the current branch to origin."""
     if (
         not isinstance(commit_message, str)
@@ -684,6 +684,21 @@ def github_commit(commit_message):
     git = shutil.which("git")
     if not git:
         raise DeployError("git is required for the github action")
+
+    if dry_run:
+        status = subprocess.run(  # noqa: S603 - git executable is resolved from PATH
+            [git, "status", "--short"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        print("GitHub dry run; no files were staged, committed, or pushed.")
+        if status.stdout.strip():
+            print(status.stdout.rstrip())
+        else:
+            print("No working-tree changes found.")
+        return
 
     branch_result = subprocess.run(  # noqa: S603 - git executable is resolved from PATH
         [git, "symbolic-ref", "--quiet", "--short", "HEAD"],
@@ -911,7 +926,7 @@ def deploy_websites(args):
 
 def deploy(args):
     if getattr(args, "action", None) == "github":
-        github_commit(args.commit_message)
+        github_commit(args.commit_message, dry_run=args.dry_run)
         return
     if getattr(args, "project", "owaua").lower() == "websites":
         deploy_websites(args)
