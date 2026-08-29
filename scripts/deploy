@@ -717,14 +717,29 @@ def github_commit(commit_message, dry_run=False):
     )  # noqa: S603
     if staged.returncode == 0:
         print("No changes to commit.")
-        return
-    if staged.returncode != 1:
+    elif staged.returncode != 1:
         raise DeployError("Could not inspect staged Git changes")
 
-    subprocess.run(  # noqa: S603 - fixed git subcommand; message is an argument, not shell input
-        [git, "commit", "-m", commit_message.strip()], cwd=ROOT, check=True
-    )
-    subprocess.run([git, "push", "origin", branch], cwd=ROOT, check=True)  # noqa: S603
+    try:
+        if staged.returncode == 1:
+            subprocess.run(  # noqa: S603 - fixed git subcommand; message is an argument, not shell input
+                [git, "commit", "-m", commit_message.strip()], cwd=ROOT, check=True
+            )
+        subprocess.run(  # noqa: S603 - fixed git subcommand and branch argument
+            [git, "fetch", "origin", branch], cwd=ROOT, check=True
+        )
+        subprocess.run(  # noqa: S603 - fixed git subcommand and branch argument
+            [git, "rebase", f"origin/{branch}"], cwd=ROOT, check=True
+        )
+        subprocess.run(  # noqa: S603 - fixed git subcommand and branch argument
+            [git, "push", "origin", branch], cwd=ROOT, check=True
+        )
+    except subprocess.CalledProcessError as error:
+        if error.cmd[1:2] == ["rebase"]:
+            subprocess.run([git, "rebase", "--abort"], cwd=ROOT, check=False)  # noqa: S603
+        raise DeployError(
+            f"GitHub sync failed during {error.cmd[1]}; resolve the Git error and retry"
+        ) from None
     print(f"Committed and pushed to origin/{branch}.")
 
 
@@ -1060,7 +1075,7 @@ def main():
         deploy(parse_args())
     except subprocess.CalledProcessError as error:
         print(
-            f"Deployment checks failed with exit code {error.returncode}.",
+            f"Command failed with exit code {error.returncode}.",
             file=sys.stderr,
         )
         return 1

@@ -198,7 +198,7 @@ class DeploymentValidationTests(unittest.TestCase):
         with mock.patch.object(
             deploy_script.subprocess,
             "run",
-            side_effect=[branch, None, staged, None, None],
+            side_effect=[branch, None, staged, None, None, None, None],
         ) as run, mock.patch.object(
             deploy_script.shutil, "which", return_value="/usr/bin/git"
         ) as git:
@@ -207,7 +207,9 @@ class DeploymentValidationTests(unittest.TestCase):
         self.assertEqual(run.call_args_list[0].args[0], ["/usr/bin/git", "symbolic-ref", "--quiet", "--short", "HEAD"])
         self.assertEqual(run.call_args_list[1].args[0], ["/usr/bin/git", "add", "--all"])
         self.assertEqual(run.call_args_list[3].args[0], ["/usr/bin/git", "commit", "-m", "release command"])
-        self.assertEqual(run.call_args_list[4].args[0], ["/usr/bin/git", "push", "origin", "main"])
+        self.assertEqual(run.call_args_list[4].args[0], ["/usr/bin/git", "fetch", "origin", "main"])
+        self.assertEqual(run.call_args_list[5].args[0], ["/usr/bin/git", "rebase", "origin/main"])
+        self.assertEqual(run.call_args_list[6].args[0], ["/usr/bin/git", "push", "origin", "main"])
 
     def test_github_commit_rejects_multiline_message(self) -> None:
         with self.assertRaises(deploy_script.DeployError):
