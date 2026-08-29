@@ -4,7 +4,9 @@ message context menu, powered by Qwen vision (via :class:`LLMClient`).
 Each pass returns a description and a moderation flag in one call: the model
 replies with JSON ``{"description", "flagged", "category", "reason"}``.
 """
+
 import logging
+import typing
 from typing import Dict, List, Optional, Tuple
 
 import discord
@@ -51,7 +53,7 @@ async def describe_bytes(
     *,
     scope_id: str | None = None,
     user_id: str | None = None,
-) -> Tuple[str, Dict]:
+) -> Tuple[str, Dict[typing.Any, typing.Any]]:
     """Describe image bytes + safety flag in one vision call."""
     detected_mime = sniff_image_mime(image_bytes)
     if detected_mime is None:
@@ -109,11 +111,7 @@ async def describe_message(
     if downloaded is None:
         return "couldn't fetch the image."
     data, mime = downloaded
-    description, flag = await describe_bytes(
-        data, prompt, mime, scope_id=scope_id, user_id=user_id
-    )
+    description, flag = await describe_bytes(data, prompt, mime, scope_id=scope_id, user_id=user_id)
     if flag.get("flagged"):
-        return (
-            f"⚠️ **flagged: {flag['category']}** — {flag['reason']}\n\n{description}"
-        )
+        return f"⚠️ **flagged: {flag['category']}** — {flag['reason']}\n\n{description}"
     return description

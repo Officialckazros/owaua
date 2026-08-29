@@ -1,6 +1,8 @@
 """Regression tests for the modular moderation, vision, and slash helpers."""
+
 import os
 import types
+import typing
 import unittest
 from unittest import mock
 
@@ -44,9 +46,7 @@ class LlmClientHelpersTest(unittest.IsolatedAsyncioTestCase):
 
 class RulesRegressionTest(unittest.TestCase):
     def test_warn_limit_escalates_from_kick_to_repeat_ban(self):
-        rule = rules.Rule(
-            "test_warn", "warn", "warn", "Test", "Test detail", warn_limit=2
-        )
+        rule = rules.Rule("test_warn", "warn", "warn", "Test", "Test detail", warn_limit=2)
         self.assertEqual(rules._resolve_action(rule, 0, False)[0], "warn")
         self.assertEqual(rules._resolve_action(rule, 1, False)[0], "kick")
         self.assertEqual(rules._resolve_action(rule, 2, True)[0], "ban")
@@ -76,17 +76,17 @@ class RulesRegressionTest(unittest.TestCase):
 
         bot_user = types.SimpleNamespace(id=99)
         replied = FakeDiscordMessage()
-        replied.author = bot_user
+        typing.cast(typing.Any, replied).author = bot_user
         message = FakeDiscordMessage()
-        message.content = "kys"
-        message.mentions = []
-        message.author = types.SimpleNamespace(
+        typing.cast(typing.Any, message).content = "kys"
+        typing.cast(typing.Any, message).mentions = []
+        typing.cast(typing.Any, message).author = types.SimpleNamespace(
             id=1, name="member", display_name="member"
         )
-        message.reference = types.SimpleNamespace(resolved=replied)
+        typing.cast(typing.Any, message).reference = types.SimpleNamespace(resolved=replied)
         client = types.SimpleNamespace(user=bot_user)
         with mock.patch.object(rules.discord, "Message", FakeDiscordMessage):
-            self.assertIsNone(rules.detect_rule(client, message))
+            self.assertIsNone(rules.detect_rule(client, typing.cast(typing.Any, message)))
 
 
 class CooldownRegressionTest(unittest.IsolatedAsyncioTestCase):
@@ -94,31 +94,29 @@ class CooldownRegressionTest(unittest.IsolatedAsyncioTestCase):
         slash._last_uses.clear()
 
     async def test_cooldown_honors_rate_and_isolated_commands(self):
-        calls = []
+        calls: list[typing.Any] = []
 
         class Response:
             def __init__(self):
-                self.messages = []
+                self.messages: list[typing.Any] = []
 
-            async def send_message(self, **kwargs):
+            async def send_message(self, **kwargs: typing.Any):
                 self.messages.append(kwargs)
 
-        interaction = types.SimpleNamespace(
-            user=types.SimpleNamespace(id=7), response=Response()
-        )
+        interaction = types.SimpleNamespace(user=types.SimpleNamespace(id=7), response=Response())
 
         @slash._cooldown(2, 60)
-        async def first(interaction):
+        async def first(interaction: typing.Any):
             calls.append("first")
 
         @slash._cooldown(1, 60)
-        async def second(interaction):
+        async def second(interaction: typing.Any):
             calls.append("second")
 
-        await first(interaction)
-        await first(interaction)
-        await first(interaction)
-        await second(interaction)
+        await first(typing.cast(typing.Any, interaction))
+        await first(typing.cast(typing.Any, interaction))
+        await first(typing.cast(typing.Any, interaction))
+        await second(typing.cast(typing.Any, interaction))
 
         self.assertEqual(calls, ["first", "first", "second"])
         self.assertEqual(len(interaction.response.messages), 1)
@@ -132,10 +130,8 @@ class VoiceControlRegressionTest(unittest.TestCase):
 
     def test_voice_control_requires_same_channel_or_manager(self):
         class FakeMember:
-            def __init__(self, channel_id, *, manage=False):
-                self.voice = types.SimpleNamespace(
-                    channel=types.SimpleNamespace(id=channel_id)
-                )
+            def __init__(self, channel_id: typing.Any, *, manage: bool = False):
+                self.voice = types.SimpleNamespace(channel=types.SimpleNamespace(id=channel_id))
                 self.guild_permissions = types.SimpleNamespace(
                     administrator=False, manage_guild=manage
                 )
@@ -145,9 +141,9 @@ class VoiceControlRegressionTest(unittest.TestCase):
             same = types.SimpleNamespace(user=FakeMember(10))
             different = types.SimpleNamespace(user=FakeMember(11))
             manager = types.SimpleNamespace(user=FakeMember(11, manage=True))
-            self.assertTrue(voice._can_control_channel(same, target))
-            self.assertFalse(voice._can_control_channel(different, target))
-            self.assertTrue(voice._can_control_channel(manager, target))
+            self.assertTrue(voice._can_control_channel(typing.cast(typing.Any, same), target))
+            self.assertFalse(voice._can_control_channel(typing.cast(typing.Any, different), target))
+            self.assertTrue(voice._can_control_channel(typing.cast(typing.Any, manager), target))
 
     def test_stt_queue_is_bounded(self):
         session = voice.SttSession(1, types.SimpleNamespace())

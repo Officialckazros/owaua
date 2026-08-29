@@ -9,12 +9,14 @@ reply to Groq GPT-OSS 20B, which answers back in the user's language.
 server default). The brain is then told to write the visible reply in that
 language.
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
 import re
+import typing
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
@@ -28,10 +30,10 @@ log = logging.getLogger("owaua.multilingual")
 
 try:
     import langdetect
-    from langdetect import detect as _detect_raw
+    from langdetect import detect as _detect_raw  # pyright: ignore[reportUnknownVariableType]
 
     langdetect.DetectorFactory.seed = 0
-    _detect = _detect_raw
+    _detect: typing.Any = typing.cast(typing.Any, _detect_raw)
 except Exception:
     _detect = None
 
@@ -60,7 +62,7 @@ async def detect_lang(text: str) -> Optional[str]:
         return hit
     loop = asyncio.get_running_loop()
     try:
-        lang = await loop.run_in_executor(None, _detect, key)
+        lang: typing.Any = await loop.run_in_executor(None, _detect, key)
     except Exception:
         return None
     if len(_cache) >= _CACHE_MAX:
@@ -110,11 +112,14 @@ def _json_object(raw: str) -> dict[str, str] | None:
         return None
     if not isinstance(value, dict):
         return None
-    return {
-        str(key): item
-        for key, item in value.items()
-        if isinstance(item, str)
-    }
+    return typing.cast(
+        typing.Any,
+        {
+            str(key): item
+            for key, item in typing.cast(typing.Iterable[typing.Any], value.items())
+            if isinstance(item, str)
+        },
+    )
 
 
 def _cache_translation(language: str, source: str, translated: str) -> None:
@@ -193,8 +198,8 @@ async def translate_many(
 
 
 async def maybe_multilingual_reply(
-    channel,
-    guild,
+    channel: typing.Any,
+    guild: typing.Any,
     text: str,
     lang: Optional[str],
     *,
@@ -237,21 +242,39 @@ async def maybe_multilingual_reply(
 
 
 USER_FLAG = "language"
-RESET_TOKENS = frozenset({
-    "reset", "clear", "default", "auto", "none", "off", "unset", "remove",
-})
+RESET_TOKENS = frozenset(
+    {
+        "reset",
+        "clear",
+        "default",
+        "auto",
+        "none",
+        "off",
+        "unset",
+        "remove",
+    }
+)
 STATUS_TOKENS = frozenset({"", "status", "show", "help", "?", "what", "current"})
 LIST_TOKENS = frozenset({"list", "langs", "languages", "all", "catalog"})
 SERVER_TOKENS = frozenset({"server", "guild", "here"})
-_LEAD = re.compile(
-    r"(?is)^(please|set|to|in|speak|talk|reply|respond|write|use|switch)\s+"
-)
+_LEAD = re.compile(r"(?is)^(please|set|to|in|speak|talk|reply|respond|write|use|switch)\s+")
 _CUSTOM_OK = re.compile(r"^[\w][\w .()\-']{0,79}$", re.UNICODE)
 _ENGLISH_CODES = frozenset({"en", "eng", "english"})
-_UNSAFE_CUSTOM_WORDS = frozenset({
-    "ignore", "instruction", "instructions", "prompt", "system", "assistant",
-    "developer", "override", "forget", "execute", "jailbreak",
-})
+_UNSAFE_CUSTOM_WORDS = frozenset(
+    {
+        "ignore",
+        "instruction",
+        "instructions",
+        "prompt",
+        "system",
+        "assistant",
+        "developer",
+        "override",
+        "forget",
+        "execute",
+        "jailbreak",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -388,9 +411,7 @@ def effective_language(user_id: str, guild_id: str) -> Optional[Language]:
     """A configured guild language is authoritative; otherwise honor the user."""
     server = guild_language(guild_id)
     configured = bool((db.guild_settings(str(guild_id)).get("language") or "").strip())
-    if configured and (
-        str(guild_id).startswith("guild:") or str(guild_id).strip().isdigit()
-    ):
+    if configured and (str(guild_id).startswith("guild:") or str(guild_id).strip().isdigit()):
         return server
     personal = user_language(user_id)
     if personal:
@@ -411,10 +432,10 @@ def reply_instruction(user_id: str, guild_id: str) -> str:
     lang = effective_language(user_id, guild_id)
     if is_english(lang):
         return ""
-    label = lang.label
+    label = typing.cast(typing.Any, lang).label
     return (
         f"REPLY LANGUAGE — HARD GUILD/USER CONSTRAINT: write the "
-        f"entire user-visible reply (the JSON \"response\" text, or the plain-text "
+        f'entire user-visible reply (the JSON "response" text, or the plain-text '
         f"answer) in {label}. Keep persona, tone, and length. JSON keys, memory "
         f"contents, relationship fields, and other structured fields stay in "
         f"English. Do not switch to English unless the user asked for English "
@@ -445,7 +466,7 @@ def status_text(user_id: str, guild_id: str, prefix: str = "!") -> str:
     if is_english(effective):
         current = "English (default)"
     else:
-        current = effective.label
+        current = typing.cast(typing.Any, effective).label
     bits = [f"i'll reply in **{current}**."]
     if personal:
         bits.append(f"your personal/DM setting: {personal.label}")
@@ -553,7 +574,7 @@ async def localize_discord_payload(
             values.append(item.author.name)
             setters.append(("author", item, None))
         for index, field in enumerate(item.fields):
-            values.extend([field.name, field.value])
+            values.extend(typing.cast(typing.Any, [field.name, field.value]))
             setters.extend([("field_name", item, index), ("field_value", item, index)])
         if item.footer.text:
             values.append(item.footer.text)
@@ -572,7 +593,7 @@ async def localize_discord_payload(
 
     translated = await translate_many(
         values,
-        language.label,
+        typing.cast(typing.Any, language).label,
         scope_id=f"guild:{guild_id}" if guild_id is not None else f"dm:{user_id}",
         user_id=str(user_id) if user_id is not None else None,
     )
@@ -585,7 +606,9 @@ async def localize_discord_payload(
         elif kind == "description":
             target.description = value[:4096]
         elif kind == "author":
-            target.set_author(name=value[:256], url=target.author.url, icon_url=target.author.icon_url)
+            target.set_author(
+                name=value[:256], url=target.author.url, icon_url=target.author.icon_url
+            )
         elif kind in {"field_name", "field_value"}:
             field = target.fields[index]
             target.set_field_at(
@@ -622,9 +645,11 @@ def install_discord_localization() -> None:
     _original_webhook_send = discord.Webhook.send
     _original_message_edit = discord.Message.edit
 
-    async def messageable_send(self, content=None, **kwargs):
-        guild = getattr(self, "guild", None)
-        recipient = getattr(self, "recipient", None)
+    async def messageable_send(
+        self: typing.Any, content: typing.Any = None, **kwargs: typing.Any
+    ) -> typing.Any:
+        guild = getattr(typing.cast(typing.Any, self), "guild", None)
+        recipient = getattr(typing.cast(typing.Any, self), "recipient", None)
         content, embed, embeds, view = await localize_discord_payload(
             guild_id=getattr(guild, "id", None),
             user_id=getattr(recipient, "id", None),
@@ -639,10 +664,14 @@ def install_discord_localization() -> None:
             kwargs["embeds"] = embeds
         if view is not None:
             kwargs["view"] = view
-        return await _original_messageable_send(self, content, **kwargs)
+        return await typing.cast(typing.Any, _original_messageable_send)(
+            typing.cast(typing.Any, self), content, **kwargs
+        )
 
-    async def interaction_send(self, content=None, **kwargs):
-        parent = self._parent
+    async def interaction_send(
+        self: typing.Any, content: typing.Any = None, **kwargs: typing.Any
+    ) -> typing.Any:
+        parent: typing.Any = typing.cast(typing.Any, self)._parent
         content, embed, embeds, view = await localize_discord_payload(
             guild_id=parent.guild_id,
             user_id=getattr(parent.user, "id", None),
@@ -657,11 +686,17 @@ def install_discord_localization() -> None:
             kwargs["embeds"] = embeds
         if view is not None:
             kwargs["view"] = view
-        return await _original_interaction_send(self, content, **kwargs)
+        return await typing.cast(typing.Any, _original_interaction_send)(
+            typing.cast(typing.Any, self), content, **kwargs
+        )
 
-    async def webhook_send(self, content=discord.utils.MISSING, **kwargs):
+    async def webhook_send(
+        self: typing.Any,
+        content: typing.Any = discord.utils.MISSING,
+        **kwargs: typing.Any,
+    ) -> typing.Any:
         content, embed, embeds, view = await localize_discord_payload(
-            guild_id=getattr(self, "guild_id", None),
+            guild_id=getattr(typing.cast(typing.Any, self), "guild_id", None),
             content=content,
             embed=kwargs.get("embed"),
             embeds=kwargs.get("embeds"),
@@ -673,10 +708,12 @@ def install_discord_localization() -> None:
             kwargs["embeds"] = embeds
         if view is not None:
             kwargs["view"] = view
-        return await _original_webhook_send(self, content, **kwargs)
+        return await typing.cast(typing.Any, _original_webhook_send)(
+            typing.cast(typing.Any, self), content, **kwargs
+        )
 
-    async def interaction_edit(self, **kwargs):
-        parent = self._parent
+    async def interaction_edit(self: typing.Any, **kwargs: typing.Any) -> typing.Any:
+        parent: typing.Any = typing.cast(typing.Any, self)._parent
         content, embed, embeds, view = await localize_discord_payload(
             guild_id=parent.guild_id,
             user_id=getattr(parent.user, "id", None),
@@ -693,11 +730,13 @@ def install_discord_localization() -> None:
             kwargs["embeds"] = embeds
         if view is not None:
             kwargs["view"] = view
-        return await _original_interaction_edit(self, **kwargs)
+        return await typing.cast(typing.Any, _original_interaction_edit)(
+            typing.cast(typing.Any, self), **kwargs
+        )
 
-    async def message_edit(self, **kwargs):
+    async def message_edit(self: typing.Any, **kwargs: typing.Any) -> typing.Any:
         content, embed, embeds, view = await localize_discord_payload(
-            guild_id=getattr(getattr(self, "guild", None), "id", None),
+            guild_id=getattr(getattr(typing.cast(typing.Any, self), "guild", None), "id", None),
             content=kwargs.get("content", discord.utils.MISSING),
             embed=kwargs.get("embed"),
             embeds=kwargs.get("embeds"),
@@ -711,7 +750,9 @@ def install_discord_localization() -> None:
             kwargs["embeds"] = embeds
         if view is not None:
             kwargs["view"] = view
-        return await _original_message_edit(self, **kwargs)
+        return await typing.cast(typing.Any, _original_message_edit)(
+            typing.cast(typing.Any, self), **kwargs
+        )
 
     discord.abc.Messageable.send = messageable_send
     discord.InteractionResponse.send_message = interaction_send

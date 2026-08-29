@@ -4,14 +4,13 @@ import importlib.machinery
 import importlib.util
 import tempfile
 import types
+import typing
 import unittest
 from pathlib import Path
 from unittest import mock
 
 DEPLOY_PATH = Path(__file__).resolve().parents[1] / "scripts" / "deploy"
-LOADER = importlib.machinery.SourceFileLoader(
-    "owaua_deploy_test_module", str(DEPLOY_PATH)
-)
+LOADER = importlib.machinery.SourceFileLoader("owaua_deploy_test_module", str(DEPLOY_PATH))
 SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
 if SPEC is None:  # pragma: no cover - importlib invariant
     raise RuntimeError("could not load deployment script")
@@ -33,14 +32,10 @@ class DeploymentValidationTests(unittest.TestCase):
             ):
                 deploy_script.migrate_legacy_config_dir()
             self.assertFalse(legacy.exists())
-            self.assertEqual(
-                (canonical / "config.json").read_text(encoding="utf-8"), "{}"
-            )
+            self.assertEqual((canonical / "config.json").read_text(encoding="utf-8"), "{}")
 
     def test_rebrand_server_operations_are_narrowly_allowlisted(self) -> None:
-        client = deploy_script.DakiClient(
-            "https://portal.daki.cc", "ptlc_test", "server_123"
-        )
+        client = deploy_script.DakiClient("https://portal.daki.cc", "ptlc_test", "server_123")
         with mock.patch.object(client, "request") as request:
             client.update_startup_variable("SECOND_CMD", "PYTHONPATH=src python -m owaua.bot")
             client.rename_server("owaua")
@@ -66,16 +61,12 @@ class DeploymentValidationTests(unittest.TestCase):
             "https://portal.daki.cc/unknown/path",
         )
         for value in rejected:
-            with self.subTest(value=value), self.assertRaises(
-                deploy_script.DeployError
-            ):
+            with self.subTest(value=value), self.assertRaises(deploy_script.DeployError):
                 deploy_script.normalize_panel(value, deploy_script.PANEL_URL)
 
     def test_insecure_local_panel_requires_explicit_opt_in(self) -> None:
         with self.assertRaises(deploy_script.DeployError):
-            deploy_script.normalize_panel(
-                "http://127.0.0.1:8080", deploy_script.PANEL_URL
-            )
+            deploy_script.normalize_panel("http://127.0.0.1:8080", deploy_script.PANEL_URL)
         normalized, _, _ = deploy_script.normalize_panel(
             "http://127.0.0.1:8080",
             deploy_script.PANEL_URL,
@@ -103,9 +94,7 @@ class DeploymentValidationTests(unittest.TestCase):
             "src//owaua/web.py",
             "../outside.py",
         ):
-            with self.subTest(value=value), self.assertRaises(
-                deploy_script.DeployError
-            ):
+            with self.subTest(value=value), self.assertRaises(deploy_script.DeployError):
                 deploy_script.validate_deployable_path(value)
 
     def test_noninteractive_mutation_requires_yes(self) -> None:
@@ -133,14 +122,14 @@ class DeploymentValidationTests(unittest.TestCase):
 
     def test_setup_without_changes_or_restart_performs_no_remote_write(self) -> None:
         class FakeClient:
-            instances = []
+            instances: list[typing.Any] = []
 
-            def __init__(self, *_args):
-                self.calls = []
+            def __init__(self, *_args: typing.Any):
+                self.calls: list[typing.Any] = []
                 self.instances.append(self)
 
-            def __getattr__(self, name):
-                def record(*_args, **_kwargs):
+            def __getattr__(self, name: typing.Any):
+                def record(*_args: typing.Any, **_kwargs: typing.Any):
                     self.calls.append(name)
 
                 return record
@@ -175,9 +164,7 @@ class DeploymentValidationTests(unittest.TestCase):
         self.assertEqual(FakeClient.instances[0].calls, [])
 
     def test_websites_project_is_accepted(self) -> None:
-        with mock.patch.object(
-            deploy_script.sys, "argv", ["deploy", "websites", "--dry-run"]
-        ):
+        with mock.patch.object(deploy_script.sys, "argv", ["deploy", "websites", "--dry-run"]):
             args = deploy_script.parse_args()
         self.assertEqual(args.project, "websites")
         self.assertTrue(args.dry_run)
@@ -195,18 +182,24 @@ class DeploymentValidationTests(unittest.TestCase):
     def test_github_commit_stages_commits_and_pushes_current_branch(self) -> None:
         branch = types.SimpleNamespace(returncode=0, stdout="main\n")
         staged = types.SimpleNamespace(returncode=1)
-        with mock.patch.object(
-            deploy_script.subprocess,
-            "run",
-            side_effect=[branch, None, staged, None, None, None, None],
-        ) as run, mock.patch.object(
-            deploy_script.shutil, "which", return_value="/usr/bin/git"
-        ) as git:
+        with (
+            mock.patch.object(
+                deploy_script.subprocess,
+                "run",
+                side_effect=[branch, None, staged, None, None, None, None],
+            ) as run,
+            mock.patch.object(deploy_script.shutil, "which", return_value="/usr/bin/git") as git,
+        ):
             deploy_script.github_commit("release command")
         git.assert_called_once_with("git")
-        self.assertEqual(run.call_args_list[0].args[0], ["/usr/bin/git", "symbolic-ref", "--quiet", "--short", "HEAD"])
+        self.assertEqual(
+            run.call_args_list[0].args[0],
+            ["/usr/bin/git", "symbolic-ref", "--quiet", "--short", "HEAD"],
+        )
         self.assertEqual(run.call_args_list[1].args[0], ["/usr/bin/git", "add", "--all"])
-        self.assertEqual(run.call_args_list[3].args[0], ["/usr/bin/git", "commit", "-m", "release command"])
+        self.assertEqual(
+            run.call_args_list[3].args[0], ["/usr/bin/git", "commit", "-m", "release command"]
+        )
         self.assertEqual(run.call_args_list[4].args[0], ["/usr/bin/git", "fetch", "origin", "main"])
         self.assertEqual(run.call_args_list[5].args[0], ["/usr/bin/git", "rebase", "origin/main"])
         self.assertEqual(run.call_args_list[6].args[0], ["/usr/bin/git", "push", "origin", "main"])
@@ -238,16 +231,10 @@ class DeploymentValidationTests(unittest.TestCase):
             (website / "wearegays.net" / "owaua").mkdir()
             (website / "wearedevsstatus").mkdir()
             (website / "social").mkdir()
-            (website / "kozzyx.org" / "pages" / "index.html").write_text(
-                "kozzyx", encoding="utf-8"
-            )
-            (website / "kozzyx.org" / "css" / "theme.css").write_text(
-                "body{}", encoding="utf-8"
-            )
+            (website / "kozzyx.org" / "pages" / "index.html").write_text("kozzyx", encoding="utf-8")
+            (website / "kozzyx.org" / "css" / "theme.css").write_text("body{}", encoding="utf-8")
             (website / "kirmy.org" / "index.html").write_text("kirmy", encoding="utf-8")
-            (website / "wearegays.net" / "multi.html").write_text(
-                "wag", encoding="utf-8"
-            )
+            (website / "wearegays.net" / "multi.html").write_text("wag", encoding="utf-8")
             (website / "wearegays.net" / "owaua" / "index.html").write_text(
                 "owaua guide", encoding="utf-8"
             )
@@ -255,9 +242,7 @@ class DeploymentValidationTests(unittest.TestCase):
             (website / "wearegays.net" / "femsec" / "index.html").write_text(
                 "files", encoding="utf-8"
             )
-            (website / "wearedevsstatus" / "index.html").write_text(
-                "status", encoding="utf-8"
-            )
+            (website / "wearedevsstatus" / "index.html").write_text("status", encoding="utf-8")
             (website / "social" / "index.html").write_text("social", encoding="utf-8")
             assembled = Path(directory) / "assembled"
             with mock.patch.object(deploy_script, "WEBSITE_ROOT", website):

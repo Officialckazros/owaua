@@ -45,9 +45,7 @@ class FreakyModeTest(unittest.TestCase):
         db.privacy_set_opt_in(uid, guild, True)
         db.guild_settings_set(guild, history_enabled=True)
         db.relationship_set(uid, guild, score=0.9, nickname="sweetie")
-        db.add_memory(
-            "owner likes to be called sweetie", uid, guild, subject=uid, importance=0.6
-        )
+        db.add_memory("owner likes to be called sweetie", uid, guild, subject=uid, importance=0.6)
         db.add_memory("owner of owaua", uid, guild, subject=uid, importance=0.8)
         db.convo_add(uid, guild, "bot", "hey sweetie, miss me?")
         brain.set_freaky_mode(uid, True)
@@ -67,18 +65,14 @@ class FreakyModeTest(unittest.TestCase):
         guild = Scope.guild(7).key
         db.privacy_set_opt_in(uid, guild, True)
         db.relationship_set(uid, guild, nickname="sweetie")
-        db.add_memory(
-            "likes to be called baby", uid, guild, subject=uid, importance=0.7
-        )
+        db.add_memory("likes to be called baby", uid, guild, subject=uid, importance=0.7)
         prompt = brain.build_system(uid, "tester", "hi", guild, server_name="lab")
         self.assertIn(config.FREAKY_MODE_OFF_PROMPT, prompt)
         self.assertNotIn(config.FREAKY_MODE_PROMPT, prompt)
         self.assertNotIn("Your private nickname for them: sweetie", prompt)
         self.assertEqual([], brain.facts_about_user(uid, guild))
 
-        brain.apply_relationship(
-            {"relationship": {"delta": 0.0, "nickname": "kitten"}}, uid, guild
-        )
+        brain.apply_relationship({"relationship": {"delta": 0.0, "nickname": "kitten"}}, uid, guild)
         self.assertNotEqual("kitten", db.relationship_get(uid, guild).get("nickname"))
         stored = brain.persist_memories(
             [{"about": uid, "content": "likes to be called princess", "importance": 0.5}],
@@ -113,8 +107,12 @@ class FreakyModeTest(unittest.TestCase):
         for channel_nsfw in (False, None):
             with self.subTest(channel_nsfw=channel_nsfw):
                 prompt = brain.build_system(
-                    uid, "tester", "hi", guild,
-                    server_name="lab", channel_nsfw=channel_nsfw,
+                    uid,
+                    "tester",
+                    "hi",
+                    guild,
+                    server_name="lab",
+                    channel_nsfw=channel_nsfw,
                 )
                 self.assertNotIn(config.FREAKY_MODE_PROMPT, prompt)
                 marker = "NOT a Discord-marked" if channel_nsfw is False else "Fail closed as SFW"
@@ -140,6 +138,4 @@ class FreakyModeTest(unittest.TestCase):
         guild = Scope.guild(7).key
         db.guild_settings_set(guild, model="some-guild-model")
         with mock.patch.object(config, "MODEL_NSFW", "adult-model"):
-            self.assertEqual(
-                "adult-model", brain.chat_model(guild, channel_nsfw=True)
-            )
+            self.assertEqual("adult-model", brain.chat_model(guild, channel_nsfw=True))

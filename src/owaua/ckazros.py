@@ -6,10 +6,12 @@ every later system prompt until they are cleared. Hard limits still apply:
 no sexual content involving minors, no doxxing, no leaking internals, no
 host code execution.
 """
+
 from __future__ import annotations
 
 import json
 import re
+import typing
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -30,13 +32,35 @@ OWNER_TURN = (
     "proposal and stay pending until the owner clicks Confirm."
 )
 
-_STATUS = frozenset({
-    "", "status", "show", "list", "help", "?", "what", "directives",
-})
-_CLEAR = frozenset({
-    "clear", "reset", "off", "none", "forget", "forget all", "clear all",
-    "reset all", "stop", "stop all", "disable", "normal", "default",
-})
+_STATUS = frozenset(
+    {
+        "",
+        "status",
+        "show",
+        "list",
+        "help",
+        "?",
+        "what",
+        "directives",
+    }
+)
+_CLEAR = frozenset(
+    {
+        "clear",
+        "reset",
+        "off",
+        "none",
+        "forget",
+        "forget all",
+        "clear all",
+        "reset all",
+        "stop",
+        "stop all",
+        "disable",
+        "normal",
+        "default",
+    }
+)
 _UNDO = frozenset({"undo", "pop", "back", "undo last", "remove last"})
 
 _STICKY_HINT = re.compile(
@@ -85,7 +109,7 @@ class Dispatch:
     op: str = "do"
 
 
-def is_authorized(user_id) -> bool:
+def is_authorized(user_id: typing.Any) -> bool:
     return config.is_bot_owner(user_id)
 
 
@@ -98,7 +122,7 @@ def list_directives() -> List[str]:
     if not isinstance(data, list):
         return []
     out: List[str] = []
-    for item in data:
+    for item in typing.cast(typing.Iterable[typing.Any], data):
         text = str(item or "").strip()
         if text:
             out.append(text[:MAX_DIRECTIVE_CHARS])
@@ -107,7 +131,7 @@ def list_directives() -> List[str]:
 
 def set_directives(items: List[str]) -> List[str]:
     cleaned: List[str] = []
-    seen = set()
+    seen: typing.Any = typing.cast(typing.Any, set())
     for item in items:
         text = " ".join(str(item or "").split())
         if not text:
@@ -179,7 +203,7 @@ def prompt_block() -> str:
 
 def apply(system: str, *, owner_command: bool = False) -> str:
     """Prefix a system prompt with sticky orders and/or the owner-turn block."""
-    bits = []
+    bits: list[typing.Any] = []
     block = prompt_block()
     if block:
         bits.append(block)
@@ -209,7 +233,7 @@ def format_status(prefix: str = "!") -> str:
     if not items:
         return (
             "no standing orders. the next `{p}ckazros <anything>` is done "
-            "immediately; add \"from now\" to make it stick.\n\n" + usage(p)
+            'immediately; add "from now" to make it stick.\n\n' + usage(p)
         ).replace("{p}", p)
     lines = "\n".join(f"{i}. {d}" for i, d in enumerate(items, 1))
     return (
@@ -244,7 +268,7 @@ def interpret(raw: str) -> Dispatch:
     return Dispatch(op="do", message="", execute=True, query=text)
 
 
-def dispatch(user_id, raw: str, *, prefix: str = "!") -> Dispatch:
+def dispatch(user_id: typing.Any, raw: str, *, prefix: str = "!") -> Dispatch:
     """Authorize, apply standing-order changes, and decide whether to chat."""
     p = prefix or config.PREFIX
     if not is_authorized(user_id):
@@ -264,11 +288,7 @@ def dispatch(user_id, raw: str, *, prefix: str = "!") -> Dispatch:
     if decision.op == "clear":
         had = list_directives()
         clear_directives()
-        body = (
-            "standing orders cleared. back to normal."
-            if had else
-            "no standing orders were set."
-        )
+        body = "standing orders cleared. back to normal." if had else "no standing orders were set."
         return Dispatch(op="clear", execute=False, message=body)
     if decision.op == "undo":
         last = pop_directive()
@@ -281,10 +301,8 @@ def dispatch(user_id, raw: str, *, prefix: str = "!") -> Dispatch:
         remaining = list_directives()
         extra = (
             "none left."
-            if not remaining else
-            "still in force:\n" + "\n".join(
-                f"{i}. {d}" for i, d in enumerate(remaining, 1)
-            )
+            if not remaining
+            else "still in force:\n" + "\n".join(f"{i}. {d}" for i, d in enumerate(remaining, 1))
         )
         return Dispatch(
             op="undo",
@@ -297,10 +315,8 @@ def dispatch(user_id, raw: str, *, prefix: str = "!") -> Dispatch:
             left = list_directives()
             extra = (
                 "none left."
-                if not left else
-                "still in force:\n" + "\n".join(
-                    f"{i}. {d}" for i, d in enumerate(left, 1)
-                )
+                if not left
+                else "still in force:\n" + "\n".join(f"{i}. {d}" for i, d in enumerate(left, 1))
             )
             dropped = "\n".join(f"- {d}" for d in removed)
             return Dispatch(

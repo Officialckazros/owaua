@@ -10,11 +10,13 @@ Usage:
 Also:
     PYTHONPATH=src python -m owaua.tos_cli break
 """
+
 from __future__ import annotations
 
 import asyncio
 import os
 import sys
+import typing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -47,13 +49,11 @@ UNBLOCK_DM = (
 )
 
 
-def _fmt_ts(ts) -> str:
+def _fmt_ts(ts: typing.Any) -> str:
     if not ts:
         return "—"
     try:
-        return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime(
-            "%Y-%m-%d %H:%M UTC"
-        )
+        return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     except (TypeError, ValueError, OSError):
         return "—"
 
@@ -140,9 +140,9 @@ def _kv_set(key: str, value: str) -> None:
         print(f"[warn] sqlite write failed for {key}: {e}", file=sys.stderr)
 
 
-def _collect_emergency_blocks() -> Dict[str, dict]:
+def _collect_emergency_blocks() -> Dict[str, dict[typing.Any, typing.Any]]:
     """Read legacy emergency flags retained in SQLite for compatibility."""
-    out: Dict[str, dict] = {}
+    out: Dict[str, dict[typing.Any, typing.Any]] = {}
     for key, _val in _kv_rows("uf:%:tos_emergency_block", "1"):
         parts = key.split(":")
         if len(parts) < 3:
@@ -158,7 +158,7 @@ def _collect_emergency_blocks() -> Dict[str, dict]:
     return out
 
 
-def collect_tos_blocks() -> List[Tuple[str, dict]]:
+def collect_tos_blocks() -> List[Tuple[str, dict[typing.Any, typing.Any]]]:
     """
     Return sorted list of (user_id, meta) for every ToS hard-block.
 
@@ -166,7 +166,7 @@ def collect_tos_blocks() -> List[Tuple[str, dict]]:
       1. Transactional SQLite dynamic-block records marked as ToS enforcement
       2. Legacy SQLite emergency flags
     """
-    found: Dict[str, dict] = {}
+    found: Dict[str, dict[typing.Any, typing.Any]] = {}
 
     for uid, meta in blocked.list_blocked().items():
         meta = meta if isinstance(meta, dict) else {}
@@ -186,7 +186,9 @@ def collect_tos_blocks() -> List[Tuple[str, dict]]:
     return sorted(found.items(), key=lambda kv: float(kv[1].get("blocked_at") or 0), reverse=True)
 
 
-def print_list(entries: List[Tuple[str, dict]], numbered: bool = True) -> None:
+def print_list(
+    entries: List[Tuple[str, dict[typing.Any, typing.Any]]], numbered: bool = True
+) -> None:
     if not entries:
         print("no ToS-blocked users")
         print("(SQLite block state is empty)")
@@ -204,7 +206,7 @@ def print_list(entries: List[Tuple[str, dict]], numbered: bool = True) -> None:
         channel_id = meta.get("channel_id") or ""
         trigger = meta.get("trigger_source") or ""
         strikes = meta.get("strikes_detail") or ""
-        history = meta.get("history") or []
+        history: typing.Any = meta.get("history") or []
 
         extra = ""
         if meta.get("emergency_flag"):
@@ -234,10 +236,11 @@ def print_list(entries: List[Tuple[str, dict]], numbered: bool = True) -> None:
             if len(lines) > 8:
                 print(f"         │ … ({len(lines) - 8} more lines)")
             print("         └──────────────────────────────────────────────────────────")
-        if isinstance(history, list) and len(history) > 1:
-            print(f"       history:  {len(history)} violation events recorded")
+        if isinstance(history, list) and len(typing.cast(typing.Any, history)) > 1:
+            print(
+                f"       history:  {len(typing.cast(typing.Any, history))} violation events recorded"
+            )
         print()
-
 
 
 def _clear_tos_side_effects(uid: str) -> None:
@@ -357,9 +360,7 @@ def unblock_users(uids: List[str], *, notify: bool = True) -> int:
 
         meta = blocked.get_blocked_user(uid)
         if meta is not None and not _is_tos_reason(str(meta.get("reason") or "")):
-            print(
-                f"refusing to remove non-ToS/manual block for {uid}", file=sys.stderr
-            )
+            print(f"refusing to remove non-ToS/manual block for {uid}", file=sys.stderr)
             failures += 1
             continue
         if meta is None and uid not in emergency_ids:
@@ -426,15 +427,19 @@ def cmd_break_info(args: list[str]) -> int:
         return 1
 
     print_list([(uid, meta)], numbered=False)
-    hist = meta.get("history") or []
-    if isinstance(hist, list) and len(hist) > 1:
+    hist: typing.Any = meta.get("history") or []
+    if isinstance(hist, list) and len(typing.cast(typing.Any, hist)) > 1:
         print("Violation History:")
-        for idx, ev in enumerate(hist, 1):
+        for idx, ev in typing.cast(
+            typing.Iterable[typing.Any], enumerate(typing.cast(typing.Any, hist), 1)
+        ):
             ts = _fmt_ts(ev.get("timestamp"))
-            reas = ev.get("reason") or "—"
-            cat = ev.get("category") or "—"
-            txt = ev.get("offending_text") or "—"
-            g_name = ev.get("guild_name") or ev.get("guild_id") or "—"
+            reas: typing.Any = typing.cast(typing.Any, ev.get("reason") or "—")
+            cat: typing.Any = typing.cast(typing.Any, ev.get("category") or "—")
+            txt: typing.Any = typing.cast(typing.Any, ev.get("offending_text") or "—")
+            g_name: typing.Any = typing.cast(
+                typing.Any, ev.get("guild_name") or ev.get("guild_id") or "—"
+            )
             print(f"  [{idx}] {ts} | cat: {cat} | server: {g_name}")
             print(f"      reason: {reas}")
             if txt and txt != "—":
@@ -462,9 +467,9 @@ def cmd_break_unblock(args: list[str], *, notify: bool = True) -> int:
             return 0
         print_list(entries, numbered=True)
         try:
-            confirm = input(
-                f"unblock ALL {len(entries)} ToS-blocked user(s)? [y/N] "
-            ).strip().lower()
+            confirm = (
+                input(f"unblock ALL {len(entries)} ToS-blocked user(s)? [y/N] ").strip().lower()
+            )
         except (EOFError, KeyboardInterrupt):
             print()
             return 1
@@ -497,7 +502,6 @@ def cmd_break_interactive(args: list[str], *, notify: bool = True) -> int:
     print_list(entries, numbered=True)
     if not entries:
         return 0
-
 
     print("Unblock options:")
     print("  • type a number (e.g. 1) or a Discord user id")

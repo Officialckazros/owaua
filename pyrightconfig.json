@@ -1,0 +1,33 @@
+{
+  "include": [
+    "src",
+    "scripts",
+    "tests",
+    "desktoppet"
+  ],
+  "exclude": [
+    "**/.venv",
+    "**/venv",
+    "**/__pycache__",
+    "build",
+    "dist",
+    "wearegays.net"
+  ],
+  "extraPaths": [
+    "src"
+  ],
+  "pythonVersion": "3.12",
+  "pythonPlatform": "All",
+  "typeCheckingMode": "strict",
+  "reportConstantRedefinition": "none",
+  "reportRedeclaration": "none",
+  "reportPrivateUsage": "none",
+  "reportMissingImports": "none",
+  "reportMissingTypeStubs": "none",
+  "reportUnnecessaryComparison": "none",
+  "reportUnnecessaryIsInstance": "none",
+  "reportUnnecessaryCast": "none",
+  "reportUnusedFunction": "none",
+  "venvPath": ".",
+  "venv": ".venv"
+}

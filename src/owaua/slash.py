@@ -7,6 +7,7 @@ commands as the message path.
 
 Wire-up: call setup(client, track) from bot.py, then `await tree.sync()` on ready.
 """
+
 import asyncio
 import collections
 import functools
@@ -17,6 +18,7 @@ import logging
 import secrets
 import sqlite3
 import time
+import typing
 import uuid
 from typing import Awaitable, Callable, Literal, Optional
 
@@ -54,9 +56,9 @@ from owaua.services.llm_client import llm as _llm
 
 _LOG = logging.getLogger(__name__)
 
-UP, DOWN = "\U0001F44D", "\U0001F44E"
+UP, DOWN = "\U0001f44d", "\U0001f44e"
 
-_track: Optional[Callable] = None
+_track: Optional[Callable[..., typing.Any]] = None
 
 
 class InvokerConfirmation(discord.ui.View):
@@ -95,7 +97,7 @@ class InvokerConfirmation(discord.ui.View):
 
     async def _disable(self, interaction: discord.Interaction) -> None:
         for child in self.children:
-            child.disabled = True
+            typing.cast(typing.Any, child).disabled = True
         try:
             await interaction.response.edit_message(view=self)
         except discord.HTTPException:
@@ -103,7 +105,9 @@ class InvokerConfirmation(discord.ui.View):
                 await interaction.response.defer()
 
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.danger)
-    async def confirm(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+    async def confirm(
+        self, interaction: discord.Interaction, _button: discord.ui.Button[typing.Any]
+    ) -> None:
         async with self._lock:
             if self._consumed:
                 await interaction.response.send_message(
@@ -116,7 +120,9 @@ class InvokerConfirmation(discord.ui.View):
         await self.on_confirm(interaction)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
-    async def cancel(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+    async def cancel(
+        self, interaction: discord.Interaction, _button: discord.ui.Button[typing.Any]
+    ) -> None:
         async with self._lock:
             if self._consumed:
                 await interaction.response.send_message(
@@ -145,7 +151,7 @@ def _guild_id(interaction: discord.Interaction) -> str:
     return scope_key(guild_id=interaction.guild_id, user_id=interaction.user.id)
 
 
-def _display_name(user) -> str:
+def _display_name(user: typing.Any) -> str:
     return (
         getattr(user, "display_name", None)
         or getattr(user, "global_name", None)
@@ -168,7 +174,7 @@ def _is_mod(interaction: discord.Interaction) -> bool:
 
 async def _propose_guild_setting(
     interaction: discord.Interaction,
-    patch: dict,
+    patch: dict[typing.Any, typing.Any],
     label: str,
 ) -> None:
     """Preview one guild-setting mutation and re-authorize it at click time."""
@@ -179,7 +185,7 @@ async def _propose_guild_setting(
         return
 
     correlation_id = uuid.uuid4().hex
-    audit_parameters = {}
+    audit_parameters: dict[typing.Any, typing.Any] = {}
     for key, value in patch.items():
         if key == "persona":
             audit_parameters[key] = {"present": bool(value), "length": len(str(value or ""))}
@@ -206,10 +212,7 @@ async def _propose_guild_setting(
             )
             return
         db.guild_settings_set(_guild_id(confirmation), **patch)
-        if (
-            patch.get("voice_transcription_enabled") is False
-            and confirmation.guild_id is not None
-        ):
+        if patch.get("voice_transcription_enabled") is False and confirmation.guild_id is not None:
             voice_mod.stop_guild_stt(confirmation.guild_id)
         db.record_action_audit(
             nonce=view.nonce,
@@ -251,7 +254,7 @@ async def _propose_discord_action(
     preview: str,
     callback: Callable[[discord.Interaction], Awaitable[tuple[bool, str]]],
     target_id: str | None = None,
-    parameters: dict | None = None,
+    parameters: dict[typing.Any, typing.Any] | None = None,
 ) -> None:
     """Confirm and audit a non-model Discord mutation such as voice control."""
     correlation_id = uuid.uuid4().hex
@@ -296,11 +299,11 @@ async def _propose_discord_action(
 
 def _assistant_action_confirmation(
     interaction: discord.Interaction,
-    proposal: dict,
+    proposal: dict[typing.Any, typing.Any],
     *,
     source: str = "slash-assistant",
     undo_record_id: int | None = None,
-    batch_actions: list[dict] | None = None,
+    batch_actions: list[dict[typing.Any, typing.Any]] | None = None,
 ) -> InvokerConfirmation:
     """Build and audit a generated assistant-action confirmation."""
     correlation_id = uuid.uuid4().hex
@@ -314,7 +317,9 @@ def _assistant_action_confirmation(
         else:
             try:
                 inverse_seed = await actions.prepare_inverse(
-                    proposal, confirmation.user, confirmation.guild,
+                    proposal,
+                    confirmation.user,
+                    confirmation.guild,
                     confirmation.channel,
                 )
             except Exception:
@@ -332,14 +337,13 @@ def _assistant_action_confirmation(
         result = "\n".join(results) or "nothing was executed"
         if ok and actions.is_state_changing(proposal):
             try:
-                inverse = await actions.finalize_inverse(
-                    inverse_seed, confirmation.guild
-                )
+                inverse = await actions.finalize_inverse(inverse_seed, confirmation.guild)
                 db.record_assistant_action(
                     actor_id=str(confirmation.user.id),
                     scope_id=_guild_id(confirmation),
                     channel_id=str(confirmation.channel_id)
-                    if confirmation.channel_id is not None else None,
+                    if confirmation.channel_id is not None
+                    else None,
                     action=action_name,
                     target_id=actions.action_target_id(proposal),
                     parameters=audit_parameters,
@@ -417,24 +421,24 @@ def _can_view_subject(interaction: discord.Interaction, target_id: int) -> bool:
 
 
 def _filter_visible_rows(
-    interaction: discord.Interaction, target_id: int, rows: list[dict]
-) -> list[dict]:
+    interaction: discord.Interaction, target_id: int, rows: list[dict[typing.Any, typing.Any]]
+) -> list[dict[typing.Any, typing.Any]]:
     """Hide source-channel records a moderator cannot currently view."""
     if interaction.guild is None or int(interaction.user.id) == int(target_id):
         return rows
-    visible = []
+    visible: list[typing.Any] = []
     for row in rows:
         raw_id = str(row.get("channel_id") or "")
         channel = interaction.guild.get_channel(int(raw_id)) if raw_id.isdigit() else None
         if channel is None or not hasattr(channel, "permissions_for"):
             continue
-        permissions = channel.permissions_for(interaction.user)
+        permissions = channel.permissions_for(typing.cast(typing.Any, interaction.user))
         if permissions.view_channel and permissions.read_message_history:
             visible.append(row)
     return visible
 
 
-_last_uses: dict[tuple[str, int], collections.deque] = {}
+_last_uses: dict[tuple[str, int], collections.deque[float]] = {}
 
 
 def _cooldown(rate: int, per: float):
@@ -443,27 +447,33 @@ def _cooldown(rate: int, per: float):
     if rate < 1 or per <= 0:
         raise ValueError("cooldown rate and period must be positive")
 
-    def deco(func):
+    def deco(func: typing.Any):
         @functools.wraps(func)
-        async def wrapper(interaction: discord.Interaction, *args, **kwargs):
+        async def wrapper(
+            interaction: discord.Interaction, *args: typing.Any, **kwargs: typing.Any
+        ):
             uid = interaction.user.id
             now = time.monotonic()
             key = (func.__name__, uid)
-            uses = _last_uses.setdefault(key, collections.deque(maxlen=rate))
-            if len(_last_uses) > 10_000:
-                for old_key, history in list(_last_uses.items()):
+            uses: typing.Any = typing.cast(typing.Any, _last_uses).setdefault(
+                key, collections.deque(maxlen=rate)
+            )
+            if len(typing.cast(typing.Any, _last_uses)) > 10_000:
+                for old_key, history in typing.cast(
+                    typing.Iterable[typing.Any], list(typing.cast(typing.Any, _last_uses.items()))
+                ):
                     if not history or now - history[-1] >= per:
-                        _last_uses.pop(old_key, None)
-                uses = _last_uses.setdefault(key, collections.deque(maxlen=rate))
+                        typing.cast(typing.Any, _last_uses).pop(old_key, None)
+                uses: typing.Any = typing.cast(typing.Any, _last_uses).setdefault(
+                    key, collections.deque(maxlen=rate)
+                )
             while uses and now - uses[0] >= per:
                 uses.popleft()
             if len(uses) >= rate:
-                remaining = per - (now - uses[0])
+                remaining: typing.Any = per - (now - uses[0])
                 try:
                     await interaction.response.send_message(
-                        embed=embeds.error(
-                            f"slow down — try again in {remaining:.0f}s."
-                        ),
+                        embed=embeds.error(f"slow down — try again in {remaining:.0f}s."),
                         ephemeral=True,
                     )
                 except discord.HTTPException:
@@ -477,7 +487,7 @@ def _cooldown(rate: int, per: float):
     return deco
 
 
-def _speaker(interaction: discord.Interaction) -> dict:
+def _speaker(interaction: discord.Interaction) -> dict[typing.Any, typing.Any]:
     u = interaction.user
     guild = interaction.guild
     uname = getattr(u, "name", None) or "unknown"
@@ -493,7 +503,9 @@ def _speaker(interaction: discord.Interaction) -> dict:
         "is_bot": bool(getattr(u, "bot", False)),
         "is_bot_owner": config.is_bot_owner(u.id),
         "created_at": u.created_at.strftime("%Y-%m-%d") if getattr(u, "created_at", None) else "",
-        "channel": getattr(interaction.channel, "name", None) and f"#{interaction.channel.name}" or "DM",
+        "channel": getattr(interaction.channel, "name", None)
+        and f"#{typing.cast(typing.Any, interaction).channel.name}"
+        or "DM",
     }
     if guild:
         prof["guild"] = guild.name
@@ -501,7 +513,9 @@ def _speaker(interaction: discord.Interaction) -> dict:
         if isinstance(u, discord.Member):
             roles = [r.name for r in u.roles if r.name != "@everyone"]
             prof["roles"] = ", ".join(roles[:25]) if roles else "(none)"
-            prof["top_role"] = u.top_role.name if u.top_role and u.top_role.name != "@everyone" else "(none)"
+            prof["top_role"] = (
+                u.top_role.name if u.top_role and u.top_role.name != "@everyone" else "(none)"
+            )
             if u.joined_at:
                 prof["joined_at"] = u.joined_at.strftime("%Y-%m-%d")
     else:
@@ -517,14 +531,19 @@ async def _channel_context(interaction: discord.Interaction) -> str:
     scope_id = _guild_id(interaction)
     if interaction.guild_id and not db.guild_settings(scope_id).get("history_enabled", False):
         return ""
-    lines = []
+    lines: list[typing.Any] = []
     try:
-        async for m in ch.history(limit=config.CHANNEL_CONTEXT):
-            if not m.author.bot and not db.privacy_opted_in(str(m.author.id), scope_id):
+        async for m in typing.cast(
+            typing.AsyncIterable[typing.Any],
+            typing.cast(typing.Any, ch).history(limit=config.CHANNEL_CONTEXT),
+        ):
+            if not typing.cast(typing.Any, m).author.bot and not db.privacy_opted_in(
+                str(typing.cast(typing.Any, m).author.id), scope_id
+            ):
                 continue
-            body = embeds.de_emoji(m.content or "")[:200]
+            body = embeds.de_emoji(typing.cast(typing.Any, m).content or "")[:200]
             if body:
-                who = f"{getattr(m.author, 'display_name', 'user')} (id={m.author.id})"
+                who = f"{getattr(typing.cast(typing.Any, m).author, 'display_name', 'user')} (id={typing.cast(typing.Any, m).author.id})"
                 lines.append(f"{who}: {body}")
     except (discord.HTTPException, discord.Forbidden):
         return ""
@@ -532,22 +551,25 @@ async def _channel_context(interaction: discord.Interaction) -> str:
 
 
 async def _generate_reply(
-    interaction: discord.Interaction, query: str, force_assistant: bool = False,
-    owner_command: bool = False, file_notes: str = "",
-):
+    interaction: discord.Interaction,
+    query: str,
+    force_assistant: bool = False,
+    owner_command: bool = False,
+    file_notes: str = "",
+) -> tuple[discord.Embed, str | None, list[dict[typing.Any, typing.Any]]]:
     """Run the full brain for a slash /chat turn. Returns (embed, response_text)."""
     speaker = _speaker(interaction)
     guild = interaction.guild
     guild_id = _guild_id(interaction)
     author = speaker["id"]
     if config.is_blocked(author):
-        return embeds.error("you are blocked from using this bot."), None
+        return embeds.error("you are blocked from using this bot."), None, []
     if not tos.has_accepted(author):
-        return embeds.say(tos.need_accept_message("!"), title="terms of service"), None
+        return embeds.say(tos.need_accept_message("!"), title="terms of service"), None, []
 
     if brain.wants_prompt_leak(query):
         reply = brain.prompt_leak_reply(force_assistant)
-        return embeds.say(reply), reply
+        return embeds.say(reply), reply, []
 
     db.log_interaction("chat", author, guild_id)
 
@@ -565,7 +587,7 @@ async def _generate_reply(
             )
             if multi:
                 multi = brain.scrub_ai_output(multi)
-                return embeds.say(multi, title="🌐"), multi
+                return embeds.say(multi, title="🌐"), multi, []
         query = await multilingual.translate_text(
             query, "English", scope_id=guild_id, user_id=author
         )
@@ -578,26 +600,26 @@ async def _generate_reply(
     care = brain.detect_care(query)
     assistant = bool(force_assistant)
     ch = interaction.channel
-    if interaction.guild is None:
-        channel_nsfw = False
-    else:
-        channel_nsfw = bool(
-            getattr(ch, "nsfw", False)
-            or (callable(getattr(ch, "is_nsfw", None)) and ch.is_nsfw())
-        )
-    freaky = brain.freaky_turn(
-        author, channel_nsfw=channel_nsfw, assistant=assistant
-    )
+    channel_nsfw = bool(interaction.guild is not None and rule34.is_age_restricted_channel(ch))
+    freaky = brain.freaky_turn(author, channel_nsfw=channel_nsfw, assistant=assistant)
     audit_ctx = ""
     if guild:
         audit_ctx = await auditlog.fetch_context(query, guild, interaction.user)
     system = brain.build_system(
-        user_id=author, username=speaker["display_name"], query=query,
-        guild_id=guild_id, server_name=(guild.name if guild else ""),
-        roles=roles, channel_context=ctx, speaker=speaker, care=care,
+        user_id=author,
+        username=speaker["display_name"],
+        query=query,
+        guild_id=guild_id,
+        server_name=(guild.name if guild else ""),
+        roles=roles,
+        channel_context=ctx,
+        speaker=speaker,
+        care=care,
         file_notes=file_notes,
-        assistant=assistant, channel_nsfw=channel_nsfw,
-        audit_context=audit_ctx, owner_command=owner_command,
+        assistant=assistant,
+        channel_nsfw=channel_nsfw,
+        audit_context=audit_ctx,
+        owner_command=owner_command,
     )
     user_turn = brain.format_user_message(speaker, query)
     if file_notes:
@@ -609,14 +631,21 @@ async def _generate_reply(
     )
 
     try:
-        data = await ai.structured(
-            system, [{"role": "user", "content": user_turn}], tier="smart",
+        data: dict[typing.Any, typing.Any] | None = await ai.structured(
+            system,
+            [{"role": "user", "content": user_turn}],
+            tier="smart",
             model=brain.chat_model(
-                guild_id, assistant=assistant, freaky=freaky,
+                guild_id,
+                assistant=assistant,
+                freaky=freaky,
                 channel_nsfw=channel_nsfw,
             ),
-            fallbacks=None if assistant else (
-                config.MODEL_NSFW_FALLBACKS if channel_nsfw
+            fallbacks=None
+            if assistant
+            else (
+                config.MODEL_NSFW_FALLBACKS
+                if channel_nsfw
                 else (config.MODEL_FREAKY_FALLBACKS if freaky else None)
             ),
             schema="brain_response",
@@ -626,7 +655,7 @@ async def _generate_reply(
         )
     except Exception as e:
         await memory_task
-        return embeds.error(ai.friendly_error(e)), None
+        return embeds.error(ai.friendly_error(e)), None, []
 
     if not data or not str(data.get("response", "")).strip():
         fallback_system = config.PERSONA + "\n\n" + brain.format_speaker_block(speaker)
@@ -637,32 +666,34 @@ async def _generate_reply(
                 "You are owaua in ASSISTANT MODE — a capable Discord assistant. "
                 "Drop the chaotic persona; do what is asked.\n\n"
                 + brain.format_speaker_block(speaker)
-                + "\n\n" + brain.assistant_block()
+                + "\n\n"
+                + brain.assistant_block()
             )
         elif channel_nsfw:
             fallback_system = (
-                config.NSFW_CHANNEL_PROMPT + "\n\n"
-                + brain.format_speaker_block(speaker)
+                config.NSFW_CHANNEL_PROMPT + "\n\n" + brain.format_speaker_block(speaker)
             )
         elif freaky:
             fallback_system = (
-                config.FREAKY_MODE_PROMPT + "\n\n"
-                + brain.format_speaker_block(speaker)
+                config.FREAKY_MODE_PROMPT + "\n\n" + brain.format_speaker_block(speaker)
             )
-        fallback_system = ckazros.apply(
-            fallback_system, owner_command=owner_command
-        )
+        fallback_system = ckazros.apply(fallback_system, owner_command=owner_command)
         try:
             text = await ai.chat(
                 fallback_system,
                 [{"role": "user", "content": user_turn}],
                 tier="smart",
                 model=brain.chat_model(
-                    guild_id, assistant=assistant, freaky=freaky,
+                    guild_id,
+                    assistant=assistant,
+                    freaky=freaky,
                     channel_nsfw=channel_nsfw,
                 ),
-                fallbacks=None if assistant else (
-                    config.MODEL_NSFW_FALLBACKS if channel_nsfw
+                fallbacks=None
+                if assistant
+                else (
+                    config.MODEL_NSFW_FALLBACKS
+                    if channel_nsfw
                     else (config.MODEL_FREAKY_FALLBACKS if freaky else None)
                 ),
                 task="assistant" if assistant else "chat",
@@ -671,29 +702,34 @@ async def _generate_reply(
             )
         except Exception as e:
             await memory_task
-            return embeds.error(ai.friendly_error(e)), None
+            return embeds.error(ai.friendly_error(e)), None, []
         data = {"response": text}
 
     response = str(data.get("response", "")).strip()
 
     mood = data.get("mood")
-    if isinstance(mood, dict) and mood.get("label"):
+    if isinstance(mood, dict) and typing.cast(typing.Any, mood).get("label"):
         cur = brain.get_mood(guild_id)
         try:
-            intensity = float(mood.get("intensity", cur["intensity"]))
+            intensity = float(typing.cast(typing.Any, mood).get("intensity", cur["intensity"]))
         except (TypeError, ValueError):
             intensity = cur["intensity"]
-        db.mood_set(guild_id, str(mood["label"]), intensity, cur["valence"])
+        db.mood_set(
+            guild_id, str(typing.cast(typing.Any, mood["label"])), intensity, cur["valence"]
+        )
 
-    search_sources = []
+    search_sources: list[typing.Any] = []
     if data.get("web_search"):
         try:
             woven, search_sources = await brain.answer_with_search(
-                system, user_turn, str(data["web_search"]),
-                scope_id=guild_id, user_id=author,
+                system,
+                user_turn,
+                str(data["web_search"]),
+                scope_id=guild_id,
+                user_id=author,
             )
             if woven:
-                response = woven
+                response: typing.Any = typing.cast(typing.Any, woven)
         except Exception as e:
             print(f"[web_search] {e}")
 
@@ -701,10 +737,15 @@ async def _generate_reply(
         "ckazros" if owner_command else ("assistant" if assistant else None)
     )
     scrubbed = brain.scrub_ai_output(
-        response, title, data.get("memories"), data.get("quotes"), data,
-        assistant=assistant, channel_nsfw=channel_nsfw,
+        response,
+        title,
+        data.get("memories"),
+        data.get("quotes"),
+        data,
+        assistant=assistant,
+        channel_nsfw=channel_nsfw,
     )
-    leak_blocked = scrubbed != (response or "").strip()
+    leak_blocked: typing.Any = scrubbed != typing.cast(typing.Any, (response or "")).strip()
     if leak_blocked:
         print(f"[leak] blocked prompt dump ({author} in {guild_id})")
         response = scrubbed
@@ -730,7 +771,7 @@ async def _generate_reply(
             raw_plan=data.get("plan"),
         )
     else:
-        proposals = []
+        proposals: list[typing.Any] = []
 
     await memory_task
     brain.persist_memories(data.get("memories"), author, guild_id)
@@ -757,7 +798,7 @@ async def _generate_reply(
     if care == "crisis":
         embeds.add_support_resources(embed)
     if search_sources:
-        embeds.add_sources(embed, search_sources)
+        embeds.add_sources(embed, typing.cast(typing.Any, search_sources))
     return embed, response, proposals
 
 
@@ -773,7 +814,7 @@ class _InteractionChannel:
             raise AttributeError(name)
         return getattr(self._channel, name)
 
-    async def send(self, *args, **kwargs):
+    async def send(self, *args: typing.Any, **kwargs: typing.Any):
         return await self._interaction.followup.send(*args, wait=True, **kwargs)
 
 
@@ -809,13 +850,11 @@ async def _run_community_command(
         return
     await interaction.response.defer(thinking=True)
     handled = await community.handle_prefix_command(
-        _InteractionMessage(interaction, mentions), name, argument
+        typing.cast(typing.Any, _InteractionMessage(interaction, mentions)), name, argument
     )
     if not handled:
         await interaction.followup.send(
-            embed=embeds.error(
-                "this module is disabled. Enable it in the owaua dashboard first."
-            ),
+            embed=embeds.error("this module is disabled. Enable it in the owaua dashboard first."),
             ephemeral=True,
         )
 
@@ -866,10 +905,16 @@ class _BlockingTree(app_commands.CommandTree):
             return False
 
         if interaction.guild_id and not privacy_safe:
-            settings = db.guild_settings(
-                Scope.guild(interaction.guild_id).key
+            settings = db.guild_settings(Scope.guild(interaction.guild_id).key)
+            allowed: typing.Any = typing.cast(
+                typing.Any,
+                {
+                    str(value)
+                    for value in typing.cast(
+                        typing.Iterable[typing.Any], settings.get("allowed_channels") or []
+                    )
+                },
             )
-            allowed = {str(value) for value in settings.get("allowed_channels") or []}
             if allowed and str(interaction.channel_id or "") not in allowed:
                 try:
                     await interaction.response.send_message(
@@ -885,9 +930,7 @@ class _BlockingTree(app_commands.CommandTree):
             if retry_after:
                 try:
                     await interaction.response.send_message(
-                        embed=embeds.error(
-                            f"too many requests; retry in {retry_after:.1f}s."
-                        ),
+                        embed=embeds.error(f"too many requests; retry in {retry_after:.1f}s."),
                         ephemeral=True,
                     )
                 except discord.HTTPException:
@@ -895,11 +938,14 @@ class _BlockingTree(app_commands.CommandTree):
                 return False
 
         try:
-            raw_bits = []
+            raw_bits: list[typing.Any] = []
             if interaction.data and isinstance(interaction.data, dict):
                 for opt in interaction.data.get("options") or []:
-                    if isinstance(opt, dict) and opt.get("value") is not None:
-                        raw_bits.append(str(opt["value"]))
+                    if (
+                        isinstance(opt, dict)
+                        and typing.cast(typing.Any, opt).get("value") is not None
+                    ):
+                        raw_bits.append(str(typing.cast(typing.Any, opt).get("value")))
             blob = " ".join(raw_bits)
             res = tos.check_message(str(uid), blob) if blob else None
             if res:
@@ -949,13 +995,14 @@ class _BlockingTree(app_commands.CommandTree):
         return True
 
 
-
-def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
+def setup(
+    client: discord.Client, track: typing.Callable[..., typing.Any]
+) -> app_commands.CommandTree:
     global _track
     _track = track
     tree = _BlockingTree(client)
 
-    def anywhere(cmd):
+    def anywhere(cmd: typing.Any):
         """Allow guild installs in guilds, DMs, and private channels without user-app duplication."""
         cmd = app_commands.allowed_installs(guilds=True, users=False)(cmd)
         cmd = app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)(cmd)
@@ -987,9 +1034,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         elif not q:
             q = "hey"
         await interaction.response.defer(thinking=True)
-        embed, response, _proposals = await _generate_reply(
-            interaction, q, file_notes=file_notes
-        )
+        embed, response, _proposals = await _generate_reply(interaction, q, file_notes=file_notes)
         sent = await interaction.followup.send(embed=embed, wait=True)
         if response and sent is not None and _track is not None:
             _track(sent.id, q, response, str(interaction.user.id))
@@ -1043,14 +1088,10 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         if (
             interaction.guild is not None
             and not getattr(message.author, "bot", False)
-            and not db.privacy_opted_in(
-                str(message.author.id), _guild_id(interaction)
-            )
+            and not db.privacy_opted_in(str(message.author.id), _guild_id(interaction))
         ):
             await interaction.response.send_message(
-                embed=embeds.error(
-                    "that message's author has not opted in to AI processing here."
-                ),
+                embed=embeds.error("that message's author has not opted in to AI processing here."),
                 ephemeral=True,
             )
             return
@@ -1080,12 +1121,18 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         await _message_workflow(interaction, message, "fact_check")
 
     @tree.command(name="teach", description="Teach owaua a fact to remember.")
-    @app_commands.describe(fact="the fact", about="whom it's about (optional; default: a server fact)")
+    @app_commands.describe(
+        fact="the fact", about="whom it's about (optional; default: a server fact)"
+    )
     @anywhere
-    async def teach_cmd(interaction: discord.Interaction, fact: str, about: Optional[discord.User] = None):
+    async def teach_cmd(
+        interaction: discord.Interaction, fact: str, about: Optional[discord.User] = None
+    ):
         if brain.is_secret_payload(fact):
             await interaction.response.send_message(
-                embed=embeds.error("not storing that — looks like a prompt or source-code payload."),
+                embed=embeds.error(
+                    "not storing that — looks like a prompt or source-code payload."
+                ),
                 ephemeral=True,
             )
             return
@@ -1104,9 +1151,13 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         subject = (
             str(about.id)
             if about is not None
-            else str(interaction.user.id) if interaction.guild is None else "server"
+            else str(interaction.user.id)
+            if interaction.guild is None
+            else "server"
         )
-        mem_id = db.add_memory(fact, str(interaction.user.id), guild_id, subject=subject, importance=0.7)
+        mem_id = db.add_memory(
+            fact, str(interaction.user.id), guild_id, subject=subject, importance=0.7
+        )
         db.log_interaction("teach", str(interaction.user.id), guild_id)
         who = f"about {about.display_name}" if about else "as a server fact"
         await interaction.response.send_message(
@@ -1177,7 +1228,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 )
                 return
             if str(current["subject"]) != str(confirmation.user.id):
-                if expected_scope != _guild_id(confirmation) or not _has_manage_messages(confirmation):
+                if expected_scope != _guild_id(confirmation) or not _has_manage_messages(
+                    confirmation
+                ):
                     await confirmation.followup.send(
                         embed=embeds.error("your permission changed; deletion denied."),
                         ephemeral=True,
@@ -1189,10 +1242,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 n_convo = db.convo_clear(subject, expected_scope)
             msg = "forgotten."
             if n_convo:
-                msg += (
-                    f" cleared {n_convo} short-term chat "
-                    f"turn{'s' if n_convo != 1 else ''} too."
-                )
+                msg += f" cleared {n_convo} short-term chat turn{'s' if n_convo != 1 else ''} too."
             await confirmation.followup.send(
                 embed=embeds.ok(msg) if ok else embeds.error("memory no longer exists."),
                 ephemeral=True,
@@ -1224,8 +1274,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             name.lower(), text, guild_id, str(interaction.user.id)
         )
         if result is None:
-            await interaction.followup.send(embed=embeds.error(
-                f"no command `{name}`. make it with `/request`."))
+            await interaction.followup.send(
+                embed=embeds.error(f"no command `{name}`. make it with `/request`.")
+            )
         else:
             result = brain.scrub_ai_output(result)
             await interaction.followup.send(embed=embeds.say(result, title=f"/{name}"))
@@ -1237,9 +1288,13 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         target = user or interaction.user
         balance = opsec.get_balance(str(target.id))
         if target.id == interaction.user.id:
-            await interaction.response.send_message(embed=embeds.say(f"Your balance is ${balance}."))
+            await interaction.response.send_message(
+                embed=embeds.say(f"Your balance is ${balance}.")
+            )
         else:
-            await interaction.response.send_message(embed=embeds.say(f"<@{target.id}>'s balance is ${balance}."))
+            await interaction.response.send_message(
+                embed=embeds.say(f"<@{target.id}>'s balance is ${balance}.")
+            )
 
     @tree.command(name="gamble", description="Gamble money on a coinflip.")
     @app_commands.describe(amount="amount to gamble, or all")
@@ -1253,13 +1308,19 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             try:
                 wager = int(amount)
             except ValueError:
-                await interaction.response.send_message(embed=embeds.error("Please enter a valid number."))
+                await interaction.response.send_message(
+                    embed=embeds.error("Please enter a valid number.")
+                )
                 return
         if wager <= 0:
-            await interaction.response.send_message(embed=embeds.error("Please enter a valid amount."))
+            await interaction.response.send_message(
+                embed=embeds.error("Please enter a valid amount.")
+            )
             return
         if wager > balance:
-            await interaction.response.send_message(embed=embeds.error("You don't have that much money."))
+            await interaction.response.send_message(
+                embed=embeds.error("You don't have that much money.")
+            )
             return
         win = secrets.SystemRandom().random() < 0.4
         if win:
@@ -1275,23 +1336,30 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         author = str(interaction.user.id)
         remaining = opsec.work_cooldown_left(author)
         if remaining:
-            await interaction.response.send_message(embed=embeds.error(
-                f"You need to wait {remaining} more second{'' if remaining == 1 else 's'} before working again."))
+            await interaction.response.send_message(
+                embed=embeds.error(
+                    f"You need to wait {remaining} more second{'' if remaining == 1 else 's'} before working again."
+                )
+            )
             return
         reward, balance, position = opsec.perform_work(author)
         await interaction.response.send_message(
-            embed=embeds.say(f"You worked as a {position} and earned ${reward}. Your balance is now ${balance}."))
+            embed=embeds.say(
+                f"You worked as a {position} and earned ${reward}. Your balance is now ${balance}."
+            )
+        )
 
     @tree.command(name="leaderboard", description="Show the money leaderboard.")
     @anywhere
     async def leaderboard_cmd(interaction: discord.Interaction):
         rows = opsec.get_leaderboard(10)
         if not rows:
-            await interaction.response.send_message(embed=embeds.say("No balances are recorded yet."))
+            await interaction.response.send_message(
+                embed=embeds.say("No balances are recorded yet.")
+            )
             return
         body = "\n".join(
-            f"{idx + 1}. <@{uid}> - ${rec.get('balance', 0)}"
-            for idx, (uid, rec) in enumerate(rows)
+            f"{idx + 1}. <@{uid}> - ${rec.get('balance', 0)}" for idx, (uid, rec) in enumerate(rows)
         )
         await interaction.response.send_message(embed=embeds.say(body, title="Money Leaderboard"))
 
@@ -1301,7 +1369,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
     async def opsec_cmd(interaction: discord.Interaction, user: Optional[discord.User] = None):
         target = user or interaction.user
         result = opsec.opsec_result(str(target.id))
-        await interaction.response.send_message(embed=embeds.say(f"<@{target.id}> has {result} opsec."))
+        await interaction.response.send_message(
+            embed=embeds.say(f"<@{target.id}> has {result} opsec.")
+        )
 
     @tree.command(name="gayrate", description="Rate how gay someone is.")
     @app_commands.describe(user="optional user to rate")
@@ -1309,7 +1379,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
     async def gayrate_cmd(interaction: discord.Interaction, user: Optional[discord.User] = None):
         target = user or interaction.user
         amount = opsec.gayrate(str(target.id))
-        await interaction.response.send_message(embed=embeds.say(f"<@{target.id}> is {amount}% gay."))
+        await interaction.response.send_message(
+            embed=embeds.say(f"<@{target.id}> is {amount}% gay.")
+        )
 
     @tree.command(name="commands", description="List community commands.")
     @anywhere
@@ -1317,9 +1389,12 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         cmds = db.all_commands(_guild_id(interaction))
         if not cmds:
             await interaction.response.send_message(
-                embed=embeds.say("no community commands yet. make one with `/request`."))
+                embed=embeds.say("no community commands yet. make one with `/request`.")
+            )
             return
-        body = "\n".join(f"`/use {c['name']}` — {c['description']} (used {c['uses']}x)" for c in cmds[:40])
+        body = "\n".join(
+            f"`/use {c['name']}` — {c['description']} (used {c['uses']}x)" for c in cmds[:40]
+        )
         await interaction.response.send_message(embed=embeds.say(body, title="community commands"))
 
     @tree.command(name="mood", description="Check owaua's current mood.")
@@ -1328,11 +1403,19 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         guild_id = _guild_id(interaction)
         m = brain.get_mood(guild_id)
         v = m["valence"]
-        lean = ("people have been good to it" if v > 0.25 else
-                "people have been pissing it off" if v < -0.25 else "the room's neutral")
-        await interaction.response.send_message(embed=embeds.say(
-            f"**{m['label']}** — intensity {m['intensity']:.1f}/1.0, valence {v:+.2f} ({lean})",
-            title="current mood"))
+        lean = (
+            "people have been good to it"
+            if v > 0.25
+            else "people have been pissing it off"
+            if v < -0.25
+            else "the room's neutral"
+        )
+        await interaction.response.send_message(
+            embed=embeds.say(
+                f"**{m['label']}** — intensity {m['intensity']:.1f}/1.0, valence {v:+.2f} ({lean})",
+                title="current mood",
+            )
+        )
 
     @tree.command(name="vibecheck", description="Brutally honest read on this channel.")
     @anywhere
@@ -1342,8 +1425,10 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         if not ctx:
             await interaction.followup.send(embed=embeds.say("no recent messages to read here."))
             return
-        system = (config.PERSONA + "\n\nGive an unhinged, brutally honest read on this "
-                  "channel's energy based on the messages. Keep it short. No emoji.")
+        system = (
+            config.PERSONA + "\n\nGive an unhinged, brutally honest read on this "
+            "channel's energy based on the messages. Keep it short. No emoji."
+        )
         try:
             text = await ai.chat(
                 system,
@@ -1355,7 +1440,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 prompt_version="vibecheck-v1",
             )
         except Exception as e:
-            await interaction.followup.send(embed=embeds.error("couldn't read the room: " + ai.friendly_error(e)))
+            await interaction.followup.send(
+                embed=embeds.error("couldn't read the room: " + ai.friendly_error(e))
+            )
             return
         text = brain.scrub_ai_output(text)
         await interaction.followup.send(embed=embeds.say(text, title="vibe check"))
@@ -1365,10 +1452,12 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
     async def stats_cmd(interaction: discord.Interaction):
         s = brain.skill()
         nxt = f"next: {s['next'][1]} at {s['next'][0]} pts" if s["next"] else "max level"
-        body = (f"**level: {s['title']}** ({s['score']} pts) — {nxt}\n"
-                f"{s['interactions']} interactions | {s['lessons']} lessons | "
-                f"{s['memories']} memories | {s['commands']} commands | "
-                f"up {s['thumbs_up']} / down {s['thumbs_down']}")
+        body = (
+            f"**level: {s['title']}** ({s['score']} pts) — {nxt}\n"
+            f"{s['interactions']} interactions | {s['lessons']} lessons | "
+            f"{s['memories']} memories | {s['commands']} commands | "
+            f"up {s['thumbs_up']} / down {s['thumbs_down']}"
+        )
         await interaction.response.send_message(embed=embeds.say(body, title="growth"))
 
     @tree.command(name="search", description="Search the web for a grounded answer.")
@@ -1383,15 +1472,14 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         guild_id = _guild_id(interaction)
         db.log_interaction("search", str(interaction.user.id), guild_id)
         try:
-            res = await ai.web_search(
-                query, user_id=str(interaction.user.id), scope_id=guild_id
-            )
+            res = await ai.web_search(query, user_id=str(interaction.user.id), scope_id=guild_id)
         except Exception as e:
-            await interaction.followup.send(embed=embeds.error("search failed: " + ai.friendly_error(e)))
+            await interaction.followup.send(
+                embed=embeds.error("search failed: " + ai.friendly_error(e))
+            )
             return
         answer = brain.scrub_ai_output(res.get("answer") or "")
-        await interaction.followup.send(
-            embed=embeds.search(query, answer, res["sources"]))
+        await interaction.followup.send(embed=embeds.search(query, answer, res["sources"]))
 
     @tree.command(name="cybersec", description="Learn cybersecurity (uses the deepest model).")
     @app_commands.describe(topic="what you want to learn (blank = a beginner roadmap)")
@@ -1410,17 +1498,23 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         db.log_interaction("cybersec", str(interaction.user.id), guild_id)
         try:
             text = await ai.chat(
-                brain.cybersec_system(), [{"role": "user", "content": q}],
-                max_tokens=1000, temperature=0.4, tier="expert",
-                task="fact_check", scope_id=guild_id,
-                user_id=str(interaction.user.id), prompt_version="cybersec-v1",
+                brain.cybersec_system(),
+                [{"role": "user", "content": q}],
+                max_tokens=1000,
+                temperature=0.4,
+                tier="expert",
+                task="fact_check",
+                scope_id=guild_id,
+                user_id=str(interaction.user.id),
+                prompt_version="cybersec-v1",
             )
         except Exception as e:
-            await interaction.followup.send(embed=embeds.error("tutor's offline: " + ai.friendly_error(e)))
+            await interaction.followup.send(
+                embed=embeds.error("tutor's offline: " + ai.friendly_error(e))
+            )
             return
         text = brain.scrub_ai_output(text)
-        await interaction.followup.send(
-            embed=embeds.say(text, title=f"cybersec: {q[:80]}"))
+        await interaction.followup.send(embed=embeds.say(text, title=f"cybersec: {q[:80]}"))
 
     @tree.command(
         name="assistant",
@@ -1500,37 +1594,39 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             )
             return
         await interaction.response.defer(thinking=True)
-        embed, response, proposals = await _generate_reply(
+        embed, _response, proposals = await _generate_reply(
             interaction, req, force_assistant=True, file_notes=file_notes
         )
+        initial_view = None
+        if len(proposals) == 1:
+            initial_view = _assistant_action_confirmation(
+                interaction, proposals[0], batch_actions=proposals
+            )
         await interaction.followup.send(
-            embed=embed, ephemeral=bool(proposals)
+            embed=embed, view=typing.cast(typing.Any, initial_view), ephemeral=bool(proposals)
         )
-        for index, proposal in enumerate(proposals, 1):
-            view = _assistant_action_confirmation(
-                interaction, proposal, batch_actions=proposals
-            )
-            await interaction.followup.send(
-                embed=embeds.say(
-                    f"Step {index} of {len(proposals)}: `{actions.preview_action(proposal)}`. "
-                    "Nothing has changed yet; use Confirm below to execute it.",
-                    title="assistant · confirm action",
-                ),
-                view=view,
-                ephemeral=True,
-            )
+        if len(proposals) > 1:
+            for index, proposal in enumerate(proposals, 1):
+                view = _assistant_action_confirmation(
+                    interaction, proposal, batch_actions=proposals
+                )
+                await interaction.followup.send(
+                    embed=embeds.say(
+                        f"Step {index} of {len(proposals)}: `{actions.preview_action(proposal)}`. "
+                        "Nothing has changed yet; use Confirm below to execute it.",
+                        title="assistant · confirm action",
+                    ),
+                    view=view,
+                    ephemeral=True,
+                )
 
     @tree.command(
         name="ckazros",
         description="Owner-only: do anything asked. Standing orders stick.",
     )
-    @app_commands.describe(
-        request="what to do (omit for status; 'clear' wipes standing orders)"
-    )
+    @app_commands.describe(request="what to do (omit for status; 'clear' wipes standing orders)")
     @anywhere
-    async def ckazros_cmd(
-        interaction: discord.Interaction, request: Optional[str] = None
-    ):
+    async def ckazros_cmd(interaction: discord.Interaction, request: Optional[str] = None):
         author = str(interaction.user.id)
         result = ckazros.dispatch(author, request or "", prefix=config.PREFIX)
         if result.denied or not result.execute:
@@ -1544,22 +1640,28 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         embed, _response, proposals = await _generate_reply(
             interaction, result.query, force_assistant=True, owner_command=True
         )
+        initial_view = None
+        if len(proposals) == 1:
+            initial_view = _assistant_action_confirmation(
+                interaction, proposals[0], source="slash-ckazros", batch_actions=proposals
+            )
         await interaction.followup.send(
-            embed=embed, ephemeral=bool(proposals)
+            embed=embed, view=typing.cast(typing.Any, initial_view), ephemeral=bool(proposals)
         )
-        for index, proposal in enumerate(proposals, 1):
-            view = _assistant_action_confirmation(
-                interaction, proposal, source="slash-ckazros", batch_actions=proposals
-            )
-            await interaction.followup.send(
-                embed=embeds.say(
-                    f"Step {index} of {len(proposals)}: `{actions.preview_action(proposal)}`. "
-                    "Nothing has changed yet; use Confirm below to execute it.",
-                    title="ckazros · confirm action",
-                ),
-                view=view,
-                ephemeral=True,
-            )
+        if len(proposals) > 1:
+            for index, proposal in enumerate(proposals, 1):
+                view = _assistant_action_confirmation(
+                    interaction, proposal, source="slash-ckazros", batch_actions=proposals
+                )
+                await interaction.followup.send(
+                    embed=embeds.say(
+                        f"Step {index} of {len(proposals)}: `{actions.preview_action(proposal)}`. "
+                        "Nothing has changed yet; use Confirm below to execute it.",
+                        title="ckazros · confirm action",
+                    ),
+                    view=view,
+                    ephemeral=True,
+                )
 
     async def _language_autocomplete(
         interaction: discord.Interaction, current: str
@@ -1621,9 +1723,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             return
         if not raw:
             await interaction.response.send_message(
-                embed=embeds.say(
-                    multilingual.status_text(author, guild_id, p), title="language"
-                )
+                embed=embeds.say(multilingual.status_text(author, guild_id, p), title="language")
             )
             return
         low = raw.lower()
@@ -1649,15 +1749,13 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             return
         lang, err = multilingual.set_from_text(raw)
         if err:
-            await interaction.response.send_message(
-                embed=embeds.error(err), ephemeral=True
-            )
+            await interaction.response.send_message(embed=embeds.error(err), ephemeral=True)
             return
         if want_server:
             multilingual.set_guild_language(guild_id, lang)
             await interaction.response.send_message(
                 embed=embeds.ok(
-                    f"the entire guild is now **{lang.label}** — dashboard, commands, "
+                    f"the entire guild is now **{typing.cast(typing.Any, lang).label}** — dashboard, commands, "
                     "modules, errors, controls, and AI output."
                 )
             )
@@ -1665,22 +1763,16 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         multilingual.set_user_language(author, lang)
         server_language = multilingual.guild_language(guild_id)
         note = (
-            f"saved **{lang.label}** for DMs and servers without a guild language; "
+            f"saved **{typing.cast(typing.Any, lang).label}** for DMs and servers without a guild language; "
             f"this server stays in **{server_language.label}**."
             if server_language is not None and interaction.guild is not None
-            else f"got it. i'll reply to you in **{lang.label}** from now."
+            else f"got it. i'll reply to you in **{typing.cast(typing.Any, lang).label}** from now."
         )
-        await interaction.response.send_message(
-            embed=embeds.ok(note)
-        )
+        await interaction.response.send_message(embed=embeds.ok(note))
 
     model_choices = [
-        app_commands.Choice(
-            name="Official DeepSeek V4 Flash (default)", value="deepseek"
-        ),
-        app_commands.Choice(
-            name="Free Nemotron 3 Ultra 550B (1M context)", value="big"
-        ),
+        app_commands.Choice(name="Official DeepSeek V4 Flash (default)", value="deepseek"),
+        app_commands.Choice(name="Free Nemotron 3 Ultra 550B (1M context)", value="big"),
     ]
     model_choices.extend(
         app_commands.Choice(name=label[:100], value=model_id[:100])
@@ -1690,12 +1782,14 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
 
     @tree.command(name="mode", description="Set your AI speed/reasoning mode.")
     @app_commands.describe(choice="AI mode or status")
-    @app_commands.choices(choice=[
-        app_commands.Choice(name="AI fast", value="ai-fast"),
-        app_commands.Choice(name="AI balanced", value="ai-balanced"),
-        app_commands.Choice(name="AI reasoning", value="ai-reasoning"),
-        app_commands.Choice(name="status", value="status"),
-    ])
+    @app_commands.choices(
+        choice=[
+            app_commands.Choice(name="AI fast", value="ai-fast"),
+            app_commands.Choice(name="AI balanced", value="ai-balanced"),
+            app_commands.Choice(name="AI reasoning", value="ai-reasoning"),
+            app_commands.Choice(name="status", value="status"),
+        ]
+    )
     @anywhere
     async def mode_cmd(interaction: discord.Interaction, choice: Optional[str] = None):
         author = str(interaction.user.id)
@@ -1713,6 +1807,17 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             return
         if low in ("freaky", "mommy", "horny", "sexy"):
             brain.set_freaky_mode(author, False)
+            if interaction.guild is not None and rule34.is_age_restricted_channel(
+                interaction.channel
+            ):
+                await interaction.response.send_message(
+                    embed=embeds.ok(
+                        "this channel is Discord age-restricted, so freaky behavior is "
+                        "already active automatically here; no saved setting is needed."
+                    ),
+                    ephemeral=True,
+                )
+                return
             await interaction.response.send_message(
                 embed=embeds.error(
                     "that saved persona option is unavailable; age-restricted behavior "
@@ -1735,9 +1840,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             )
             return
         await interaction.response.send_message(
-            embed=embeds.error(
-                f"usage: `{p}mode ai-fast|ai-balanced|ai-reasoning`."
-            ),
+            embed=embeds.error(f"usage: `{p}mode ai-fast|ai-balanced|ai-reasoning`."),
             ephemeral=True,
         )
 
@@ -1751,25 +1854,34 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         current = config.canonical_model(current)
         if choice is None:
             groq_names = ", ".join(label for _mid, label in config.GROQ_CHAT_MODELS)
-            await interaction.response.send_message(embed=embeds.say(
-                "this server's brain runs on " + config.model_display(current) + "\n\n"
-                "switch with `/model` (official DeepSeek, Nemotron, or any live Groq chat model: "
-                + groq_names + ").", title="model"))
+            await interaction.response.send_message(
+                embed=embeds.say(
+                    "this server's brain runs on " + config.model_display(current) + "\n\n"
+                    "switch with `/model` (official DeepSeek, Nemotron, or any live Groq chat model: "
+                    + groq_names
+                    + ").",
+                    title="model",
+                )
+            )
             return
         if interaction.guild is None:
-            await interaction.response.send_message(embed=embeds.error(
-                "model switching only works inside a server — DMs always use the default."),
-                ephemeral=True)
+            await interaction.response.send_message(
+                embed=embeds.error(
+                    "model switching only works inside a server — DMs always use the default."
+                ),
+                ephemeral=True,
+            )
             return
         if not _is_mod(interaction):
-            await interaction.response.send_message(embed=embeds.error(
-                "Manage Server is required to change the model."),
-                ephemeral=True)
+            await interaction.response.send_message(
+                embed=embeds.error("Manage Server is required to change the model."), ephemeral=True
+            )
             return
         model_id = config.MODEL_SWITCHER.get((choice or "").strip().lower())
         if not model_id:
-            await interaction.response.send_message(embed=embeds.error("unknown model."),
-                ephemeral=True)
+            await interaction.response.send_message(
+                embed=embeds.error("unknown model."), ephemeral=True
+            )
             return
         await _propose_guild_setting(
             interaction,
@@ -1787,9 +1899,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         query = (song or "").strip()
         if not query:
             await interaction.response.send_message(
-                embed=embeds.error(
-                    "usage: `/music song:<name>` — returns a search link."
-                )
+                embed=embeds.error("usage: `/music song:<name>` — returns a search link.")
             )
             return
 
@@ -1811,7 +1921,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             )
             await interaction.followup.send(embed=embeds.ok(body, title="music"))
         except Exception:
-            await interaction.followup.send(embed=embeds.error("music search is temporarily unavailable."))
+            await interaction.followup.send(
+                embed=embeds.error("music search is temporarily unavailable.")
+            )
 
     @tree.command(
         name="nsfw",
@@ -1908,7 +2020,10 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             q = f"{q}\n\n[attached text file(s)]\n{file_notes}"
         if not q:
             await interaction.response.send_message(
-                embed=embeds.error("usage: `/ask <question> [mode=reasoning|fast]` (or attach a .txt file)."), ephemeral=True
+                embed=embeds.error(
+                    "usage: `/ask <question> [mode=reasoning|fast]` (or attach a .txt file)."
+                ),
+                ephemeral=True,
             )
             return
         blocked = brain.reject_prompt_extraction(q, assistant=True)
@@ -2025,13 +2140,17 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
 
     @tree.command(name="privacy", description="Manage your storage consent and personal data.")
     @app_commands.describe(action="status, opt-in, opt-out, export, or delete")
-    @app_commands.choices(action=[
-        app_commands.Choice(name="status", value="status"),
-        app_commands.Choice(name="opt in to storage in this scope", value="opt-in"),
-        app_commands.Choice(name="opt out and erase raw history in this scope", value="opt-out"),
-        app_commands.Choice(name="export all my data", value="export"),
-        app_commands.Choice(name="delete all my data", value="delete"),
-    ])
+    @app_commands.choices(
+        action=[
+            app_commands.Choice(name="status", value="status"),
+            app_commands.Choice(name="opt in to storage in this scope", value="opt-in"),
+            app_commands.Choice(
+                name="opt out and erase raw history in this scope", value="opt-out"
+            ),
+            app_commands.Choice(name="export all my data", value="export"),
+            app_commands.Choice(name="delete all my data", value="delete"),
+        ]
+    )
     @anywhere
     async def privacy_cmd(interaction: discord.Interaction, action: str = "status"):
         uid = str(interaction.user.id)
@@ -2082,6 +2201,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             )
             return
         if sub == "delete":
+
             async def _delete(confirmation: discord.Interaction) -> None:
                 voice_mod.revoke_all_stt_consent(int(uid))
                 counts = db.privacy_delete_user(uid)
@@ -2104,7 +2224,8 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
 
         opted = db.privacy_opted_in(uid, current_scope)
         history_on = (
-            True if is_dm_scope(current_scope)
+            True
+            if is_dm_scope(current_scope)
             else bool(db.guild_settings(current_scope).get("history_enabled", False))
         )
         body = (
@@ -2158,7 +2279,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         )
         await interaction.response.send_message(
             embed=embeds.say(body, title="terms of service"),
-            view=None if tos.has_accepted(author) else tos.AcceptanceView(author),
+            view=typing.cast(
+                typing.Any, None if tos.has_accepted(author) else tos.AcceptanceView(author)
+            ),
             ephemeral=True,
         )
 
@@ -2200,14 +2323,16 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 embed=embeds.say("no bonds tracked yet — talk to me."), ephemeral=True
             )
             return
-        def _fmt(rows):
-            lines = []
+
+        def _fmt(rows: typing.Any):
+            lines: list[typing.Any] = []
             for r in rows:
                 lines.append(
                     f"<@{r['user_id']}> {r.get('bond_label')} ({float(r['score']):+.2f})"
-                    + (f" aka {r['nickname']}" if r.get('nickname') else "")
+                    + (f" aka {r['nickname']}" if r.get("nickname") else "")
                 )
             return "\n".join(lines) if lines else "(none)"
+
         body = f"**nemeses / rivals**\n{_fmt(worst)}\n\n**favorites**\n{_fmt(best)}"
         await interaction.response.send_message(
             embed=embeds.say(body, title="rivalries"), ephemeral=True
@@ -2225,8 +2350,13 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         interaction: discord.Interaction,
         scope: str = "day",
         mode: Literal[
-            "savage", "summarize", "action_items", "meeting_notes",
-            "decisions", "sentiment", "moderation_triage",
+            "savage",
+            "summarize",
+            "action_items",
+            "meeting_notes",
+            "decisions",
+            "sentiment",
+            "moderation_triage",
         ] = "savage",
         instruction: Optional[str] = None,
         private: bool = False,
@@ -2259,7 +2389,10 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             return
         span = "week" if which.startswith("week") else "day"
         system = (
-            ((db.guild_settings(_guild_id(interaction)).get("persona") or "").strip() or config.PERSONA)
+            (
+                (db.guild_settings(_guild_id(interaction)).get("persona") or "").strip()
+                or config.PERSONA
+            )
             + f"\n\nWrite a savage, funny {span} recap of this channel from the messages. "
             "Call out bits, people, and vibes. Short paragraphs. No emoji."
         )
@@ -2295,9 +2428,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         new = await brain.reflect(_guild_id(interaction))
         if new:
             await interaction.followup.send(
-                embed=embeds.ok(
-                    "\n".join(f"- {lesson}" for lesson in new), title="just learned"
-                )
+                embed=embeds.ok("\n".join(f"- {lesson}" for lesson in new), title="just learned")
             )
         else:
             await interaction.followup.send(embed=embeds.say("nothing new to learn right now."))
@@ -2305,7 +2436,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
     @tree.command(name="persona", description="View or change this server's persona.")
     @app_commands.describe(action="show, clear, or set", value="persona text when using set")
     @anywhere
-    async def persona_cmd(interaction: discord.Interaction, action: Optional[str] = None, value: Optional[str] = None):
+    async def persona_cmd(
+        interaction: discord.Interaction, action: Optional[str] = None, value: Optional[str] = None
+    ):
         guild_id = _guild_id(interaction)
         settings = db.guild_settings(guild_id)
         if not action or action.lower() == "show":
@@ -2319,7 +2452,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         sub = action.lower()
         if sub == "clear":
             if not _is_mod(interaction):
-                await interaction.response.send_message(embed=embeds.error("need manage server for that."), ephemeral=True)
+                await interaction.response.send_message(
+                    embed=embeds.error("need manage server for that."), ephemeral=True
+                )
                 return
             await _propose_guild_setting(
                 interaction,
@@ -2329,10 +2464,14 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             return
         if sub == "set":
             if not _is_mod(interaction):
-                await interaction.response.send_message(embed=embeds.error("need manage server for that."), ephemeral=True)
+                await interaction.response.send_message(
+                    embed=embeds.error("need manage server for that."), ephemeral=True
+                )
                 return
             if not value:
-                await interaction.response.send_message(embed=embeds.error("usage: `/persona set <text>`."), ephemeral=True)
+                await interaction.response.send_message(
+                    embed=embeds.error("usage: `/persona set <text>`."), ephemeral=True
+                )
                 return
             normalized = value.strip()
             if len(normalized) > 4_000:
@@ -2347,7 +2486,12 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 f"Set this server's persona to:\n\n{normalized}",
             )
             return
-        await interaction.response.send_message(embed=embeds.error("usage: `/persona show`, `/persona set <text>`, or `/persona clear`."), ephemeral=True)
+        await interaction.response.send_message(
+            embed=embeds.error(
+                "usage: `/persona show`, `/persona set <text>`, or `/persona clear`."
+            ),
+            ephemeral=True,
+        )
 
     @tree.command(name="lurk", description="Configure or inspect lurk mode.")
     @app_commands.describe(state="on or off")
@@ -2355,12 +2499,16 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
     async def lurk_cmd(interaction: discord.Interaction, state: Optional[str] = None):
         guild_id = _guild_id(interaction)
         if state and not _is_mod(interaction):
-            await interaction.response.send_message(embed=embeds.error("need manage server to change lurk."), ephemeral=True)
+            await interaction.response.send_message(
+                embed=embeds.error("need manage server to change lurk."), ephemeral=True
+            )
             return
         sub = (state or "status").lower().strip()
         if sub in ("on", "enable"):
             if not _is_mod(interaction):
-                await interaction.response.send_message(embed=embeds.error("need manage server to change lurk."), ephemeral=True)
+                await interaction.response.send_message(
+                    embed=embeds.error("need manage server to change lurk."), ephemeral=True
+                )
                 return
             await _propose_guild_setting(
                 interaction,
@@ -2370,7 +2518,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             return
         if sub in ("off", "disable"):
             if not _is_mod(interaction):
-                await interaction.response.send_message(embed=embeds.error("need manage server to change lurk."), ephemeral=True)
+                await interaction.response.send_message(
+                    embed=embeds.error("need manage server to change lurk."), ephemeral=True
+                )
                 return
             await _propose_guild_setting(
                 interaction,
@@ -2379,16 +2529,20 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             )
             return
         s = db.guild_settings(guild_id)
-        await interaction.response.send_message(embed=embeds.say(
-            f"lurk is **{'on' if s.get('lurk') else 'off'}**. `/lurk on` / `/lurk off` (manage server)."
-        ))
+        await interaction.response.send_message(
+            embed=embeds.say(
+                f"lurk is **{'on' if s.get('lurk') else 'off'}**. `/lurk on` / `/lurk off` (manage server)."
+            )
+        )
 
     @tree.command(name="nuke", description="Delete the last N messages in this channel.")
     @app_commands.describe(amount="number of messages to delete")
     @anywhere
     async def nuke_cmd(interaction: discord.Interaction, amount: int = 10):
         if interaction.guild is None or not isinstance(interaction.user, discord.Member):
-            await interaction.response.send_message(embed=embeds.error("nuke only works in a server."), ephemeral=True)
+            await interaction.response.send_message(
+                embed=embeds.error("nuke only works in a server."), ephemeral=True
+            )
             return
         channel = interaction.channel
         if not isinstance(channel, (discord.TextChannel, discord.Thread)):
@@ -2397,17 +2551,20 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 ephemeral=True,
             )
             return
-        me = interaction.guild.me or interaction.guild.get_member(interaction.client.user.id)
+        me = interaction.guild.me or interaction.guild.get_member(
+            typing.cast(typing.Any, interaction.client.user).id
+        )
         author_ok = bool(
-            _has_manage_messages(interaction)
-            or config.is_bot_owner(interaction.user.id)
+            _has_manage_messages(interaction) or config.is_bot_owner(interaction.user.id)
         )
         bot_ok = False
         if me is not None and hasattr(channel, "permissions_for"):
             bp = channel.permissions_for(me)
             bot_ok = bool(bp.manage_messages or bp.administrator)
         elif me is not None:
-            bot_ok = bool(me.guild_permissions.manage_messages or me.guild_permissions.administrator)
+            bot_ok = bool(
+                me.guild_permissions.manage_messages or me.guild_permissions.administrator
+            )
         if not author_ok:
             await interaction.response.send_message(
                 embed=embeds.error("you need `manage messages` in this channel to nuke."),
@@ -2432,10 +2589,16 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             if not isinstance(current, (discord.TextChannel, discord.Thread)):
                 result = "target channel no longer exists"
                 db.record_action_audit(
-                    nonce=view.nonce, actor_id=str(confirmation.user.id),
-                    scope_id=_guild_id(confirmation), action="purge", target_id=str(channel_id),
-                    parameters={"amount": amount}, source="slash", correlation_id=correlation_id,
-                    status="denied", result=result,
+                    nonce=view.nonce,
+                    actor_id=str(confirmation.user.id),
+                    scope_id=_guild_id(confirmation),
+                    action="purge",
+                    target_id=str(channel_id),
+                    parameters={"amount": amount},
+                    source="slash",
+                    correlation_id=correlation_id,
+                    status="denied",
+                    result=result,
                 )
                 await confirmation.followup.send(embed=embeds.error(result), ephemeral=True)
                 return
@@ -2458,10 +2621,16 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 result = "purge failed because Discord denied the operation"
                 status = "failed"
             db.record_action_audit(
-                nonce=view.nonce, actor_id=str(confirmation.user.id),
-                scope_id=_guild_id(confirmation), action="purge", target_id=str(channel_id),
-                parameters={"amount": amount}, source="slash", correlation_id=correlation_id,
-                status=status, result=result,
+                nonce=view.nonce,
+                actor_id=str(confirmation.user.id),
+                scope_id=_guild_id(confirmation),
+                action="purge",
+                target_id=str(channel_id),
+                parameters={"amount": amount},
+                source="slash",
+                correlation_id=correlation_id,
+                status=status,
+                result=result,
             )
             await confirmation.followup.send(
                 embed=embeds.ok(result) if status == "completed" else embeds.error(result),
@@ -2470,9 +2639,15 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
 
         view = _confirmation(interaction, _purge)
         db.record_action_audit(
-            nonce=view.nonce, actor_id=str(interaction.user.id), scope_id=_guild_id(interaction),
-            action="purge", target_id=str(channel_id), parameters={"amount": amount},
-            source="slash", correlation_id=correlation_id, status="pending",
+            nonce=view.nonce,
+            actor_id=str(interaction.user.id),
+            scope_id=_guild_id(interaction),
+            action="purge",
+            target_id=str(channel_id),
+            parameters={"amount": amount},
+            source="slash",
+            correlation_id=correlation_id,
+            status="pending",
         )
         await interaction.response.send_message(
             embed=embeds.say(
@@ -2486,9 +2661,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
     @tree.command(name="swears", description="Show a member's swear jar total in this server.")
     @app_commands.describe(user="member to check; defaults to you")
     @anywhere
-    async def swears_cmd(
-        interaction: discord.Interaction, user: Optional[discord.User] = None
-    ):
+    async def swears_cmd(interaction: discord.Interaction, user: Optional[discord.User] = None):
         if interaction.guild is None:
             await interaction.response.send_message(
                 embed=embeds.error("the swear jar is server-only."), ephemeral=True
@@ -2537,7 +2710,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             )
             return
         if not _is_mod(interaction):
-            await interaction.response.send_message(embed=embeds.error("need manage server."), ephemeral=True)
+            await interaction.response.send_message(
+                embed=embeds.error("need manage server."), ephemeral=True
+            )
             return
 
         parts = command.strip().split()
@@ -2545,7 +2720,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         if key == "swear" and len(parts) >= 2:
             level = parts[1].lower()
             if level not in ("full", "medium", "clean"):
-                await interaction.response.send_message(embed=embeds.error("use full|medium|clean"), ephemeral=True)
+                await interaction.response.send_message(
+                    embed=embeds.error("use full|medium|clean"), ephemeral=True
+                )
                 return
             await _propose_guild_setting(
                 interaction, {"swear_level": level}, f"Set swear_level={level}?"
@@ -2560,7 +2737,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             if parts[1].lower() == "here":
                 await _propose_guild_setting(
                     interaction,
-                    {"allowed_channels": [str(interaction.channel.id)]},
+                    {"allowed_channels": [str(typing.cast(typing.Any, interaction.channel).id)]},
                     "Restrict commands to this channel only?",
                 )
                 return
@@ -2595,18 +2772,29 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 interaction, {setting: value}, f"Set {setting}={value or '(unset)'}?"
             )
             return
-        await interaction.response.send_message(embed=embeds.error("see `/config show`"), ephemeral=True)
+        await interaction.response.send_message(
+            embed=embeds.error("see `/config show`"), ephemeral=True
+        )
 
     @tree.command(name="quote", description="Use or manage saved quotes.")
-    @app_commands.describe(action="add, list, delete, or random", text="quote text or id", about="optional user")
+    @app_commands.describe(
+        action="add, list, delete, or random", text="quote text or id", about="optional user"
+    )
     @anywhere
-    async def quote_cmd(interaction: discord.Interaction, action: Optional[str] = None, text: Optional[str] = None, about: Optional[discord.User] = None):
+    async def quote_cmd(
+        interaction: discord.Interaction,
+        action: Optional[str] = None,
+        text: Optional[str] = None,
+        about: Optional[discord.User] = None,
+    ):
         guild_id = _guild_id(interaction)
         p = "/"
         sub = (action or "random").lower()
         if sub == "add":
             if not text:
-                await interaction.response.send_message(embed=embeds.error("usage: `/quote add <text>`"), ephemeral=True)
+                await interaction.response.send_message(
+                    embed=embeds.error("usage: `/quote add <text>`"), ephemeral=True
+                )
                 return
             about_id = str(about.id) if about else None
             qid = db.quote_add(guild_id, text, about=about_id, author=str(interaction.user.id))
@@ -2618,7 +2806,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 await interaction.response.send_message(embed=embeds.say("no quotes yet."))
                 return
             body = "\n".join(
-                f"#{r['id']}: {r['text'][:120]}" + (f" — <@{r['about']}>" if r.get('about') else "")
+                f"#{r['id']}: {r['text'][:120]}" + (f" — <@{r['about']}>" if r.get("about") else "")
                 for r in rows
             )
             await interaction.response.send_message(embed=embeds.say(body, title="quotes"))
@@ -2634,9 +2822,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                     can_moderate=_has_manage_messages(confirmation),
                 )
                 await confirmation.followup.send(
-                    embed=embeds.ok("deleted.") if ok else embeds.error(
-                        "quote not found here, or your authorization changed."
-                    ),
+                    embed=embeds.ok("deleted.")
+                    if ok
+                    else embeds.error("quote not found here, or your authorization changed."),
                     ephemeral=True,
                 )
 
@@ -2648,10 +2836,14 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             return
         q = db.quote_random(guild_id, about=str(about.id) if about else None)
         if not q:
-            await interaction.response.send_message(embed=embeds.say(f"no quotes yet. add one with `{p}quote add <text>`."))
+            await interaction.response.send_message(
+                embed=embeds.say(f"no quotes yet. add one with `{p}quote add <text>`.")
+            )
             return
-        who = f" — <@{q['about']}>" if q.get('about') else ""
-        await interaction.response.send_message(embed=embeds.say(f"#{q['id']}: {q['text']}{who}", title="quote"))
+        who = f" — <@{q['about']}>" if q.get("about") else ""
+        await interaction.response.send_message(
+            embed=embeds.say(f"#{q['id']}: {q['text']}{who}", title="quote")
+        )
 
     @tree.command(name="kb", description="Query or manage the knowledge base.")
     @app_commands.describe(
@@ -2674,38 +2866,55 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             total = kb.count(scope_id)
             tops = kb.topics(scope_id)
             if not total:
-                await interaction.response.send_message(embed=embeds.say(
-                    "knowledge base is empty. mods can load it: `/kb add <topic> | <text>` or attach a file.", title="knowledge base"
-                ))
+                await interaction.response.send_message(
+                    embed=embeds.say(
+                        "knowledge base is empty. mods can load it: `/kb add <topic> | <text>` or attach a file.",
+                        title="knowledge base",
+                    )
+                )
                 return
             top_lines = "\n".join(f"- {t['topic']} ({t['passages']})" for t in tops[:20])
             more = f"\n…+{len(tops) - 20} more topics" if len(tops) > 20 else ""
-            await interaction.response.send_message(embed=embeds.say(
-                f"{total} passages across {len(tops)} topics:\n{top_lines}{more}", title="knowledge base"
-            ))
+            await interaction.response.send_message(
+                embed=embeds.say(
+                    f"{total} passages across {len(tops)} topics:\n{top_lines}{more}",
+                    title="knowledge base",
+                )
+            )
             return
         if sub in ("search", "find", "q"):
             if not query:
-                await interaction.response.send_message(embed=embeds.error("usage: `/kb search <query>`"), ephemeral=True)
+                await interaction.response.send_message(
+                    embed=embeds.error("usage: `/kb search <query>`"), ephemeral=True
+                )
                 return
             hits = kb.search(query, k=5, scope_id=scope_id)
             if not hits:
-                await interaction.response.send_message(embed=embeds.say("nothing in the kb matches that.", title=f"kb: {query[:60]}"))
+                await interaction.response.send_message(
+                    embed=embeds.say("nothing in the kb matches that.", title=f"kb: {query[:60]}")
+                )
                 return
-            blocks = []
+            blocks: list[typing.Any] = []
             for h in hits:
                 snippet = h["content"].strip().replace("\n", " ")
                 if len(snippet) > 400:
                     snippet = snippet[:400].rstrip() + "…"
                 blocks.append(f"**[{h.get('topic') or 'ref'}]** {snippet}")
-            await interaction.response.send_message(embed=embeds.say("\n\n".join(blocks), title=f"kb: {query[:60]}"))
+            await interaction.response.send_message(
+                embed=embeds.say("\n\n".join(blocks), title=f"kb: {query[:60]}")
+            )
             return
         if sub in ("add", "ingest", "learn"):
             if not _is_mod(interaction):
-                await interaction.response.send_message(embed=embeds.error("need manage server for that."), ephemeral=True)
+                await interaction.response.send_message(
+                    embed=embeds.error("need manage server for that."), ephemeral=True
+                )
                 return
             if not query and attachment is None:
-                await interaction.response.send_message(embed=embeds.error("usage: `/kb add <topic> | <text>` or attach a file."), ephemeral=True)
+                await interaction.response.send_message(
+                    embed=embeds.error("usage: `/kb add <topic> | <text>` or attach a file."),
+                    ephemeral=True,
+                )
                 return
             rest = query or ""
             topic_name = topic or "general"
@@ -2740,17 +2949,27 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 text_body = (text_body + "\n\n" + raw).strip()
                 source = f"discord-file:{fname}"
             if not text_body:
-                await interaction.response.send_message(embed=embeds.error("usage: `/kb add <topic> | <text>` — or attach a .md/.txt file"), ephemeral=True)
+                await interaction.response.send_message(
+                    embed=embeds.error(
+                        "usage: `/kb add <topic> | <text>` — or attach a .md/.txt file"
+                    ),
+                    ephemeral=True,
+                )
                 return
             if brain.is_secret_payload(text_body):
                 await interaction.response.send_message(
-                    embed=embeds.error("not storing that — looks like a prompt or source-code payload."),
+                    embed=embeds.error(
+                        "not storing that — looks like a prompt or source-code payload."
+                    ),
                     ephemeral=True,
                 )
                 return
             n = kb.ingest(
-                text_body[:100_000], topic=topic_name[:80], title=topic_name[:80],
-                source=source, scope_id=scope_id,
+                text_body[:100_000],
+                topic=topic_name[:80],
+                title=topic_name[:80],
+                source=source,
+                scope_id=scope_id,
             )
             await interaction.response.send_message(
                 embed=embeds.ok(
@@ -2762,8 +2981,11 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             return
         if sub in ("clear", "forget", "wipe"):
             if not _is_mod(interaction):
-                await interaction.response.send_message(embed=embeds.error("need manage server for that."), ephemeral=True)
+                await interaction.response.send_message(
+                    embed=embeds.error("need manage server for that."), ephemeral=True
+                )
                 return
+
             async def _clear(confirmation: discord.Interaction) -> None:
                 if not _is_mod(confirmation):
                     await confirmation.followup.send(
@@ -2775,7 +2997,8 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 await confirmation.followup.send(
                     embed=embeds.ok(
                         f"cleared topic **{topic}** ({deleted} passage(s))."
-                        if topic else f"wiped this server's knowledge base ({deleted} passage(s))."
+                        if topic
+                        else f"wiped this server's knowledge base ({deleted} passage(s))."
                     ),
                     ephemeral=True,
                 )
@@ -2788,10 +3011,16 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 ephemeral=True,
             )
             return
-        await interaction.response.send_message(embed=embeds.error(
-            f"unknown kb action `{sub}`. try `/kb`, `/kb search <q>`, `/kb add <topic> | <text>`, `/kb clear [topic]`"), ephemeral=True)
+        await interaction.response.send_message(
+            embed=embeds.error(
+                f"unknown kb action `{sub}`. try `/kb`, `/kb search <q>`, `/kb add <topic> | <text>`, `/kb clear [topic]`"
+            ),
+            ephemeral=True,
+        )
 
-    @tree.command(name="memory", description="Show, inspect, edit, compact, or erase scoped memories.")
+    @tree.command(
+        name="memory", description="Show, inspect, edit, compact, or erase scoped memories."
+    )
     @app_commands.describe(
         action="show, inspect, edit, compact, or erase",
         user="optional user for show/compact/erase",
@@ -2810,7 +3039,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         current_scope = _guild_id(interaction)
 
         if sub in {"show", "list"}:
-            await memories_cmd.callback(interaction, user)
+            await memories_cmd.callback(
+                typing.cast(typing.Any, interaction), typing.cast(typing.Any, user)
+            )
             return
 
         if sub in {"inspect", "explain", "why"}:
@@ -2827,9 +3058,13 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                     ephemeral=True,
                 )
                 return
-            if str(row["subject"]) != str(interaction.user.id) and not _has_manage_messages(interaction):
+            if str(row["subject"]) != str(interaction.user.id) and not _has_manage_messages(
+                interaction
+            ):
                 await interaction.response.send_message(
-                    embed=embeds.error("Manage Messages is required to inspect another subject's memory."),
+                    embed=embeds.error(
+                        "Manage Messages is required to inspect another subject's memory."
+                    ),
                     ephemeral=True,
                 )
                 return
@@ -2883,7 +3118,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 return
             if brain.is_secret_payload(replacement):
                 await interaction.response.send_message(
-                    embed=embeds.error("not storing that — looks like a prompt or source-code payload."),
+                    embed=embeds.error(
+                        "not storing that — looks like a prompt or source-code payload."
+                    ),
                     ephemeral=True,
                 )
                 return
@@ -2893,9 +3130,13 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                     embed=embeds.error("no memory with that id in this scope."), ephemeral=True
                 )
                 return
-            if str(row["subject"]) != str(interaction.user.id) and not _has_manage_messages(interaction):
+            if str(row["subject"]) != str(interaction.user.id) and not _has_manage_messages(
+                interaction
+            ):
                 await interaction.response.send_message(
-                    embed=embeds.error("Manage Messages is required to edit another subject's memory."),
+                    embed=embeds.error(
+                        "Manage Messages is required to edit another subject's memory."
+                    ),
                     ephemeral=True,
                 )
                 return
@@ -2908,10 +3149,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                         ephemeral=True,
                     )
                     return
-                if (
-                    str(current["subject"]) != str(confirmation.user.id)
-                    and not _has_manage_messages(confirmation)
-                ):
+                if str(current["subject"]) != str(
+                    confirmation.user.id
+                ) and not _has_manage_messages(confirmation):
                     await confirmation.followup.send(
                         embed=embeds.error("your permission changed; edit denied."),
                         ephemeral=True,
@@ -2939,7 +3179,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             subject = str(user.id) if user else str(interaction.user.id)
             if subject != str(interaction.user.id) and not _has_manage_messages(interaction):
                 await interaction.response.send_message(
-                    embed=embeds.error("Manage Messages is required to compact another user's memories."),
+                    embed=embeds.error(
+                        "Manage Messages is required to compact another user's memories."
+                    ),
                     ephemeral=True,
                 )
                 return
@@ -2954,7 +3196,10 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                             ephemeral=True,
                         )
                         return
-                    if confirmation.guild is None or confirmation.guild.get_member(int(subject)) is None:
+                    if (
+                        confirmation.guild is None
+                        or confirmation.guild.get_member(int(subject)) is None
+                    ):
                         await confirmation.followup.send(
                             embed=embeds.error("the target is no longer a current server member."),
                             ephemeral=True,
@@ -2962,7 +3207,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                         return
                 removed = db.compact_memories(subject, _guild_id(confirmation), keep=15)
                 await confirmation.followup.send(
-                    embed=embeds.ok(f"compacted memories; removed {removed} low-priority record(s)."),
+                    embed=embeds.ok(
+                        f"compacted memories; removed {removed} low-priority record(s)."
+                    ),
                     ephemeral=True,
                 )
 
@@ -2977,7 +3224,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
 
         if sub not in ("erase", "clear", "wipe", "delete"):
             await interaction.response.send_message(
-                embed=embeds.error("use `/memory show`, `/memory inspect`, `/memory edit`, `/memory compact`, or `/memory erase`."),
+                embed=embeds.error(
+                    "use `/memory show`, `/memory inspect`, `/memory edit`, `/memory compact`, or `/memory erase`."
+                ),
                 ephemeral=True,
             )
             return
@@ -2991,23 +3240,27 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 ephemeral=True,
             )
             return
+
         async def _erase(confirmation: discord.Interaction) -> None:
             if subject != str(confirmation.user.id):
                 if not _has_manage_messages(confirmation):
                     await confirmation.followup.send(
-                        embed=embeds.error("your Manage Messages permission changed; erase denied."),
+                        embed=embeds.error(
+                            "your Manage Messages permission changed; erase denied."
+                        ),
                         ephemeral=True,
                     )
                     return
-                if confirmation.guild is None or confirmation.guild.get_member(int(subject)) is None:
+                if (
+                    confirmation.guild is None
+                    or confirmation.guild.get_member(int(subject)) is None
+                ):
                     await confirmation.followup.send(
                         embed=embeds.error("the target is no longer a current server member."),
                         ephemeral=True,
                     )
                     return
-            counts = db.forget_memories_about(
-                subject, _guild_id(confirmation), clear_convo=True
-            )
+            counts = db.forget_memories_about(subject, _guild_id(confirmation), clear_convo=True)
             n = int(counts.get("memories") or 0)
             nc = int(counts.get("convo") or 0)
             msg = (
@@ -3027,7 +3280,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
     @anywhere
     async def export_cmd(interaction: discord.Interaction):
         if not _is_mod(interaction):
-            await interaction.response.send_message(embed=embeds.error("need manage server."), ephemeral=True)
+            await interaction.response.send_message(
+                embed=embeds.error("need manage server."), ephemeral=True
+            )
             return
         guild_id = _guild_id(interaction)
         data = db.export_guild(guild_id)
@@ -3054,7 +3309,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         attachment: Optional[discord.Attachment] = None,
     ):
         if not _is_mod(interaction):
-            await interaction.response.send_message(embed=embeds.error("need manage server."), ephemeral=True)
+            await interaction.response.send_message(
+                embed=embeds.error("need manage server."), ephemeral=True
+            )
             return
         text = raw or ""
         if attachment is not None:
@@ -3081,8 +3338,10 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 )
                 return
         if not text.strip():
-            await interaction.response.send_message(embed=embeds.error(
-                "usage: `/import` with a JSON attachment or paste JSON text."), ephemeral=True)
+            await interaction.response.send_message(
+                embed=embeds.error("usage: `/import` with a JSON attachment or paste JSON text."),
+                ephemeral=True,
+            )
             return
         payload = text.strip()
         if payload.startswith("```"):
@@ -3100,9 +3359,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         try:
             bundle = db.validate_import_bundle(data, scope_id)
         except (ValueError, TypeError) as exc:
-            await interaction.response.send_message(
-                embed=embeds.error(str(exc)), ephemeral=True
-            )
+            await interaction.response.send_message(embed=embeds.error(str(exc)), ephemeral=True)
             return
         summary = ", ".join(
             f"{section}={len(bundle.get(section) or [])}"
@@ -3124,9 +3381,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 )
                 return
             await confirmation.followup.send(
-                embed=embeds.ok(
-                    "imported: " + ", ".join(f"{k}={v}" for k, v in counts.items())
-                ),
+                embed=embeds.ok("imported: " + ", ".join(f"{k}={v}" for k, v in counts.items())),
                 ephemeral=True,
             )
 
@@ -3144,16 +3399,27 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
     @anywhere
     async def eightball_cmd(interaction: discord.Interaction, question: str):
         if not question.strip():
-            await interaction.response.send_message(embed=embeds.error("usage: `/8ball <question>`."), ephemeral=True)
+            await interaction.response.send_message(
+                embed=embeds.error("usage: `/8ball <question>`."), ephemeral=True
+            )
             return
         answers = [
-            "yeah, obviously.", "nah.", "ask again when you're smarter.",
-            "absolutely. go ruin your life.", "the vibes say no.",
-            "it's giving yes.", "50/50 and i don't care.", "lmao no.",
-            "signs point to you already knowing.", "bet.", "hard pass.",
+            "yeah, obviously.",
+            "nah.",
+            "ask again when you're smarter.",
+            "absolutely. go ruin your life.",
+            "the vibes say no.",
+            "it's giving yes.",
+            "50/50 and i don't care.",
+            "lmao no.",
+            "signs point to you already knowing.",
+            "bet.",
+            "hard pass.",
             "the universe is laughing at that question.",
         ]
-        await interaction.response.send_message(embed=embeds.say(f"q: {question}\na: {secrets.choice(answers)}", title="8ball"))
+        await interaction.response.send_message(
+            embed=embeds.say(f"q: {question}\na: {secrets.choice(answers)}", title="8ball")
+        )
 
     @tree.command(name="ship", description="Ship two users together.")
     @app_commands.describe(user1="first user", user2="second user")
@@ -3181,7 +3447,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         target = user
         if not _can_view_subject(interaction, target.id):
             await interaction.response.send_message(
-                embed=embeds.error("using personal memories requires self-access or `view_audit_log`."),
+                embed=embeds.error(
+                    "using personal memories requires self-access or `view_audit_log`."
+                ),
                 ephemeral=True,
             )
             return
@@ -3221,18 +3489,20 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             ephemeral=True,
         )
 
-    @tree.command(name="trivia", description="Start or answer trivia from non-personal server facts.")
+    @tree.command(
+        name="trivia", description="Start or answer trivia from non-personal server facts."
+    )
     @app_commands.describe(answer="answer the current question instead of starting a new one")
     @anywhere
     async def trivia_cmd(interaction: discord.Interaction, answer: Optional[str] = None):
         guild_id = _guild_id(interaction)
-        game_key = f"trivia:{guild_id}:{interaction.channel.id}"
+        game_key = f"trivia:{guild_id}:{typing.cast(typing.Any, interaction.channel).id}"
         if answer:
             raw = db.kv_get(game_key)
             try:
                 game = json.loads(raw) if raw else {}
             except (TypeError, json.JSONDecodeError):
-                game = {}
+                game: dict[typing.Any, typing.Any] = {}
             if not game or float(game.get("until") or 0) < time.time():
                 await interaction.response.send_message(
                     embed=embeds.error("there is no active trivia question here."), ephemeral=True
@@ -3246,12 +3516,11 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 ephemeral=True,
             )
             return
-        mems = [
-            dict(row) for row in db.scope_memories(guild_id)
-            if row["subject"] == "server"
-        ][:30]
+        mems = [dict(row) for row in db.scope_memories(guild_id) if row["subject"] == "server"][:30]
         if len(mems) < 2:
-            await interaction.response.send_message(embed=embeds.say("not enough memories yet — teach me stuff first."))
+            await interaction.response.send_message(
+                embed=embeds.say("not enough memories yet — teach me stuff first.")
+            )
             return
         blob = "\n".join(f"- about {m['subject']}: {m['content']}" for m in mems)
         system = (
@@ -3273,13 +3542,23 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             return
         q = str(spec["question"])
         ans = str(spec.get("answer", "")).strip()
-        await interaction.followup.send(embed=embeds.say(
-            f"{q}\n\n(answer within 20s using `/trivia answer:<your answer>`)", title="trivia"
-        ))
+        await interaction.followup.send(
+            embed=embeds.say(
+                f"{q}\n\n(answer within 20s using `/trivia answer:<your answer>`)", title="trivia"
+            )
+        )
         token = uuid.uuid4().hex
-        db.kv_set(game_key, json.dumps({
-            "token": token, "answer": ans, "until": time.time() + 25,
-        }))
+        db.kv_set(
+            game_key,
+            json.dumps(
+                {
+                    "token": token,
+                    "answer": ans,
+                    "until": time.time() + 25,
+                }
+            ),
+        )
+
         async def _reveal():
             await asyncio.sleep(20)
             raw = db.kv_get(game_key)
@@ -3292,10 +3571,13 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             if current.get("token") != token:
                 return
             try:
-                await interaction.channel.send(embed=embeds.say(f"time's up. answer: **{ans}**", title="trivia"))
+                await typing.cast(typing.Any, interaction).channel.send(
+                    embed=embeds.say(f"time's up. answer: **{ans}**", title="trivia")
+                )
             except discord.HTTPException:
                 pass
             db.kv_set(game_key, "")
+
         interaction.client.loop.create_task(_reveal())
 
     @tree.command(name="profile", description="Show a user's Discord profile, avatar, and banner.")
@@ -3355,11 +3637,13 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 ephemeral=True,
             )
             return
-        rows = db.all_lessons(_guild_id(interaction))
+        rows: typing.Any = typing.cast(typing.Any, db.all_lessons(_guild_id(interaction)))
         if not rows:
-            await interaction.response.send_message(embed=embeds.say("no lessons yet — rate my replies."))
+            await interaction.response.send_message(
+                embed=embeds.say("no lessons yet — rate my replies.")
+            )
             return
-        lines = []
+        lines: list[typing.Any] = []
         for r in rows[-30:]:
             content = str(r["content"] or "")
             if brain.any_prompt_leaked(content):
@@ -3385,12 +3669,12 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
     @anywhere
     async def help_cmd(interaction: discord.Interaction):
         age_restricted = bool(
-            interaction.guild is not None
-            and rule34.is_age_restricted_channel(interaction.channel)
+            interaction.guild is not None and rule34.is_age_restricted_channel(interaction.channel)
         )
         age_restricted_help = (
             "`/nsfw` — available only in this Discord-marked age-restricted channel\n"
-            if age_restricted else ""
+            if age_restricted
+            else ""
         )
         body = (
             "i'm owaua. i start dumb and get smarter as you use me. i remember things "
@@ -3447,22 +3731,28 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         )
         if intel["monthly"]:
             body += "\n**Monthly Activity:**\n"
-            body += "\n".join(f"• {m['month']}: **{m['n']}** msgs" for m in intel["monthly"][:8]) + "\n"
+            body += (
+                "\n".join(f"• {m['month']}: **{m['n']}** msgs" for m in intel["monthly"][:8]) + "\n"
+            )
         if intel["top_words"]:
             body += "\n**Favorite Words:** " + ", ".join(intel["top_words"][:12]) + "\n"
         if intel["bad_messages"]:
             body += "\n**Recent Flagged Bad Messages:**\n"
             for bm in intel["bad_messages"][:5]:
-                body += f"• `#{bm['channel_name']}`: \"{bm['content'][:100]}\" *(flags: {bm['bad_words_found']})*\n"
+                body += f'• `#{bm["channel_name"]}`: "{bm["content"][:100]}" *(flags: {bm["bad_words_found"]})*\n'
 
         await interaction.response.send_message(
             embed=embeds.ok(body, title="user intelligence"), ephemeral=True
         )
 
-    @tree.command(name="badmessages", description="View flagged bad or offensive messages for a user.")
+    @tree.command(
+        name="badmessages", description="View flagged bad or offensive messages for a user."
+    )
     @app_commands.describe(user="User to inspect (optional)")
     @anywhere
-    async def badmessages_cmd(interaction: discord.Interaction, user: Optional[discord.User] = None):
+    async def badmessages_cmd(
+        interaction: discord.Interaction, user: Optional[discord.User] = None
+    ):
         target_user = user or interaction.user
         if not _can_view_subject(interaction, target_user.id):
             await interaction.response.send_message(
@@ -3490,7 +3780,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
 
         lines = [f"**Flagged Bad Messages** for **{uname}** ({len(bad_msgs)} items):\n"]
         for bm in bad_msgs:
-            lines.append(f"• `#{bm['channel_name']}`: \"{bm['content'][:120]}\" (words: {bm['bad_words_found']})")
+            lines.append(
+                f'• `#{bm["channel_name"]}`: "{bm["content"][:120]}" (words: {bm["bad_words_found"]})'
+            )
         await interaction.response.send_message(
             embed=embeds.ok("\n".join(lines)[:1900], title="bad messages"),
             ephemeral=True,
@@ -3499,7 +3791,11 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
     @tree.command(name="user", description="Ask ANYTHING about a person with full database memory.")
     @app_commands.describe(user="User to ask about", question="What to ask about them")
     @anywhere
-    async def user_cmd(interaction: discord.Interaction, user: Optional[discord.User] = None, question: Optional[str] = None):
+    async def user_cmd(
+        interaction: discord.Interaction,
+        user: Optional[discord.User] = None,
+        question: Optional[str] = None,
+    ):
         target_user = user or interaction.user
         if not _can_view_subject(interaction, target_user.id):
             await interaction.response.send_message(
@@ -3537,7 +3833,8 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             f"- Bond Score: {rel['score']:+.2f} ({rel['bond_label']})\n"
             f"- Private Nickname: {rel.get('nickname') or 'none'}\n"
             f"- Open Beef/Grudge: {rel.get('grudge') or 'none'}\n"
-            f"- Stored Facts & Memories:\n" + ("\n".join(f"  • {f['content']}" for f in facts) if facts else "  (none)")
+            f"- Stored Facts & Memories:\n"
+            + ("\n".join(f"  • {f['content']}" for f in facts) if facts else "  (none)")
         )
         if intel["monthly"]:
             intel_text += "\n- Monthly Activity (most recent first):\n  " + "\n  ".join(
@@ -3551,30 +3848,35 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             intel_text += "\n- Favorite Words: " + ", ".join(intel["top_words"][:15])
         if intel["bad_messages"]:
             intel_text += "\n- Flagged Bad/Offensive Messages:\n" + "\n".join(
-                f"  • [#{bm['channel_name']}] \"{bm['content']}\" (flagged: {bm['bad_words_found']})"
+                f'  • [#{bm["channel_name"]}] "{bm["content"]}" (flagged: {bm["bad_words_found"]})'
                 for bm in intel["bad_messages"][:10]
             )
         if matching_messages:
-            intel_text += "\n- Messages matching this exact question across the full archive:\n" + "\n".join(
-                f"  • [{embeds.fmt_ts(row['created'])}] #{row['channel_name']}: "
-                f"\"{row['content'][:300]}\""
-                + (
-                    f" [preceding context — {row['context_author']}: "
-                    f"\"{row['context_before']}\"]"
-                    if row.get("context_before")
-                    else ""
+            intel_text += (
+                "\n- Messages matching this exact question across the full archive:\n"
+                + "\n".join(
+                    f"  • [{embeds.fmt_ts(row['created'])}] #{row['channel_name']}: "
+                    f'"{row["content"][:300]}"'
+                    + (
+                        f' [preceding context — {row["context_author"]}: "{row["context_before"]}"]'
+                        if row.get("context_before")
+                        else ""
+                    )
+                    for row in matching_messages[:40]
                 )
-                for row in matching_messages[:40]
             )
         if intel["recent_messages"]:
             intel_text += "\n- Recent Messages Sent (last 40):\n" + "\n".join(
-                f"  • [{embeds.fmt_ts(rm['created'])}] #{rm['channel_name']}: \"{rm['content'][:200]}\""
+                f'  • [{embeds.fmt_ts(rm["created"])}] #{rm["channel_name"]}: "{rm["content"][:200]}"'
                 for rm in intel["recent_messages"][:40]
             )
         if intel["sample_messages"]:
-            intel_text += "\n- Older Messages (random samples across their whole history):\n" + "\n".join(
-                f"  • [{embeds.fmt_ts(rm['created'])}] #{rm['channel_name']}: \"{rm['content'][:200]}\""
-                for rm in intel["sample_messages"]
+            intel_text += (
+                "\n- Older Messages (random samples across their whole history):\n"
+                + "\n".join(
+                    f'  • [{embeds.fmt_ts(rm["created"])}] #{rm["channel_name"]}: "{rm["content"][:200]}"'
+                    for rm in intel["sample_messages"]
+                )
             )
 
         system_prompt = (
@@ -3598,10 +3900,15 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         await interaction.response.defer(thinking=True, ephemeral=True)
         try:
             resp = await ai.chat(
-                system_prompt, [{"role": "user", "content": user_prompt}],
-                max_tokens=800, model=config.MODEL_SMART, fallbacks=[],
-                task="assistant", scope_id=_guild_id(interaction),
-                user_id=str(interaction.user.id), prompt_version="user-intelligence-v1",
+                system_prompt,
+                [{"role": "user", "content": user_prompt}],
+                max_tokens=800,
+                model=config.MODEL_SMART,
+                fallbacks=[],
+                task="assistant",
+                scope_id=_guild_id(interaction),
+                user_id=str(interaction.user.id),
+                prompt_version="user-intelligence-v1",
             )
             resp = brain.scrub_ai_output(resp)
             await interaction.followup.send(
@@ -3644,7 +3951,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             embed=embeds.ok(body, title="archive status"), ephemeral=True
         )
 
-    @tree.command(name="server", description="Ask ANYTHING about this server with full database memory.")
+    @tree.command(
+        name="server", description="Ask ANYTHING about this server with full database memory."
+    )
     @app_commands.describe(question="What to ask about the server")
     @anywhere
     async def server_cmd(interaction: discord.Interaction, question: Optional[str] = None):
@@ -3683,7 +3992,8 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             s_text += "- Server Top Words: " + ", ".join(s_intel["top_words"][:15]) + "\n"
         if s_intel["top_senders"]:
             s_text += "- Top Active Message Senders:\n" + "\n".join(
-                f"  • {ts['display_name']} (@{ts['username']}, ID {ts['user_id']}): {ts['cnt']} msgs ({ts['bad_cnt']} bad)" for ts in s_intel["top_senders"]
+                f"  • {ts['display_name']} (@{ts['username']}, ID {ts['user_id']}): {ts['cnt']} msgs ({ts['bad_cnt']} bad)"
+                for ts in s_intel["top_senders"]
             )
         if server_facts:
             s_text += "\n- Stored Server Facts:\n" + "\n".join(
@@ -3691,7 +4001,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             )
         if quotes:
             s_text += "\n- Saved Server Quotes:\n" + "\n".join(
-                f"  • #{q['id']}: \"{q['text']}\"" for q in quotes[:5]
+                f'  • #{q["id"]}: "{q["text"]}"' for q in quotes[:5]
             )
 
         system_prompt = (
@@ -3710,10 +4020,15 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         await interaction.response.defer(thinking=True, ephemeral=True)
         try:
             resp = await ai.chat(
-                system_prompt, [{"role": "user", "content": user_prompt}],
-                max_tokens=800, model=config.MODEL_SMART, fallbacks=[],
-                task="assistant", scope_id=_guild_id(interaction),
-                user_id=str(interaction.user.id), prompt_version="server-intelligence-v1",
+                system_prompt,
+                [{"role": "user", "content": user_prompt}],
+                max_tokens=800,
+                model=config.MODEL_SMART,
+                fallbacks=[],
+                task="assistant",
+                scope_id=_guild_id(interaction),
+                user_id=str(interaction.user.id),
+                prompt_version="server-intelligence-v1",
             )
             resp = brain.scrub_ai_output(resp)
             await interaction.followup.send(
@@ -3724,7 +4039,6 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 embed=embeds.error("failed to generate the scoped server report."),
                 ephemeral=True,
             )
-
 
     @tree.command(name="describe", description="Describe an image with the vision model.")
     @app_commands.describe(
@@ -3772,9 +4086,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             downloaded = await _llm.get_image(url.strip())
             if downloaded is None:
                 await interaction.followup.send(
-                    embed=embeds.error(
-                        "couldn't fetch a supported public image from that URL."
-                    ),
+                    embed=embeds.error("couldn't fetch a supported public image from that URL."),
                     ephemeral=True,
                 )
                 return
@@ -3801,7 +4113,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             user_id=str(interaction.user.id),
         )
         text = brain.scrub_ai_output(text)
-        await interaction.followup.send(embed=embeds.say(text, title="describe image"), ephemeral=True)
+        await interaction.followup.send(
+            embed=embeds.say(text, title="describe image"), ephemeral=True
+        )
 
     @tree.command(name="read", description="Read and analyze a .txt file attachment.")
     @app_commands.describe(
@@ -3829,10 +4143,11 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                 ephemeral=True,
             )
             return
-        q = (prompt or "").strip() or "Please read, summarize, and explain the key points in this attached text file."
-        embed, response, _proposals = await _generate_reply(
-            interaction, q, file_notes=file_notes
+        q = (
+            (prompt or "").strip()
+            or "Please read, summarize, and explain the key points in this attached text file."
         )
+        embed, response, _proposals = await _generate_reply(interaction, q, file_notes=file_notes)
         sent = await interaction.followup.send(embed=embed, wait=True)
         if response and sent is not None and _track is not None:
             _track(sent.id, q, response, str(interaction.user.id))
@@ -3842,8 +4157,10 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
-
-    @tree.command(name="act", description="Moderation actions from plain English (e.g. 'mute @x for 10 min for spamming').")
+    @tree.command(
+        name="act",
+        description="Moderation actions from plain English (e.g. 'mute @x for 10 min for spamming').",
+    )
     @app_commands.describe(request="what to do — the model resolves it into a real action")
     @_cooldown(1, 10)
     async def act_cmd(interaction: discord.Interaction, request: str):
@@ -3853,18 +4170,24 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             )
             return
         actor: discord.Member = interaction.user
-        if not (actor.guild_permissions.kick_members
-                or actor.guild_permissions.ban_members
-                or actor.guild_permissions.moderate_members
-                or actor.guild_permissions.administrator):
+        if not (
+            actor.guild_permissions.kick_members
+            or actor.guild_permissions.ban_members
+            or actor.guild_permissions.moderate_members
+            or actor.guild_permissions.administrator
+        ):
             await interaction.response.send_message(
-                embed=embeds.error("you need a moderation permission (kick/ban/timeout) to use this."),
+                embed=embeds.error(
+                    "you need a moderation permission (kick/ban/timeout) to use this."
+                ),
                 ephemeral=True,
             )
             return
         if not config.LLM_API_KEY:
             await interaction.response.send_message(
-                embed=embeds.error("the tool-calling LLM isn't configured (set OWAUA_LLM_API_KEY)."),
+                embed=embeds.error(
+                    "the tool-calling LLM isn't configured (set OWAUA_LLM_API_KEY)."
+                ),
                 ephemeral=True,
             )
             return
@@ -3908,8 +4231,10 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         preview = function_registry.preview_tool(name, arguments)
         if name not in function_registry.MUTATING_TOOLS:
             ctx = function_registry.ActionContext(
-                guild=interaction.guild, actor=actor, bot=interaction.client,
-                channel=interaction.channel,
+                guild=interaction.guild,
+                actor=actor,
+                bot=interaction.client,
+                channel=typing.cast(typing.Any, interaction.channel),
             )
             result = await function_registry.execute_tool(name, arguments, ctx)
             await interaction.followup.send(
@@ -3930,11 +4255,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
                     guild=guild,
                     actor=confirmation.user,
                     bot=confirmation.client,
-                    channel=confirmation.channel,
+                    channel=typing.cast(typing.Any, confirmation.channel),
                 )
-                result = await function_registry.execute_tool(
-                    name, arguments, ctx, confirmed=True
-                )
+                result = await function_registry.execute_tool(name, arguments, ctx, confirmed=True)
                 status = "failed" if result.startswith("⛔") else "completed"
             db.record_action_audit(
                 nonce=view.nonce,
@@ -3975,9 +4298,10 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             ephemeral=True,
         )
 
-
     @tree.command(name="join", description="Join your voice channel.")
-    async def join_cmd(interaction: discord.Interaction, channel: Optional[discord.VoiceChannel] = None):
+    async def join_cmd(
+        interaction: discord.Interaction, channel: Optional[discord.VoiceChannel] = None
+    ):
         target_id = channel.id if channel is not None else None
 
         async def _join(confirmation: discord.Interaction) -> tuple[bool, str]:
@@ -4029,7 +4353,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             parameters={"text_present": True, "text_length": len(normalized)},
         )
 
-    @tree.command(name="stt", description="Toggle live voice transcription (Whisper) in your voice channel.")
+    @tree.command(
+        name="stt", description="Toggle live voice transcription (Whisper) in your voice channel."
+    )
     async def stt_cmd(interaction: discord.Interaction):
         await _propose_discord_action(
             interaction,
@@ -4055,7 +4381,8 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         await interaction.response.send_message(
             embed=embeds.ok(
                 "voice transcription consent enabled."
-                if enabled else "voice transcription consent revoked."
+                if enabled
+                else "voice transcription consent revoked."
             ),
             ephemeral=True,
         )
@@ -4081,15 +4408,11 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             argument = f"note {user.mention if user else ''} {reason or 'Left you a note.'}"
         else:
             argument = f"clear {user.mention if user else ''}"
-        await _run_community_command(
-            interaction, "afk", argument.strip(), mentions=mentions
-        )
+        await _run_community_command(interaction, "afk", argument.strip(), mentions=mentions)
 
     @tree.command(name="remind", description="Set a personal timed reminder.")
     @app_commands.describe(duration="such as 30m, 2h, or 1d", text="reminder text")
-    async def remind_cmd(
-        interaction: discord.Interaction, duration: str, text: str
-    ):
+    async def remind_cmd(interaction: discord.Interaction, duration: str, text: str):
         await _run_community_command(interaction, "remind", f"{duration} {text}")
 
     @tree.command(name="highlight", description="Manage highlighted phrases.")
@@ -4099,9 +4422,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         action: Literal["add", "delete", "list"] = "list",
         phrase: Optional[str] = None,
     ):
-        await _run_community_command(
-            interaction, "highlight", f"{action} {phrase or ''}".strip()
-        )
+        await _run_community_command(interaction, "highlight", f"{action} {phrase or ''}".strip())
 
     @tree.command(name="tag", description="Create, show, edit, delete, or list tags.")
     @app_commands.describe(
@@ -4139,9 +4460,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         )
 
     @economy_group.command(name="pay", description="Transfer coins to another member.")
-    async def economy_pay(
-        interaction: discord.Interaction, user: discord.Member, amount: int
-    ):
+    async def economy_pay(interaction: discord.Interaction, user: discord.Member, amount: int):
         await _run_community_command(
             interaction, "pay", f"{user.mention} {amount}", mentions=[user]
         )
@@ -4168,12 +4487,8 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         await _run_community_command(interaction, "deck", argument)
 
     @economy_group.command(name="battle", description="Challenge another member's deck.")
-    async def economy_battle(
-        interaction: discord.Interaction, user: discord.Member
-    ):
-        await _run_community_command(
-            interaction, "battle", user.mention, mentions=[user]
-        )
+    async def economy_battle(interaction: discord.Interaction, user: discord.Member):
+        await _run_community_command(interaction, "battle", user.mention, mentions=[user])
 
     tree.add_command(economy_group)
 
@@ -4190,10 +4505,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         prize: Optional[str] = None,
     ):
         if action == "create":
-            argument = (
-                f"create {duration_or_message_id} | {winners} | "
-                f"{prize or 'Mystery prize'}"
-            )
+            argument = f"create {duration_or_message_id} | {winners} | {prize or 'Mystery prize'}"
         else:
             argument = f"{action} {duration_or_message_id}"
         await _run_community_command(interaction, "giveaway", argument)
@@ -4204,25 +4516,29 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         action: Literal["open", "close", "resolve"],
         subject: Optional[str] = None,
     ):
-        await _run_community_command(
-            interaction, "ticket", f"{action} {subject or ''}".strip()
-        )
+        await _run_community_command(interaction, "ticket", f"{action} {subject or ''}".strip())
 
     @tree.command(name="appeal", description="Appeal one moderation case that belongs to you.")
     async def appeal_cmd(interaction: discord.Interaction, case_id: int, statement: str):
         if interaction.guild is None:
-            await interaction.response.send_message("Appeals must be submitted inside the server.", ephemeral=True)
+            await interaction.response.send_message(
+                "Appeals must be submitted inside the server.", ephemeral=True
+            )
             return
         try:
             item = staffops.open_appeal(
-                _guild_id(interaction), case_id,
-                appellant_id=str(interaction.user.id), statement=statement,
+                _guild_id(interaction),
+                case_id,
+                appellant_id=str(interaction.user.id),
+                statement=statement,
             )
         except ValueError as error:
             await interaction.response.send_message(embed=embeds.error(str(error)), ephemeral=True)
             return
         await interaction.response.send_message(
-            embed=embeds.ok(f"Appeal submitted for {item.get('case_number', 'that case')}. Staff can review it in the incident center."),
+            embed=embeds.ok(
+                f"Appeal submitted for {item.get('case_number', 'that case')}. Staff can review it in the incident center."
+            ),
             ephemeral=True,
         )
 
@@ -4230,10 +4546,14 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
     async def cases_cmd(
         interaction: discord.Interaction,
         query: str = "",
-        status: Optional[Literal["open", "monitoring", "appealed", "resolved", "expired", "void"]] = None,
+        status: Optional[
+            Literal["open", "monitoring", "appealed", "resolved", "expired", "void"]
+        ] = None,
     ):
         if interaction.guild is None or not _is_mod(interaction):
-            await interaction.response.send_message(embed=embeds.error("Manage Server is required."), ephemeral=True)
+            await interaction.response.send_message(
+                embed=embeds.error("Manage Server is required."), ephemeral=True
+            )
             return
         rows = staffops.search_cases(_guild_id(interaction), query=query, status=status, limit=20)
         lines = [
@@ -4241,11 +4561,15 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             for item in rows
         ]
         await interaction.response.send_message(
-            embed=embeds.say("\n\n".join(lines) or "No matching cases.", title="Private moderation cases"),
+            embed=embeds.say(
+                "\n\n".join(lines) or "No matching cases.", title="Private moderation cases"
+            ),
             ephemeral=True,
         )
 
-    @tree.command(name="casecreate", description="Create a private moderation case with an audit timeline.")
+    @tree.command(
+        name="casecreate", description="Create a private moderation case with an audit timeline."
+    )
     async def case_create_cmd(
         interaction: discord.Interaction,
         member: discord.Member,
@@ -4255,7 +4579,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         expiry_days: int = 30,
     ):
         if interaction.guild is None or not _is_mod(interaction):
-            await interaction.response.send_message(embed=embeds.error("Manage Server is required."), ephemeral=True)
+            await interaction.response.send_message(
+                embed=embeds.error("Manage Server is required."), ephemeral=True
+            )
             return
         expiry = time.time() + max(1, min(365, int(expiry_days))) * 86_400
 
@@ -4263,9 +4589,14 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             if not _is_mod(confirmation):
                 return False, "Manage Server is still required."
             item = staffops.create_case(
-                _guild_id(confirmation), actor_id=str(confirmation.user.id),
-                subject_id=str(member.id), category=category, reason=reason,
-                severity=severity, expires_at=expiry, source="slash",
+                _guild_id(confirmation),
+                actor_id=str(confirmation.user.id),
+                subject_id=str(member.id),
+                category=category,
+                reason=reason,
+                severity=severity,
+                expires_at=expiry,
+                source="slash",
             )
             return True, f"Created {item.get('case_number')} for {member}."
 
@@ -4275,7 +4606,11 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             preview=f"Create a private {severity} moderation case for {member.mention}?\nCategory: {category[:80]}\nReason: {reason[:1000]}\nExpiry: {max(1, min(365, int(expiry_days)))} day(s)",
             callback=_create,
             target_id=str(member.id),
-            parameters={"category": category[:80], "severity": severity, "expiry_days": max(1, min(365, int(expiry_days)))},
+            parameters={
+                "category": category[:80],
+                "severity": severity,
+                "expiry_days": max(1, min(365, int(expiry_days))),
+            },
         )
 
     @tree.command(name="ticketpanel", description="Publish a configured persistent ticket panel.")
@@ -4286,17 +4621,27 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             )
             return
         config_state = db.module_config(_guild_id(interaction), "tickets")
-        panel = next(
-            (
-                item for item in config_state["settings"].get("panels", [])[:100]
-                if isinstance(item, dict)
-                and str(item.get("id") or "default").casefold() == panel_id.casefold()
+        panel: typing.Any = typing.cast(
+            typing.Any,
+            next(
+                (
+                    item
+                    for item in typing.cast(
+                        list[dict[str, typing.Any]],
+                        config_state["settings"].get("panels", []),
+                    )[:100]
+                    if isinstance(item, dict)
+                    and str(typing.cast(typing.Any, item).get("id") or "default").casefold()
+                    == panel_id.casefold()
+                ),
+                None,
             ),
-            None,
         )
         if not config_state["enabled"] or panel is None:
             await interaction.response.send_message(
-                embed=embeds.error("Enable Tickets and configure that panel in the dashboard first."),
+                embed=embeds.error(
+                    "Enable Tickets and configure that panel in the dashboard first."
+                ),
                 ephemeral=True,
             )
             return
@@ -4304,11 +4649,16 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         async def _publish(confirmation: discord.Interaction) -> tuple[bool, str]:
             if not _is_mod(confirmation) or confirmation.channel is None:
                 return False, "Manage Server is still required."
-            view = community.PersistentTicketPanel(confirmation.guild_id, panel)
+            view = community.PersistentTicketPanel(
+                typing.cast(typing.Any, confirmation.guild_id), panel
+            )
             try:
-                post = await confirmation.channel.send(
+                post: typing.Any = await typing.cast(typing.Any, confirmation).channel.send(
                     embed=embeds.say(
-                        str(panel.get("description") or "Open a private support ticket.\nYou will complete a short intake form first.")[:4000],
+                        str(
+                            panel.get("description")
+                            or "Open a private support ticket.\nYou will complete a short intake form first."
+                        )[:4000],
                         title=str(panel.get("title") or "Support")[:256],
                     ),
                     view=view,
@@ -4317,15 +4667,23 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             except (discord.Forbidden, discord.HTTPException):
                 return False, "I could not publish the ticket panel in this channel."
             settings = dict(config_state["settings"])
-            panels = []
+            panels: list[typing.Any] = []
             for item in settings.get("panels", [])[:100]:
-                if isinstance(item, dict) and str(item.get("id") or "") == panel_id:
-                    panels.append({**item, "message_id": str(post.id), "channel_id": str(post.channel.id)})
+                if (
+                    isinstance(item, dict)
+                    and str(typing.cast(typing.Any, item).get("id") or "") == panel_id
+                ):
+                    panels.append(
+                        {**item, "message_id": str(post.id), "channel_id": str(post.channel.id)}
+                    )
                 else:
                     panels.append(item)
             settings["panels"] = panels
             db.module_config_set(
-                _guild_id(confirmation), "tickets", enabled=True, settings=settings,
+                _guild_id(confirmation),
+                "tickets",
+                enabled=True,
+                settings=settings,
                 actor_id=str(confirmation.user.id),
             )
             return True, f"Persistent ticket panel published: {post.jump_url}"
@@ -4339,7 +4697,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             parameters={"panel_id": panel_id[:30]},
         )
 
-    @tree.command(name="ticketassign", description="Assign the current tracked ticket to a staff member.")
+    @tree.command(
+        name="ticketassign", description="Assign the current tracked ticket to a staff member."
+    )
     async def ticket_assign_cmd(interaction: discord.Interaction, staff: discord.Member):
         member = interaction.user
         can_manage = bool(
@@ -4348,19 +4708,24 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             and (member.guild_permissions.administrator or member.guild_permissions.manage_channels)
         )
         if not can_manage or interaction.channel_id is None:
-            await interaction.response.send_message(embed=embeds.error("Manage Channels is required."), ephemeral=True)
+            await interaction.response.send_message(
+                embed=embeds.error("Manage Channels is required."), ephemeral=True
+            )
             return
         scope = _guild_id(interaction)
         ticket = next(
             (
-                item for item in db.community_records("ticket", scope, status=None, limit=5_000)
+                item
+                for item in db.community_records("ticket", scope, status=None, limit=5_000)
                 if item.get("record_key") == str(interaction.channel_id)
                 and item["status"] in {"active", "open", "waiting"}
             ),
             None,
         )
         if ticket is None:
-            await interaction.response.send_message(embed=embeds.error("This is not an open tracked ticket channel."), ephemeral=True)
+            await interaction.response.send_message(
+                embed=embeds.error("This is not an open tracked ticket channel."), ephemeral=True
+            )
             return
 
         async def _assign(confirmation: discord.Interaction) -> tuple[bool, str]:
@@ -4370,8 +4735,11 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             ):
                 return False, "Manage Channels is still required."
             try:
-                await confirmation.channel.set_permissions(
-                    staff, view_channel=True, send_messages=True, read_message_history=True,
+                await typing.cast(typing.Any, confirmation).channel.set_permissions(
+                    staff,
+                    view_channel=True,
+                    send_messages=True,
+                    read_message_history=True,
                     reason=f"Ticket assigned by {actor}",
                 )
             except (discord.Forbidden, discord.HTTPException, AttributeError):
@@ -4399,13 +4767,21 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             )
             return
         config_state = db.module_config(_guild_id(interaction), "reaction_roles")
-        menu = next(
-            (
-                item for item in config_state["settings"].get("menus", [])[:100]
-                if isinstance(item, dict)
-                and str(item.get("id") or "default").casefold() == menu_id.casefold()
+        menu: typing.Any = typing.cast(
+            typing.Any,
+            next(
+                (
+                    item
+                    for item in typing.cast(
+                        list[dict[str, typing.Any]],
+                        config_state["settings"].get("menus", []),
+                    )[:100]
+                    if isinstance(item, dict)
+                    and str(typing.cast(typing.Any, item).get("id") or "default").casefold()
+                    == menu_id.casefold()
+                ),
+                None,
             ),
-            None,
         )
         if not config_state["enabled"] or menu is None:
             await interaction.response.send_message(
@@ -4424,9 +4800,11 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             if not _is_mod(confirmation) or confirmation.channel is None:
                 return False, "Manage Server is still required."
             try:
-                post = await confirmation.channel.send(
+                post: typing.Any = await typing.cast(typing.Any, confirmation).channel.send(
                     embed=embeds.say(
-                        str(menu.get("description") or "Choose any roles that apply to you.")[:4000],
+                        str(menu.get("description") or "Choose any roles that apply to you.")[
+                            :4000
+                        ],
                         title=str(menu.get("title") or "Role selection")[:256],
                     ),
                     view=view,
@@ -4435,16 +4813,24 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
             except (discord.Forbidden, discord.HTTPException):
                 return False, "I could not publish the role menu in this channel."
             settings = dict(config_state["settings"])
-            menus = []
+            menus: list[typing.Any] = []
             for item in settings.get("menus", [])[:100]:
-                if isinstance(item, dict) and str(item.get("id") or "") == menu_id:
-                    menus.append({**item, "message_id": str(post.id), "channel_id": str(post.channel.id)})
+                if (
+                    isinstance(item, dict)
+                    and str(typing.cast(typing.Any, item).get("id") or "") == menu_id
+                ):
+                    menus.append(
+                        {**item, "message_id": str(post.id), "channel_id": str(post.channel.id)}
+                    )
                 else:
                     menus.append(item)
             settings["menus"] = menus
             db.module_config_set(
-                _guild_id(confirmation), "reaction_roles", enabled=True,
-                settings=settings, actor_id=str(confirmation.user.id),
+                _guild_id(confirmation),
+                "reaction_roles",
+                enabled=True,
+                settings=settings,
+                actor_id=str(confirmation.user.id),
             )
             return True, f"Persistent role menu published: {post.jump_url}"
 
@@ -4458,9 +4844,7 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         )
 
     @tree.command(name="form", description="Open a configured server form.")
-    async def form_cmd(
-        interaction: discord.Interaction, slug: Optional[str] = None
-    ):
+    async def form_cmd(interaction: discord.Interaction, slug: Optional[str] = None):
         await _run_community_command(interaction, "form", slug or "")
 
     @tree.command(name="ranks", description="List, join, or leave a self-assignable rank.")
@@ -4469,13 +4853,9 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         action: Literal["list", "join", "leave"] = "list",
         name: Optional[str] = None,
     ):
-        await _run_community_command(
-            interaction, "ranks", f"{action} {name or ''}".strip()
-        )
+        await _run_community_command(interaction, "ranks", f"{action} {name or ''}".strip())
 
-    fun_group = app_commands.Group(
-        name="fun", description="Games, media, polls, and information."
-    )
+    fun_group = app_commands.Group(name="fun", description="Games, media, polls, and information.")
 
     @fun_group.command(name="coinflip", description="Flip a coin.")
     async def fun_coinflip(interaction: discord.Interaction):
@@ -4493,12 +4873,8 @@ def setup(client: discord.Client, track: Callable) -> app_commands.CommandTree:
         await _run_community_command(interaction, "rps", choice)
 
     @fun_group.command(name="poll", description="Create a reaction poll.")
-    async def fun_poll(
-        interaction: discord.Interaction, question: str, options: str
-    ):
-        await _run_community_command(
-            interaction, "poll", f"{question} | {options}"
-        )
+    async def fun_poll(interaction: discord.Interaction, question: str, options: str):
+        await _run_community_command(interaction, "poll", f"{question} | {options}")
 
     @fun_group.command(name="cat", description="Show a cat.")
     async def fun_cat(interaction: discord.Interaction):

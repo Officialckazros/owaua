@@ -10,10 +10,11 @@ import logging
 import re
 import secrets
 import time
+import typing
 from collections import defaultdict, deque
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Final
+from typing import Any, Final, TypeAlias
 from urllib.parse import urlencode, urlsplit
 
 from aiohttp import BasicAuth, ClientSession, ClientTimeout, web
@@ -31,7 +32,7 @@ DISCORD_API: Final = "https://discord.com/api/v10"
 DISCORD_GUILDS_JSON_BYTES: Final = 4 * 1024 * 1024
 MANAGE_GUILD_PERMISSIONS: Final = 0x8 | 0x20
 
-GuildProvider = Callable[[], list[dict]]
+GuildProvider: TypeAlias = Callable[[], list[dict[str, Any]]]
 
 _form_attempts: dict[str, deque[float]] = defaultdict(deque)
 log = logging.getLogger(__name__)
@@ -507,6 +508,7 @@ q("#editor-fields").onclick=handleStructuredClick;q("#editor-fields").onchange=h
 q("#case-create").onsubmit=createCase;q("#digest-config").onsubmit=saveDigest;q("#operations-refresh").onclick=()=>loadOperations().catch(e=>notice(e.message,true));q("#operations-source").onchange=()=>loadOperations().catch(e=>notice(e.message,true));q("#operations-search").oninput=()=>{clearTimeout(q("#operations-search").timer);q("#operations-search").timer=setTimeout(()=>loadOperations().catch(e=>notice(e.message,true)),250)};q("#operations-view").onclick=async event=>{try{const caseStatus=event.target.closest("[data-case-status]");if(caseStatus){await caseAction(caseStatus.dataset.caseId,{action:"update",status:caseStatus.dataset.caseStatus});notice("Case timeline updated.");return}const caseAssign=event.target.closest("[data-case-assign]");if(caseAssign){const assigned_to=window.prompt("Staff Discord ID (blank to unassign):","");if(assigned_to!==null){await caseAction(caseAssign.dataset.caseId,{action:"update",assigned_to:assigned_to.trim()});notice("Case assignment updated.")}return}const caseNote=event.target.closest("[data-case-note]");if(caseNote){const note=window.prompt("Private staff note:","");if(note?.trim()){await caseAction(caseNote.dataset.caseId,{action:"note",note:note.trim()});notice("Private note added.")}return}const incidentStatus=event.target.closest("[data-incident-status]");if(incidentStatus){await incidentAction(incidentStatus.dataset.incidentId,{status:incidentStatus.dataset.incidentStatus});notice("Incident status updated.");return}const incidentAssign=event.target.closest("[data-incident-assign]");if(incidentAssign){const assigned_to=window.prompt("Staff Discord ID (blank to unassign):","");if(assigned_to!==null){await incidentAction(incidentAssign.dataset.incidentId,{assigned_to:assigned_to.trim()});notice("Incident assignment updated.")}}}catch(e){notice(e.message,true)}};boot();
 """
 
+
 def _client_key(request: web.Request) -> str:
     return request.remote or "unknown"
 
@@ -526,21 +528,23 @@ def _sign(secret: bytes, payload: str) -> str:
     return hmac.new(secret, payload.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-def _signed_payload(secret: bytes, value: dict) -> str:
+def _signed_payload(secret: bytes, value: dict[typing.Any, typing.Any]) -> str:
     payload = json.dumps(value, separators=(",", ":"), sort_keys=True)
     encoded = payload.encode("utf-8").hex()
     return f"{encoded}.{_sign(secret, encoded)}"
 
 
-def _decode_payload(secret: bytes, raw: str) -> dict | None:
+def _decode_payload(secret: bytes, raw: str) -> dict[typing.Any, typing.Any] | None:
     try:
         encoded, signature = raw.rsplit(".", 1)
         if not hmac.compare_digest(signature, _sign(secret, encoded)):
             return None
         value = json.loads(bytes.fromhex(encoded).decode("utf-8"))
-        if not isinstance(value, dict) or int(value.get("exp", 0)) <= int(time.time()):
+        if not isinstance(value, dict) or int(typing.cast(typing.Any, value).get("exp", 0)) <= int(
+            time.time()
+        ):
             return None
-        return value
+        return typing.cast(typing.Any, value)
     except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
         return None
 
@@ -562,14 +566,16 @@ def _new_session(
     return _signed_payload(secret, payload), csrf
 
 
-def _session(request: web.Request, secret: bytes) -> dict | None:
+def _session(request: web.Request, secret: bytes) -> dict[typing.Any, typing.Any] | None:
     value = _decode_payload(secret, request.cookies.get(SESSION_COOKIE, ""))
     if value is None or not str(value.get("actor", "")) or not str(value.get("csrf", "")):
         return None
     return value
 
 
-async def _read_provider_json(response: object, limit: int = 1_000_000) -> dict | list | None:
+async def _read_provider_json(
+    response: object, limit: int = 1_000_000
+) -> dict[typing.Any, typing.Any] | list[typing.Any] | None:
     content = getattr(response, "content", None)
     if content is None:
         return None
@@ -587,20 +593,24 @@ async def _read_provider_json(response: object, limit: int = 1_000_000) -> dict 
         value = json.loads(body)
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
-    return value if isinstance(value, (dict, list)) else None
+    return typing.cast(typing.Any, value if isinstance(value, (dict, list)) else None)
 
 
 def _provider_error_code(payload: object) -> str:
     """Return a log-safe provider error identifier without response details."""
     if not isinstance(payload, dict):
         return "unknown"
-    value = str(payload.get("error") or payload.get("code") or "unknown")
+    value = str(
+        typing.cast(typing.Any, payload).get("error")
+        or typing.cast(typing.Any, payload).get("code")
+        or "unknown"
+    )
     return value if re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", value) else "unknown"
 
 
 async def _discord_identity(
     auth: DashboardAuthConfig, code: str
-) -> tuple[dict, list[dict]] | None:
+) -> tuple[dict[typing.Any, typing.Any], list[dict[typing.Any, typing.Any]]] | None:
     if not auth.ready() or not 10 <= len(code) <= 2048:
         log.warning("Discord OAuth rejected invalid local configuration or code shape")
         return None
@@ -652,9 +662,7 @@ async def _discord_identity(
                 f"{DISCORD_API}/users/@me/guilds?with_counts=false&limit=200",
                 headers=headers,
             ) as response:
-                guilds = await _read_provider_json(
-                    response, limit=DISCORD_GUILDS_JSON_BYTES
-                )
+                guilds = await _read_provider_json(response, limit=DISCORD_GUILDS_JSON_BYTES)
                 if response.status != 200 or not isinstance(guilds, list):
                     log.warning(
                         "Discord OAuth %s request failed (status=%s error=%s)",
@@ -700,71 +708,91 @@ def attach_dashboard_routes(
     """Attach dashboard UI and JSON API to an aiohttp application."""
     auth = auth_config or DashboardAuthConfig()
     auth_ready = auth.ready()
-    secret = hashlib.sha256(
-        ("owaua-dashboard:" + auth.session_secret).encode("utf-8")
-    ).digest()
-    provider = guild_provider or (lambda: [])
+    secret = hashlib.sha256(("owaua-dashboard:" + auth.session_secret).encode("utf-8")).digest()
+    provider: GuildProvider = guild_provider or (lambda: [])
 
-    def authenticated(request: web.Request) -> dict | None:
+    def authenticated(request: web.Request) -> dict[typing.Any, typing.Any] | None:
         return _session(request, secret) if auth_ready else None
 
-    def require_session(request: web.Request) -> dict:
+    def require_session(request: web.Request) -> dict[typing.Any, typing.Any]:
         session = authenticated(request)
         if session is None or not session.get("discord_id"):
             raise web.HTTPUnauthorized(text="authentication required")
         return session
 
-    def require_csrf(request: web.Request, session: dict) -> None:
+    def require_csrf(request: web.Request, session: dict[typing.Any, typing.Any]) -> None:
         supplied = request.headers.get("X-CSRF-Token", "")
         expected = str(session.get("csrf", ""))
         if not expected or not hmac.compare_digest(supplied, expected):
             raise web.HTTPForbidden(text="invalid CSRF token")
 
-    def all_guilds() -> list[dict]:
+    def all_guilds() -> list[dict[typing.Any, typing.Any]]:
         try:
-            raw = provider()
+            raw: typing.Any = provider()
         except Exception:
-            raw = []
-        output = []
+            raw: list[typing.Any] = []
+        output: list[typing.Any] = []
         for item in raw[:500] if isinstance(raw, list) else []:
-            if not isinstance(item, dict) or not str(item.get("id", "")).isdigit():
+            if (
+                not isinstance(item, dict)
+                or not str(typing.cast(typing.Any, item).get("id", "")).isdigit()
+            ):
                 continue
-            output.append({
-                "id": str(item["id"]), "name": str(item.get("name") or item["id"])[:100],
-                "icon": str(item.get("icon") or "")[:500],
-                "member_count": max(0, int(item.get("member_count") or 0)),
-                "everyone_permissions": max(0, int(item.get("everyone_permissions") or 0)),
-                "bot_permissions": max(0, int(item.get("bot_permissions") or 0)),
-                "members": item.get("members") if isinstance(item.get("members"), list) else [],
-                "manager_ids": (
-                    [str(value) for value in item.get("manager_ids", [])[:10_000] if str(value).isdigit()]
-                    if isinstance(item.get("manager_ids"), list) else None
-                ),
-                "channels": item.get("channels") if isinstance(item.get("channels"), list) else [],
-                "roles": item.get("roles") if isinstance(item.get("roles"), list) else [],
-            })
+            output.append(
+                {
+                    "id": str(typing.cast(typing.Any, item["id"])),
+                    "name": str(
+                        typing.cast(
+                            typing.Any, typing.cast(typing.Any, item).get("name") or item["id"]
+                        )
+                    )[:100],
+                    "icon": str(typing.cast(typing.Any, item).get("icon") or "")[:500],
+                    "member_count": max(
+                        0, int(typing.cast(typing.Any, item).get("member_count") or 0)
+                    ),
+                    "everyone_permissions": max(
+                        0, int(typing.cast(typing.Any, item).get("everyone_permissions") or 0)
+                    ),
+                    "bot_permissions": max(
+                        0, int(typing.cast(typing.Any, item).get("bot_permissions") or 0)
+                    ),
+                    "members": typing.cast(typing.Any, item).get("members")
+                    if isinstance(typing.cast(typing.Any, item).get("members"), list)
+                    else [],
+                    "manager_ids": (
+                        [
+                            str(value)
+                            for value in typing.cast(typing.Any, item).get("manager_ids", [])[
+                                :10_000
+                            ]
+                            if str(value).isdigit()
+                        ]
+                        if isinstance(typing.cast(typing.Any, item).get("manager_ids"), list)
+                        else None
+                    ),
+                    "channels": typing.cast(typing.Any, item).get("channels")
+                    if isinstance(typing.cast(typing.Any, item).get("channels"), list)
+                    else [],
+                    "roles": typing.cast(typing.Any, item).get("roles")
+                    if isinstance(typing.cast(typing.Any, item).get("roles"), list)
+                    else [],
+                }
+            )
         return output
 
-    def guilds(session: dict) -> list[dict]:
+    def guilds(session: dict[typing.Any, typing.Any]) -> list[dict[typing.Any, typing.Any]]:
         available = all_guilds()
-        allowed = {
-            str(value) for value in session.get("guild_ids", [])
-            if str(value).isdigit()
-        }
+        allowed = {str(value) for value in session.get("guild_ids", []) if str(value).isdigit()}
         return [item for item in available if item["id"] in allowed]
 
-    def public_guild(guild: dict) -> dict:
+    def public_guild(guild: dict[typing.Any, typing.Any]) -> dict[typing.Any, typing.Any]:
         """Return only configuration-picker metadata, never the member roster."""
-        return {
-            key: value
-            for key, value in guild.items()
-            if key not in {"members", "manager_ids"}
-        }
+        return {key: value for key, value in guild.items() if key not in {"members", "manager_ids"}}
 
-    def require_guild(session: dict, guild_id: str) -> dict:
-        match = next(
-            (item for item in guilds(session) if item["id"] == str(guild_id)), None
-        )
+    def require_guild(
+        session: dict[typing.Any, typing.Any], guild_id: str
+    ) -> dict[typing.Any, typing.Any]:
+        match = next((item for item in guilds(session) if item["id"] == str(guild_id)), None)
         if match is None:
             raise web.HTTPNotFound(text="server is not available to this account")
         manager_ids = match.get("manager_ids")
@@ -772,17 +800,13 @@ def attach_dashboard_routes(
             raise web.HTTPForbidden(text="Manage Server permission is no longer available")
         return match
 
-    def require_connected_guild(guild_id: str) -> dict:
-        match = next(
-            (item for item in all_guilds() if item["id"] == str(guild_id)), None
-        )
+    def require_connected_guild(guild_id: str) -> dict[typing.Any, typing.Any]:
+        match = next((item for item in all_guilds() if item["id"] == str(guild_id)), None)
         if match is None:
             raise web.HTTPNotFound(text="server is not connected")
         return match
 
-    def set_session_cookie(
-        response: web.StreamResponse, request: web.Request, value: str
-    ) -> None:
+    def set_session_cookie(response: web.StreamResponse, request: web.Request, value: str) -> None:
         response.set_cookie(
             SESSION_COOKIE,
             value,
@@ -863,9 +887,7 @@ def attach_dashboard_routes(
                 "prompt": "consent",
             }
         )
-        response = web.HTTPSeeOther(
-            location=f"https://discord.com/oauth2/authorize?{query}"
-        )
+        response = web.HTTPSeeOther(location=f"https://discord.com/oauth2/authorize?{query}")
         response.set_cookie(
             AUTH_NONCE_COOKIE,
             nonce,
@@ -881,9 +903,7 @@ def attach_dashboard_routes(
         if not auth_ready:
             raise web.HTTPServiceUnavailable(text="Discord sign-in is not configured")
         if request.query.get("error"):
-            response = web.HTTPSeeOther(
-                location=DASHBOARD_PREFIX + "?auth=discord_cancelled"
-            )
+            response = web.HTTPSeeOther(location=DASHBOARD_PREFIX + "?auth=discord_cancelled")
             response.del_cookie(AUTH_NONCE_COOKIE, path=DASHBOARD_PREFIX)
             raise response
         state = _decode_payload(secret, str(request.query.get("state") or ""))
@@ -896,14 +916,12 @@ def attach_dashboard_routes(
             raise web.HTTPForbidden(text="invalid Discord OAuth state")
         identity = await _discord_identity(auth, str(request.query.get("code") or ""))
         if identity is None:
-            response = web.HTTPSeeOther(
-                location=DASHBOARD_PREFIX + "?auth=discord_failed"
-            )
+            response = web.HTTPSeeOther(location=DASHBOARD_PREFIX + "?auth=discord_failed")
             response.del_cookie(AUTH_NONCE_COOKIE, path=DASHBOARD_PREFIX)
             raise response
         user, discord_guilds = identity
         connected = {item["id"] for item in all_guilds()}
-        manageable = []
+        manageable: list[typing.Any] = []
         for item in discord_guilds:
             guild_id = str(item.get("id") or "")
             try:
@@ -957,25 +975,27 @@ def attach_dashboard_routes(
 
     async def guilds_api(request: web.Request) -> web.Response:
         session = require_session(request)
-        return web.json_response({
-            "guilds": [public_guild(item) for item in guilds(session)]
-        })
+        return web.json_response({"guilds": [public_guild(item) for item in guilds(session)]})
 
     async def modules_api(request: web.Request) -> web.Response:
         session = require_session(request)
         guild = require_guild(session, request.match_info["guild_id"])
-        return web.json_response({
-            "guild": public_guild(guild),
-            "modules": db.module_configs(guild["id"]),
-        })
+        return web.json_response(
+            {
+                "guild": public_guild(guild),
+                "modules": db.module_configs(guild["id"]),
+            }
+        )
 
     async def settings_api(request: web.Request) -> web.Response:
         session = require_session(request)
         guild = require_guild(session, request.match_info["guild_id"])
-        return web.json_response({
-            "guild": public_guild(guild),
-            "settings": db.guild_settings(guild["id"]),
-        })
+        return web.json_response(
+            {
+                "guild": public_guild(guild),
+                "settings": db.guild_settings(guild["id"]),
+            }
+        )
 
     async def ai_health_api(request: web.Request) -> web.Response:
         session = require_session(request)
@@ -990,9 +1010,13 @@ def attach_dashboard_routes(
             payload = await request.json()
         except (json.JSONDecodeError, ValueError):
             raise web.HTTPBadRequest(text="invalid JSON") from None
-        if not isinstance(payload, dict) or not isinstance(payload.get("settings"), dict):
+        if not isinstance(payload, dict) or not isinstance(
+            typing.cast(typing.Any, payload).get("settings"), dict
+        ):
             raise web.HTTPBadRequest(text="settings must be an object")
-        requested_language = str(payload["settings"].get("language") or "").strip()
+        requested_language = str(
+            typing.cast(typing.Any, payload["settings"]).get("language") or ""
+        ).strip()
         if requested_language and multilingual.coerce(requested_language) is None:
             raise web.HTTPBadRequest(
                 text="language must be a real name or locale code (up to six words)"
@@ -1003,12 +1027,14 @@ def attach_dashboard_routes(
             config.MODEL_BIG,
             *(model_id for model_id, _label in config.GROQ_CHAT_MODELS),
         }
-        requested_model = payload["settings"].get("model", "")
+        requested_model: typing.Any = typing.cast(typing.Any, payload["settings"]).get("model", "")
         if requested_model not in allowed_models:
             raise web.HTTPBadRequest(text="model is not available")
         try:
             result = db.dashboard_guild_settings_set(
-                guild["id"], payload["settings"], actor_id=str(session["actor"])
+                guild["id"],
+                typing.cast(typing.Any, payload["settings"]),
+                actor_id=str(session["actor"]),
             )
         except ValueError as error:
             raise web.HTTPBadRequest(text=str(error)) from None
@@ -1033,25 +1059,47 @@ def attach_dashboard_routes(
             payload = await request.json()
         except (json.JSONDecodeError, ValueError):
             raise web.HTTPBadRequest(text="invalid JSON") from None
-        texts = payload.get("texts") if isinstance(payload, dict) else None
+        texts: typing.Any = typing.cast(
+            typing.Any,
+            typing.cast(typing.Any, payload).get("texts") if isinstance(payload, dict) else None,
+        )
         if (
             not isinstance(texts, list)
-            or len(texts) > 96
-            or any(not isinstance(item, str) or len(item) > 2000 for item in texts)
-            or sum(len(item) for item in texts if isinstance(item, str)) > 30_000
+            or len(typing.cast(typing.Any, texts)) > 96
+            or any(
+                not isinstance(item, str) or len(item) > 2000
+                for item in typing.cast(typing.Iterable[typing.Any], texts)
+            )
+            or sum(
+                len(item)
+                for item in typing.cast(typing.Iterable[typing.Any], texts)
+                if isinstance(item, str)
+            )
+            > 30_000
         ):
             raise web.HTTPBadRequest(text="texts must be a bounded string list")
-        unique = list(dict.fromkeys(item.strip() for item in texts if item.strip()))
+        unique: typing.Any = typing.cast(
+            typing.Any,
+            list(
+                dict.fromkeys(
+                    item.strip()
+                    for item in typing.cast(typing.Iterable[typing.Any], texts)
+                    if item.strip()
+                )
+            ),
+        )
         translated = await multilingual.translate_many(
             unique,
-            language.label,
+            typing.cast(typing.Any, language).label,
             scope_id=Scope.guild(guild["id"]).key,
             user_id=str(session["discord_id"]),
         )
-        return web.json_response({
-            "language": language.label,
-            "translations": dict(zip(unique, translated)),
-        })
+        return web.json_response(
+            {
+                "language": typing.cast(typing.Any, language).label,
+                "translations": dict(zip(unique, translated)),
+            }
+        )
 
     async def update_module_api(request: web.Request) -> web.Response:
         session = require_session(request)
@@ -1064,12 +1112,18 @@ def attach_dashboard_routes(
             payload = await request.json()
         except (json.JSONDecodeError, ValueError):
             raise web.HTTPBadRequest(text="invalid JSON") from None
-        if not isinstance(payload, dict) or not isinstance(payload.get("enabled"), bool):
+        if not isinstance(payload, dict) or not isinstance(
+            typing.cast(typing.Any, payload).get("enabled"), bool
+        ):
             raise web.HTTPBadRequest(text="enabled must be a boolean")
         try:
             result = db.module_config_set(
-                guild["id"], module, enabled=payload["enabled"],
-                settings=payload.get("settings") if isinstance(payload.get("settings"), dict) else {},
+                guild["id"],
+                module,
+                enabled=typing.cast(typing.Any, payload["enabled"]),
+                settings=typing.cast(typing.Any, payload).get("settings")
+                if isinstance(typing.cast(typing.Any, payload).get("settings"), dict)
+                else {},
                 actor_id=str(session["actor"]),
             )
         except ValueError as error:
@@ -1091,22 +1145,31 @@ def attach_dashboard_routes(
         assigned_to = str(request.query.get("assigned_to") or "") or None
         try:
             cases = staffops.search_cases(
-                guild["id"], query=query, status=case_status,
-                assigned_to=assigned_to, limit=250,
+                guild["id"],
+                query=query,
+                status=case_status,
+                assigned_to=assigned_to,
+                limit=250,
             )
             incidents = staffops.incident_center(
-                guild["id"], query=query, status=incident_status,
-                source=source, assigned_to=assigned_to, limit=250,
+                guild["id"],
+                query=query,
+                status=incident_status,
+                source=source,
+                assigned_to=assigned_to,
+                limit=250,
             )
         except ValueError as error:
             raise web.HTTPBadRequest(text=str(error)) from None
-        return web.json_response({
-            "cases": cases,
-            "incidents": incidents,
-            "health": staffops.server_health(guild["id"], guild),
-            "digest": staffops.digest_preview(guild["id"]),
-            "retention": staffops.retention_inventory(guild["id"]),
-        })
+        return web.json_response(
+            {
+                "cases": cases,
+                "incidents": incidents,
+                "health": staffops.server_health(guild["id"], guild),
+                "digest": staffops.digest_preview(guild["id"]),
+                "retention": staffops.retention_inventory(guild["id"]),
+            }
+        )
 
     async def create_case_api(request: web.Request) -> web.Response:
         session = require_session(request)
@@ -1118,27 +1181,40 @@ def attach_dashboard_routes(
             raise web.HTTPBadRequest(text="invalid JSON") from None
         if not isinstance(payload, dict):
             raise web.HTTPBadRequest(text="case must be an object")
-        member_ids = {str(item.get("id")) for item in guild.get("members", []) if isinstance(item, dict)}
-        if payload.get("assigned_to") and str(payload.get("assigned_to")) not in member_ids:
+        member_ids = {
+            str(typing.cast(typing.Any, item).get("id"))
+            for item in guild.get("members", [])
+            if isinstance(item, dict)
+        }
+        if (
+            typing.cast(typing.Any, payload).get("assigned_to")
+            and str(typing.cast(typing.Any, payload).get("assigned_to")) not in member_ids
+        ):
             raise web.HTTPBadRequest(text="assignee must be a current server member")
         try:
             item = staffops.create_case(
                 guild["id"],
                 actor_id=str(session["actor"]),
-                subject_id=payload.get("subject_id"),
-                category=payload.get("category"),
-                reason=payload.get("reason"),
-                severity=payload.get("severity") or "medium",
-                evidence_links=payload.get("evidence_links"),
-                expires_at=payload.get("expires_at"),
-                assigned_to=payload.get("assigned_to"),
+                subject_id=typing.cast(typing.Any, payload).get("subject_id"),
+                category=typing.cast(typing.Any, payload).get("category"),
+                reason=typing.cast(typing.Any, payload).get("reason"),
+                severity=typing.cast(typing.Any, payload).get("severity") or "medium",
+                evidence_links=typing.cast(typing.Any, payload).get("evidence_links"),
+                expires_at=typing.cast(typing.Any, payload).get("expires_at"),
+                assigned_to=typing.cast(typing.Any, payload).get("assigned_to"),
                 source="dashboard",
             )
         except ValueError as error:
             raise web.HTTPBadRequest(text=str(error)) from None
         db.dashboard_audit_record(
-            guild["id"], actor_id=str(session["actor"]), action="case.created",
-            module="moderation", detail={"case_id": item.get("id"), "subject_id": str(payload.get("subject_id") or "")},
+            guild["id"],
+            actor_id=str(session["actor"]),
+            action="case.created",
+            module="moderation",
+            detail={
+                "case_id": item.get("id"),
+                "subject_id": str(typing.cast(typing.Any, payload).get("subject_id") or ""),
+            },
         )
         return web.json_response({"case": item}, status=201)
 
@@ -1153,9 +1229,16 @@ def attach_dashboard_routes(
             raise web.HTTPBadRequest(text="invalid case action") from None
         if not isinstance(payload, dict):
             raise web.HTTPBadRequest(text="action must be an object")
-        action = str(payload.get("action") or "").lower()
-        member_ids = {str(item.get("id")) for item in guild.get("members", []) if isinstance(item, dict)}
-        if payload.get("assigned_to") and str(payload.get("assigned_to")) not in member_ids:
+        action = str(typing.cast(typing.Any, payload).get("action") or "").lower()
+        member_ids = {
+            str(typing.cast(typing.Any, item).get("id"))
+            for item in guild.get("members", [])
+            if isinstance(item, dict)
+        }
+        if (
+            typing.cast(typing.Any, payload).get("assigned_to")
+            and str(typing.cast(typing.Any, payload).get("assigned_to")) not in member_ids
+        ):
             raise web.HTTPBadRequest(text="assignee must be a current server member")
         try:
             if action == "note":
@@ -1163,25 +1246,35 @@ def attach_dashboard_routes(
                 if case is None:
                     raise ValueError("case not found")
                 staffops.add_member_note(
-                    guild["id"], actor_id=str(session["actor"]),
-                    subject_id=str(case["subject_id"]), note=payload.get("note"),
+                    guild["id"],
+                    actor_id=str(session["actor"]),
+                    subject_id=str(case["subject_id"]),
+                    note=typing.cast(typing.Any, payload).get("note"),
                     case_id=case_id,
                 )
                 item = staffops.get_case(guild["id"], case_id)
             elif action == "update":
                 item = staffops.update_case(
-                    guild["id"], case_id, actor_id=str(session["actor"]),
-                    status=payload.get("status"), assigned_to=payload.get("assigned_to"),
-                    appeal_status=payload.get("appeal_status"),
-                    expires_at=payload.get("expires_at") if "expires_at" in payload else None,
+                    guild["id"],
+                    case_id,
+                    actor_id=str(session["actor"]),
+                    status=typing.cast(typing.Any, payload).get("status"),
+                    assigned_to=typing.cast(typing.Any, payload).get("assigned_to"),
+                    appeal_status=typing.cast(typing.Any, payload).get("appeal_status"),
+                    expires_at=typing.cast(typing.Any, payload).get("expires_at")
+                    if "expires_at" in payload
+                    else None,
                 )
             else:
                 raise ValueError("unknown case action")
         except ValueError as error:
             raise web.HTTPBadRequest(text=str(error)) from None
         db.dashboard_audit_record(
-            guild["id"], actor_id=str(session["actor"]), action=f"case.{action}",
-            module="moderation", detail={"case_id": case_id},
+            guild["id"],
+            actor_id=str(session["actor"]),
+            action=f"case.{action}",
+            module="moderation",
+            detail={"case_id": case_id},
         )
         return web.json_response({"case": item})
 
@@ -1196,19 +1289,32 @@ def attach_dashboard_routes(
             raise web.HTTPBadRequest(text="invalid incident action") from None
         if not isinstance(payload, dict):
             raise web.HTTPBadRequest(text="action must be an object")
-        member_ids = {str(item.get("id")) for item in guild.get("members", []) if isinstance(item, dict)}
-        if payload.get("assigned_to") and str(payload.get("assigned_to")) not in member_ids:
+        member_ids = {
+            str(typing.cast(typing.Any, item).get("id"))
+            for item in guild.get("members", [])
+            if isinstance(item, dict)
+        }
+        if (
+            typing.cast(typing.Any, payload).get("assigned_to")
+            and str(typing.cast(typing.Any, payload).get("assigned_to")) not in member_ids
+        ):
             raise web.HTTPBadRequest(text="assignee must be a current server member")
         try:
             item = staffops.update_incident(
-                guild["id"], incident_id, actor_id=str(session["actor"]),
-                status=payload.get("status"), assigned_to=payload.get("assigned_to"),
+                guild["id"],
+                incident_id,
+                actor_id=str(session["actor"]),
+                status=typing.cast(typing.Any, payload).get("status"),
+                assigned_to=typing.cast(typing.Any, payload).get("assigned_to"),
             )
         except ValueError as error:
             raise web.HTTPBadRequest(text=str(error)) from None
         db.dashboard_audit_record(
-            guild["id"], actor_id=str(session["actor"]), action="incident.updated",
-            module="incident_center", detail={"incident_id": incident_id, "status": item.get("status")},
+            guild["id"],
+            actor_id=str(session["actor"]),
+            action="incident.updated",
+            module="incident_center",
+            detail={"incident_id": incident_id, "status": item.get("status")},
         )
         return web.json_response({"incident": item})
 
@@ -1220,17 +1326,28 @@ def attach_dashboard_routes(
             payload = await request.json()
         except (json.JSONDecodeError, ValueError):
             raise web.HTTPBadRequest(text="invalid JSON") from None
-        if not isinstance(payload, dict) or not isinstance(payload.get("enabled"), bool):
+        if not isinstance(payload, dict) or not isinstance(
+            typing.cast(typing.Any, payload).get("enabled"), bool
+        ):
             raise web.HTTPBadRequest(text="digest configuration is invalid")
-        channel_ids = {str(item.get("id")) for item in guild.get("channels", []) if isinstance(item, dict)}
-        if str(payload.get("channel_id") or "") not in channel_ids:
+        channel_ids = {
+            str(typing.cast(typing.Any, item).get("id"))
+            for item in guild.get("channels", [])
+            if isinstance(item, dict)
+        }
+        if str(typing.cast(typing.Any, payload).get("channel_id") or "") not in channel_ids:
             raise web.HTTPBadRequest(text="delivery channel must belong to this server")
         try:
             item = staffops.configure_digest(
-                guild["id"], actor_id=str(session["actor"]),
-                cadence=payload.get("cadence"), channel_id=payload.get("channel_id"),
-                visibility=payload.get("visibility"), enabled=payload["enabled"],
-                sections=payload.get("sections") if isinstance(payload.get("sections"), list) else None,
+                guild["id"],
+                actor_id=str(session["actor"]),
+                cadence=typing.cast(typing.Any, payload).get("cadence"),
+                channel_id=typing.cast(typing.Any, payload).get("channel_id"),
+                visibility=typing.cast(typing.Any, payload).get("visibility"),
+                enabled=typing.cast(typing.Any, payload["enabled"]),
+                sections=typing.cast(typing.Any, payload).get("sections")
+                if isinstance(typing.cast(typing.Any, payload).get("sections"), list)
+                else None,
             )
         except ValueError as error:
             raise web.HTTPBadRequest(text=str(error)) from None
@@ -1242,7 +1359,9 @@ def attach_dashboard_routes(
         response = web.Response(
             text=staffops.analytics_csv(guild["id"]),
             content_type="text/csv",
-            headers={"Content-Disposition": f'attachment; filename="owaua-{guild["id"]}-aggregate.csv"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="owaua-{guild["id"]}-aggregate.csv"'
+            },
         )
         _dashboard_headers(response)
         return response
@@ -1252,22 +1371,27 @@ def attach_dashboard_routes(
         guild = require_guild(session, request.match_info["guild_id"])
         members = [
             {
-                "id": str(item.get("id")),
-                "name": str(item.get("name") or item.get("id"))[:100],
-                "boosting": bool(item.get("boosting")),
+                "id": str(typing.cast(typing.Any, item).get("id")),
+                "name": str(
+                    typing.cast(typing.Any, item).get("name")
+                    or typing.cast(typing.Any, item).get("id")
+                )[:100],
+                "boosting": bool(typing.cast(typing.Any, item).get("boosting")),
             }
             for item in guild.get("members", [])[:10_000]
-            if isinstance(item, dict) and str(item.get("id", "")).isdigit()
+            if isinstance(item, dict) and str(typing.cast(typing.Any, item).get("id", "")).isdigit()
         ]
         names = {item["id"]: item["name"] for item in members}
         records = db.booster_members(guild["id"], limit=10_000)
         for record in records:
             record["name"] = names.get(str(record["user_id"]), "")
-        return web.json_response({
-            "stats": db.booster_stats(guild["id"]),
-            "records": records,
-            "members": members,
-        })
+        return web.json_response(
+            {
+                "stats": db.booster_stats(guild["id"]),
+                "records": records,
+                "members": members,
+            }
+        )
 
     async def booster_action_api(request: web.Request) -> web.Response:
         session = require_session(request)
@@ -1279,13 +1403,14 @@ def attach_dashboard_routes(
             raise web.HTTPBadRequest(text="invalid JSON") from None
         if not isinstance(payload, dict):
             raise web.HTTPBadRequest(text="action must be an object")
-        action = str(payload.get("action") or "").strip().lower()
+        action = str(typing.cast(typing.Any, payload).get("action") or "").strip().lower()
         if action not in {"adjust", "sync", "test"}:
             raise web.HTTPBadRequest(text="unknown booster action")
-        target_id = str(payload.get("target_id") or "").strip()
+        target_id = str(typing.cast(typing.Any, payload).get("target_id") or "").strip()
         member_ids = {
-            str(item.get("id")) for item in guild.get("members", [])
-            if isinstance(item, dict) and str(item.get("id", "")).isdigit()
+            str(typing.cast(typing.Any, item).get("id"))
+            for item in guild.get("members", [])
+            if isinstance(item, dict) and str(typing.cast(typing.Any, item).get("id", "")).isdigit()
         }
         if action in {"adjust", "test"} and (
             not target_id.isdigit() or target_id not in member_ids
@@ -1293,7 +1418,7 @@ def attach_dashboard_routes(
             raise web.HTTPBadRequest(text="choose a current server member")
         actor = str(session["actor"])
         if action == "adjust":
-            delta = payload.get("delta")
+            delta: typing.Any = typing.cast(typing.Any, payload).get("delta")
             if isinstance(delta, bool) or not isinstance(delta, int) or delta == 0:
                 raise web.HTTPBadRequest(text="delta must be a non-zero whole number")
             if not -10_000 <= delta <= 10_000:
@@ -1307,7 +1432,10 @@ def attach_dashboard_routes(
                 due=db.now(),
             )
             db.dashboard_audit_record(
-                guild["id"], actor_id=actor, action="booster.adjusted", module="boosters",
+                guild["id"],
+                actor_id=actor,
+                action="booster.adjusted",
+                module="boosters",
                 detail={"target_id": target_id, "delta": delta},
             )
             return web.json_response({"message": "Booster count corrected.", "record": record})
@@ -1319,28 +1447,39 @@ def attach_dashboard_routes(
             due=db.now(),
         )
         db.dashboard_audit_record(
-            guild["id"], actor_id=actor, action=f"booster.{action}.queued",
-            module="boosters", detail={"target_id": target_id},
+            guild["id"],
+            actor_id=actor,
+            action=f"booster.{action}.queued",
+            module="boosters",
+            detail={"target_id": target_id},
         )
         return web.json_response(
-            {"message": "Booster synchronization queued." if action == "sync" else "Test greeting queued."},
+            {
+                "message": "Booster synchronization queued."
+                if action == "sync"
+                else "Test greeting queued."
+            },
             status=202,
         )
 
-    def configured_form(guild_id: str, slug: str) -> tuple[dict, dict] | None:
+    def configured_form(
+        guild_id: str, slug: str
+    ) -> tuple[dict[typing.Any, typing.Any], dict[typing.Any, typing.Any]] | None:
         config = db.module_config(guild_id, "forms")
         if not config["enabled"]:
             return None
         for item in config["settings"].get("forms", [])[:100]:
             if (
                 isinstance(item, dict)
-                and item.get("enabled", True) is not False
-                and str(item.get("slug") or "").lower() == slug.lower()
+                and typing.cast(typing.Any, item).get("enabled", True) is not False
+                and str(typing.cast(typing.Any, item).get("slug") or "").lower() == slug.lower()
             ):
-                return config, item
+                return config, typing.cast(dict[typing.Any, typing.Any], item)
         return None
 
-    def form_access(guild_id: str, form: dict, token_value: str) -> dict | None:
+    def form_access(
+        guild_id: str, form: dict[typing.Any, typing.Any], token_value: str
+    ) -> dict[typing.Any, typing.Any] | None:
         if not form.get("members_only"):
             return None
         if not token_value:
@@ -1348,7 +1487,8 @@ def attach_dashboard_routes(
         records = db.community_records("form_access", f"guild:{guild_id}", limit=5000)
         access = next(
             (
-                item for item in records
+                item
+                for item in records
                 if item.get("record_key") == token_value
                 and item["data"].get("form_slug") == form.get("slug")
                 and float(item.get("due") or 0) > time.time()
@@ -1359,15 +1499,19 @@ def attach_dashboard_routes(
             raise web.HTTPForbidden(text="This form link is invalid or expired.")
         return access
 
-    def form_document(guild_id: str, form: dict, token_value: str) -> str:
-        fields = []
+    def form_document(guild_id: str, form: dict[typing.Any, typing.Any], token_value: str) -> str:
+        fields: list[typing.Any] = []
         for index, question in enumerate(form.get("questions", [])[:50]):
             if not isinstance(question, dict):
                 continue
-            qid = re.sub(r"[^a-zA-Z0-9_-]", "", str(question.get("id") or index))[:40]
-            label = html.escape(str(question.get("label") or f"Question {index + 1}")[:300])
-            required = " required" if question.get("required") else ""
-            kind = str(question.get("type") or "short")
+            qid = re.sub(
+                r"[^a-zA-Z0-9_-]", "", str(typing.cast(typing.Any, question).get("id") or index)
+            )[:40]
+            label = html.escape(
+                str(typing.cast(typing.Any, question).get("label") or f"Question {index + 1}")[:300]
+            )
+            required = " required" if typing.cast(typing.Any, question).get("required") else ""
+            kind = str(typing.cast(typing.Any, question).get("type") or "short")
             name = f"q_{qid}"
             if kind == "paragraph":
                 control = f'<textarea name="{name}" maxlength="4000"{required}></textarea>'
@@ -1375,7 +1519,7 @@ def attach_dashboard_routes(
                 input_type = "radio" if kind == "multiple_choice" else "checkbox"
                 options = "".join(
                     f'<label class="option"><input type="{input_type}" name="{name}" value="{html.escape(str(option)[:300], quote=True)}"{required}> {html.escape(str(option)[:300])}</label>'
-                    for option in question.get("options", [])[:30]
+                    for option in typing.cast(typing.Any, question).get("options", [])[:30]
                 )
                 control = f'<div class="option-list">{options}</div>'
             else:
@@ -1414,31 +1558,49 @@ def attach_dashboard_routes(
         token_value = str(body.get("access_token") or "")[:200]
         access = form_access(guild["id"], form, token_value)
         user_id = str(access.get("user_id")) if access and access.get("user_id") else None
-        existing = db.community_records(
-            "form_submission", f"guild:{guild['id']}", user_id=user_id, status=None, limit=5000
-        ) if user_id else []
+        existing = (
+            db.community_records(
+                "form_submission", f"guild:{guild['id']}", user_id=user_id, status=None, limit=5000
+            )
+            if user_id
+            else []
+        )
         same_form = [item for item in existing if item["data"].get("form_slug") == form.get("slug")]
         if form.get("one_submission") and same_form:
             raise web.HTTPConflict(text="You already submitted this form.")
         cooldown = max(0, min(31_536_000, int(form.get("cooldown_seconds") or 0)))
         if same_form and cooldown and time.time() - float(same_form[-1]["created"]) < cooldown:
             raise web.HTTPTooManyRequests(text="This form is still on cooldown.")
-        answers = []
+        answers: list[typing.Any] = []
         for index, question in enumerate(form.get("questions", [])[:50]):
             if not isinstance(question, dict):
                 continue
-            qid = re.sub(r"[^a-zA-Z0-9_-]", "", str(question.get("id") or index))[:40]
+            qid = re.sub(
+                r"[^a-zA-Z0-9_-]", "", str(typing.cast(typing.Any, question).get("id") or index)
+            )[:40]
             name = f"q_{qid}"
             values = [str(value)[:4000] for value in body.getall(name, [])]
-            if question.get("required") and not any(value.strip() for value in values):
-                raise web.HTTPBadRequest(text=f"Missing required answer: {question.get('label')}")
-            answers.append({"id": qid, "label": str(question.get("label") or qid)[:300], "values": values})
+            if typing.cast(typing.Any, question).get("required") and not any(
+                value.strip() for value in values
+            ):
+                raise web.HTTPBadRequest(
+                    text=f"Missing required answer: {typing.cast(typing.Any, question).get('label')}"
+                )
+            answers.append(
+                {
+                    "id": qid,
+                    "label": str(typing.cast(typing.Any, question).get("label") or qid)[:300],
+                    "values": values,
+                }
+            )
         db.community_record_create(
             "form_submission",
             f"guild:{guild['id']}",
             {
-                "form_slug": str(form.get("slug")), "form_title": str(form.get("title") or "Form"),
-                "answers": answers, "channel_id": str(form.get("channel_id") or ""),
+                "form_slug": str(form.get("slug")),
+                "form_title": str(form.get("title") or "Form"),
+                "answers": answers,
+                "channel_id": str(form.get("channel_id") or ""),
                 "create_thread": bool(form.get("create_thread")),
                 "ping_role_ids": form.get("ping_role_ids", [])[:20],
                 "add_role_ids": form.get("add_role_ids", [])[:20],
@@ -1469,21 +1631,28 @@ def attach_dashboard_routes(
     app.router.add_get(DASHBOARD_PREFIX + "/api/catalog", catalog_api)
     app.router.add_get(DASHBOARD_PREFIX + "/api/guilds", guilds_api)
     app.router.add_get(DASHBOARD_PREFIX + "/api/guild/{guild_id}/modules", modules_api)
-    app.router.add_put(DASHBOARD_PREFIX + "/api/guild/{guild_id}/module/{module}", update_module_api)
+    app.router.add_put(
+        DASHBOARD_PREFIX + "/api/guild/{guild_id}/module/{module}", update_module_api
+    )
     app.router.add_get(DASHBOARD_PREFIX + "/api/guild/{guild_id}/settings", settings_api)
     app.router.add_get(DASHBOARD_PREFIX + "/api/guild/{guild_id}/ai-health", ai_health_api)
     app.router.add_put(DASHBOARD_PREFIX + "/api/guild/{guild_id}/settings", update_settings_api)
-    app.router.add_post(
-        DASHBOARD_PREFIX + "/api/guild/{guild_id}/localization", localization_api
-    )
+    app.router.add_post(DASHBOARD_PREFIX + "/api/guild/{guild_id}/localization", localization_api)
     app.router.add_get(DASHBOARD_PREFIX + "/api/guild/{guild_id}/activity", activity_api)
     app.router.add_get(DASHBOARD_PREFIX + "/api/guild/{guild_id}/operations", operations_api)
     app.router.add_post(DASHBOARD_PREFIX + "/api/guild/{guild_id}/cases", create_case_api)
-    app.router.add_post(DASHBOARD_PREFIX + "/api/guild/{guild_id}/case/{case_id}/action", case_action_api)
-    app.router.add_post(DASHBOARD_PREFIX + "/api/guild/{guild_id}/incident/{incident_id}/action", incident_action_api)
+    app.router.add_post(
+        DASHBOARD_PREFIX + "/api/guild/{guild_id}/case/{case_id}/action", case_action_api
+    )
+    app.router.add_post(
+        DASHBOARD_PREFIX + "/api/guild/{guild_id}/incident/{incident_id}/action",
+        incident_action_api,
+    )
     app.router.add_post(DASHBOARD_PREFIX + "/api/guild/{guild_id}/digest", digest_api)
     app.router.add_get(DASHBOARD_PREFIX + "/api/guild/{guild_id}/analytics.csv", analytics_csv_api)
     app.router.add_get(DASHBOARD_PREFIX + "/api/guild/{guild_id}/boosters", boosters_api)
-    app.router.add_post(DASHBOARD_PREFIX + "/api/guild/{guild_id}/boosters/action", booster_action_api)
+    app.router.add_post(
+        DASHBOARD_PREFIX + "/api/guild/{guild_id}/boosters/action", booster_action_api
+    )
     app.router.add_get("/forms/{guild_id}/{slug}", form_get)
     app.router.add_post("/forms/{guild_id}/{slug}", form_post)

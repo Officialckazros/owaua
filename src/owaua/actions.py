@@ -13,11 +13,13 @@ intentional: callers which render confirmation UI must bind that UI to the
 requesting member and re-resolve permissions immediately before calling this
 module with ``confirmed=True``.
 """
+
 import datetime
 import json
 import logging
 import math
 import re
+import typing
 import urllib.parse
 from typing import List, Optional, Union
 
@@ -192,9 +194,7 @@ _TERSE_SLOWMODE_REQUEST_RE = re.compile(
 _USER_MENTION_RE = re.compile(r"<@!?(\d{15,22})>")
 _ROLE_MENTION_RE = re.compile(r"<@&(\d{15,22})>")
 _CHANNEL_MENTION_RE = re.compile(r"<#(\d{15,22})>")
-_DURATION_RE = re.compile(
-    r"(?i)(\d{1,6})\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)?\b"
-)
+_DURATION_RE = re.compile(r"(?i)(\d{1,6})\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)?\b")
 
 
 def _role_name(value: object) -> str:
@@ -202,7 +202,7 @@ def _role_name(value: object) -> str:
     return " ".join(str(value or "").split()).casefold()
 
 
-def assistant_proposals(raw_actions: object) -> List[dict]:
+def assistant_proposals(raw_actions: object) -> List[dict[typing.Any, typing.Any]]:
     """Return up to five valid assistant proposals, or fail closed.
 
     Each proposal is still confirmed and executed separately.  The small batch
@@ -211,30 +211,38 @@ def assistant_proposals(raw_actions: object) -> List[dict]:
     trusted from model output.
     """
     if isinstance(raw_actions, dict):
-        candidates = [raw_actions]
-    elif isinstance(raw_actions, list) and 1 <= len(raw_actions) <= _MAX_ASSISTANT_PROPOSALS:
-        candidates = raw_actions
+        candidates: typing.Any = [raw_actions]
+    elif (
+        isinstance(raw_actions, list)
+        and 1 <= len(typing.cast(typing.Any, raw_actions)) <= _MAX_ASSISTANT_PROPOSALS
+    ):
+        candidates: typing.Any = typing.cast(typing.Any, raw_actions)
     else:
         return []
-    if not all(isinstance(candidate, dict) and action_type(candidate) is not None
-               for candidate in candidates):
+    if not all(
+        isinstance(candidate, dict) and action_type(typing.cast(typing.Any, candidate)) is not None
+        for candidate in candidates
+    ):
         return []
 
-    proposals: List[dict] = []
+    proposals: List[dict[typing.Any, typing.Any]] = []
     created_role_names: dict[str, str] = {}
     for candidate in candidates:
         # Do not permit a model to manufacture internal execution metadata.
-        proposal = {
-            key: value for key, value in candidate.items()
-            if not str(key).startswith("_assistant_")
+        proposal: typing.Any = {
+            key: value for key, value in candidate.items() if not str(key).startswith("_assistant_")
         }
         if action_type(proposal) == "assign_role":
-            role = proposal.get("role") or proposal.get("role_name") or proposal.get("name")
+            role: typing.Any = (
+                proposal.get("role") or proposal.get("role_name") or proposal.get("name")
+            )
             normalized = _role_name(role)
             if _role_id(role) is None and normalized in created_role_names:
                 proposal["_assistant_depends_on_role_name"] = created_role_names[normalized]
         if action_type(proposal) == "create_role":
-            name = proposal.get("role") or proposal.get("name") or proposal.get("role_name")
+            name: typing.Any = (
+                proposal.get("role") or proposal.get("name") or proposal.get("role_name")
+            )
             normalized = _role_name(name)
             if normalized:
                 created_role_names[normalized] = str(name).strip()
@@ -242,7 +250,9 @@ def assistant_proposals(raw_actions: object) -> List[dict]:
     return proposals
 
 
-def bind_assistant_channel_scope(proposal: dict, user_text: str) -> Optional[dict]:
+def bind_assistant_channel_scope(
+    proposal: dict[typing.Any, typing.Any], user_text: str
+) -> Optional[dict[typing.Any, typing.Any]]:
     """Bind omitted channel targets to the live confirmation channel.
 
     Models occasionally copy a visible user or guild id into the optional
@@ -256,9 +266,7 @@ def bind_assistant_channel_scope(proposal: dict, user_text: str) -> Optional[dic
 
     text = str(user_text or "")
     requested_ids = set(_CHANNEL_MENTION_RE.findall(text))
-    requested_ids.update(
-        re.findall(r"(?<![<@&!])\b(\d{15,22})\b", text)
-    )
+    requested_ids.update(re.findall(r"(?<![<@&!])\b(\d{15,22})\b", text))
     scoped = dict(proposal)
     if not requested_ids:
         scoped.pop("channel", None)
@@ -280,10 +288,7 @@ def looks_like_action_request(text: str) -> bool:
     value = str(text or "").strip()
     if not _ACTION_REQUEST_RE.search(value):
         return False
-    return bool(
-        _ACTION_REQUEST_START_RE.search(value)
-        or _TERSE_SLOWMODE_REQUEST_RE.search(value)
-    )
+    return bool(_ACTION_REQUEST_START_RE.search(value) or _TERSE_SLOWMODE_REQUEST_RE.search(value))
 
 
 def looks_like_plan_request(text: str) -> bool:
@@ -291,19 +296,27 @@ def looks_like_plan_request(text: str) -> bool:
     return bool(_PLAN_REQUEST_RE.search(str(text or "")))
 
 
-def assistant_plan(raw_plan: object, user_text: str = "") -> List[dict]:
+def assistant_plan(raw_plan: object, user_text: str = "") -> List[dict[typing.Any, typing.Any]]:
     """Validate a model-authored preview without executing any step."""
-    if not isinstance(raw_plan, list) or not 1 <= len(raw_plan) <= 10:
+    if not isinstance(raw_plan, list) or not 1 <= len(typing.cast(typing.Any, raw_plan)) <= 10:
         return []
-    output: List[dict] = []
-    for index, raw in enumerate(raw_plan, 1):
+    output: List[dict[typing.Any, typing.Any]] = []
+    for index, raw in typing.cast(
+        typing.Iterable[typing.Any], enumerate(typing.cast(typing.Any, raw_plan), 1)
+    ):
         if not isinstance(raw, dict):
             return []
-        title = " ".join(str(raw.get("title") or f"Step {index}").split())[:120]
-        explanation = " ".join(str(raw.get("explanation") or "").split())[:500]
-        permission = " ".join(str(raw.get("permission") or "").split())[:120]
-        mutation = bool(raw.get("mutation"))
-        action = raw.get("action")
+        title = " ".join(str(typing.cast(typing.Any, raw).get("title") or f"Step {index}").split())[
+            :120
+        ]
+        explanation = " ".join(str(typing.cast(typing.Any, raw).get("explanation") or "").split())[
+            :500
+        ]
+        permission = " ".join(str(typing.cast(typing.Any, raw).get("permission") or "").split())[
+            :120
+        ]
+        mutation = bool(typing.cast(typing.Any, raw).get("mutation"))
+        action: typing.Any = typing.cast(typing.Any, raw).get("action")
         proposal = None
         if action not in (None, {}, []):
             proposals = assistant_proposals(action)
@@ -318,18 +331,20 @@ def assistant_plan(raw_plan: object, user_text: str = "") -> List[dict]:
                 permission = required
         if mutation and proposal is None:
             return []
-        output.append({
-            "step": index,
-            "title": title,
-            "explanation": explanation,
-            "permission": permission or "none",
-            "mutation": mutation,
-            "action": proposal,
-        })
+        output.append(
+            {
+                "step": index,
+                "title": title,
+                "explanation": explanation,
+                "permission": permission or "none",
+                "mutation": mutation,
+                "action": proposal,
+            }
+        )
     return output
 
 
-def render_assistant_plan(plan: List[dict]) -> str:
+def render_assistant_plan(plan: List[dict[typing.Any, typing.Any]]) -> str:
     lines = [
         "Plan preview — nothing has changed. Each mutation gets its own permission check and Confirm button:",
     ]
@@ -338,11 +353,13 @@ def render_assistant_plan(plan: List[dict]) -> str:
         suffix += "; separate confirmation required" if step.get("mutation") else "; review-only"
         detail = f" — {step['explanation']}" if step.get("explanation") else ""
         lines.append(f"{step['step']}. **{step['title']}**{detail} ({suffix})")
-    lines.append("Ask me to execute one specific step when you are ready; I will preview that single mutation again.")
+    lines.append(
+        "Ask me to execute one specific step when you are ready; I will preview that single mutation again."
+    )
     return "\n".join(lines)[:3_900]
 
 
-def _duration_seconds(match: re.Match) -> int:
+def _duration_seconds(match: re.Match[str]) -> int:
     amount = int(match.group(1))
     unit = str(match.group(2) or "s").lower()
     if unit.startswith(("m", "min")):
@@ -352,7 +369,7 @@ def _duration_seconds(match: re.Match) -> int:
     return max(0, min(_MAX_SLOWMODE, amount))
 
 
-def infer_assistant_proposal(text: str) -> Optional[dict]:
+def infer_assistant_proposal(text: str) -> Optional[dict[typing.Any, typing.Any]]:
     """Recover a small set of unambiguous proposals from plain user text.
 
     This is a resilience fallback for malformed/missing model ``actions``.  It
@@ -368,13 +385,13 @@ def infer_assistant_proposal(text: str) -> Optional[dict]:
     channel = channel_match.group(1) if channel_match else None
 
     if "slowmode" in lowered:
-        proposal = {"type": "set_slowmode"}
+        proposal: dict[str, typing.Any] = {"type": "set_slowmode"}
         if channel:
             proposal["channel"] = channel
         if re.search(r"\b(?:off|remove|disable|stop|reset)\b", lowered):
             proposal["seconds"] = 0
             return proposal
-        tail = value[lowered.find("slowmode") + len("slowmode"):]
+        tail = value[lowered.find("slowmode") + len("slowmode") :]
         duration = _DURATION_RE.search(tail)
         if duration:
             proposal["seconds"] = _duration_seconds(duration)
@@ -466,8 +483,8 @@ def resolve_assistant_output(
     *,
     in_guild: bool,
     leak_blocked: bool = False,
-    raw_plan: object = None,
-) -> tuple[str, List[dict]]:
+    raw_plan: object | None = None,
+) -> tuple[str, List[dict[typing.Any, typing.Any]]]:
     """Resolve one assistant turn into safe copy and an ordered proposal batch.
 
     Prefix and slash commands share this boundary so model-output quirks cannot
@@ -494,7 +511,11 @@ def resolve_assistant_output(
         scoped_proposals = [
             bind_assistant_channel_scope(proposal, user_text) for proposal in proposals
         ]
-        proposals = scoped_proposals if all(scoped_proposals) else []
+        proposals = (
+            [proposal for proposal in scoped_proposals if proposal is not None]
+            if all(scoped_proposals)
+            else []
+        )
 
     requested_action = looks_like_action_request(user_text)
     if requested_action and not proposals:
@@ -503,14 +524,14 @@ def resolve_assistant_output(
 
     if proposals and in_guild:
         previews = "\n".join(
-            f"{index}. `{preview_action(proposal)}`"
+            f"{index}. `{preview_action(typing.cast(typing.Any, proposal))}`"
             for index, proposal in enumerate(proposals, 1)
         )
         instruction = (
             "Confirm each action below in order. Nothing has changed yet; every "
             "action is checked again when you confirm it."
-            if len(proposals) > 1 else
-            "Nothing has changed yet; use Confirm below to execute it."
+            if len(proposals) > 1
+            else "Nothing has changed yet; use Confirm below to execute it."
         )
         return f"Ready for {len(proposals)} action(s):\n{previews}\n{instruction}", proposals
     if requested_action and not in_guild:
@@ -525,11 +546,11 @@ def is_undo_request(text: str) -> bool:
     return bool(_UNDO_REQUEST_RE.fullmatch(str(text or "").strip()))
 
 
-def audit_action_arguments(action: dict) -> dict:
+def audit_action_arguments(action: dict[typing.Any, typing.Any]) -> dict[typing.Any, typing.Any]:
     """Create bounded audit metadata without retaining message/reason bodies."""
     if not isinstance(action, dict):
         return {}
-    out = {"type": action_type(action) or "unknown"}
+    out: dict[str, typing.Any] = {"type": action_type(action) or "unknown"}
     sensitive = {"reason", "message", "content", "text", "dm_content"}
     for key, value in action.items():
         key = str(key)[:80]
@@ -545,7 +566,7 @@ def audit_action_arguments(action: dict) -> dict:
     return out
 
 
-def action_target_id(action: dict) -> Optional[str]:
+def action_target_id(action: dict[typing.Any, typing.Any]) -> Optional[str]:
     """Extract an exact numeric target id for audit indexing when available."""
     if not isinstance(action, dict):
         return None
@@ -561,37 +582,53 @@ def action_target_id(action: dict) -> Optional[str]:
     return str(uid) if uid is not None else None
 
 
-def is_state_changing(action: dict) -> bool:
+def is_state_changing(action: dict[typing.Any, typing.Any]) -> bool:
     """Whether a confirmed proposal should enter the assistant undo ledger."""
     action_name = action_type(action)
     return action_name is not None and action_name != "list_roles"
 
 
-def action_results_ok(results: List[str], action: Optional[dict] = None) -> bool:
+def action_results_ok(
+    results: List[str], action: Optional[dict[typing.Any, typing.Any]] = None
+) -> bool:
     """Recognize only executor success messages; unknown wording fails closed."""
     if len(results or []) != 1:
         return False
     line = str(results[0]).lower()
     success_prefixes = (
-        "kicked ", "banned ", "gave ", "removed ", "created role ",
-        "deleted role ", "dm'd ", "timed out ", "cleared timeout for ",
-        "set ", "purged ", "created #", "deleted #", "slowmode in #",
-        "updated #", "renamed server to ", "status set to ",
-        "denied attach files and embed links for ", "reacted ",
+        "kicked ",
+        "banned ",
+        "gave ",
+        "removed ",
+        "created role ",
+        "deleted role ",
+        "dm'd ",
+        "timed out ",
+        "cleared timeout for ",
+        "set ",
+        "purged ",
+        "created #",
+        "deleted #",
+        "slowmode in #",
+        "updated #",
+        "renamed server to ",
+        "status set to ",
+        "denied attach files and embed links for ",
+        "reacted ",
     )
     if any(line.startswith(prefix) for prefix in success_prefixes):
         return "failed" not in line
     return action_type(action or {}) == "list_roles" and " roles: " in line
 
 
-def _uid(raw) -> Optional[int]:
+def _uid(raw: typing.Any) -> Optional[int]:
     if raw is None:
         return None
     s = str(raw).strip().strip("<@!>").strip()
     return int(s) if s.isdigit() else None
 
 
-def _channel_id(raw) -> Optional[int]:
+def _channel_id(raw: typing.Any) -> Optional[int]:
     if raw is None:
         return None
     value = str(raw).strip()
@@ -600,7 +637,7 @@ def _channel_id(raw) -> Optional[int]:
     return int(value) if value.isdigit() else None
 
 
-def _role_id(raw) -> Optional[int]:
+def _role_id(raw: typing.Any) -> Optional[int]:
     if raw is None:
         return None
     value = str(raw).strip()
@@ -618,22 +655,31 @@ def chart_url(raw_chart: object) -> Optional[str]:
     """
     if not isinstance(raw_chart, dict):
         return None
-    chart_type = str(raw_chart.get("type") or "bar")
+    chart_type = str(typing.cast(typing.Any, raw_chart).get("type") or "bar")
     if chart_type not in _CHART_TYPES:
         return None
-    labels_raw = raw_chart.get("labels")
-    datasets_raw = raw_chart.get("datasets")
+    labels_raw: typing.Any = typing.cast(typing.Any, raw_chart).get("labels")
+    datasets_raw: typing.Any = typing.cast(typing.Any, raw_chart).get("datasets")
     if not isinstance(labels_raw, list) or not isinstance(datasets_raw, list):
         return None
-    labels = [str(label)[:50] for label in labels_raw[:20]]
+    labels: typing.Any = typing.cast(
+        typing.Any,
+        [str(label)[:50] for label in typing.cast(typing.Iterable[typing.Any], labels_raw[:20])],
+    )
     if not labels:
         return None
-    datasets = []
-    for index, raw_dataset in enumerate(datasets_raw[:5]):
-        if not isinstance(raw_dataset, dict) or not isinstance(raw_dataset.get("data"), list):
+    datasets: list[typing.Any] = []
+    for index, raw_dataset in typing.cast(
+        typing.Iterable[typing.Any], enumerate(typing.cast(typing.Any, datasets_raw[:5]))
+    ):
+        if not isinstance(raw_dataset, dict) or not isinstance(
+            typing.cast(typing.Any, raw_dataset).get("data"), list
+        ):
             continue
-        values = []
-        for raw_value in raw_dataset["data"][: len(labels)]:
+        values: list[typing.Any] = []
+        for raw_value in typing.cast(
+            typing.Iterable[typing.Any], raw_dataset["data"][: len(labels)]
+        ):
             if isinstance(raw_value, bool):
                 values.append(0)
                 continue
@@ -645,10 +691,12 @@ def chart_url(raw_chart: object) -> Optional[str]:
                 value = 0.0
             values.append(max(-1_000_000_000, min(1_000_000_000, value)))
         values.extend([0.0] * (len(labels) - len(values)))
-        color = _CHART_COLORS[index % len(_CHART_COLORS)]
+        color: typing.Any = typing.cast(typing.Any, _CHART_COLORS[index % len(_CHART_COLORS)])
         datasets.append(
             {
-                "label": str(raw_dataset.get("label") or f"Series {index + 1}")[:50],
+                "label": str(
+                    typing.cast(typing.Any, raw_dataset).get("label") or f"Series {index + 1}"
+                )[:50],
                 "data": values,
                 "borderColor": color,
                 "backgroundColor": color,
@@ -671,7 +719,7 @@ def chart_url(raw_chart: object) -> Optional[str]:
     return url if len(url) <= 8_000 else None
 
 
-def _has(member: discord.Member, perm: Optional[str], channel=None) -> bool:
+def _has(member: discord.Member, perm: Optional[str], channel: typing.Any = None) -> bool:
     """Whether *member* holds *perm*.
 
     Guild owner and administrator always pass. When *channel* is given, use
@@ -693,7 +741,7 @@ def _has(member: discord.Member, perm: Optional[str], channel=None) -> bool:
     return bool(getattr(perms, perm, False))
 
 
-def _is_slowmode_channel(channel) -> bool:
+def _is_slowmode_channel(channel: typing.Any) -> bool:
     """Whether Discord exposes per-user slowmode editing for this channel."""
     return isinstance(
         channel,
@@ -707,12 +755,12 @@ def _is_slowmode_channel(channel) -> bool:
     )
 
 
-def _slowmode_permission(channel) -> str:
+def _slowmode_permission(channel: typing.Any) -> str:
     """Return the effective Discord permission needed to edit slowmode."""
     return "manage_threads" if isinstance(channel, discord.Thread) else "manage_channels"
 
 
-def _bot_member(guild) -> Optional[discord.Member]:
+def _bot_member(guild: typing.Any) -> Optional[discord.Member]:
     if guild is None:
         return None
     return getattr(guild, "me", None)
@@ -730,7 +778,7 @@ def _role_above(actor: discord.Member, other: discord.Member) -> bool:
 
 
 def _bot_can_act_on(
-    guild, target: discord.Member, bot_member: Optional[discord.Member] = None
+    guild: typing.Any, target: discord.Member, bot_member: Optional[discord.Member] = None
 ) -> Optional[str]:
     """Return an error string if the bot cannot moderate *target*, else None."""
     me = bot_member or _bot_member(guild)
@@ -741,10 +789,7 @@ def _bot_can_act_on(
     if target.guild.owner_id == target.id:
         return "blocked: can't moderate the server owner"
     if not _role_above(me, target):
-        return (
-            f"blocked: my role is not above {target.display_name}'s "
-            f"(move my role higher)"
-        )
+        return f"blocked: my role is not above {target.display_name}'s (move my role higher)"
     return None
 
 
@@ -761,7 +806,7 @@ def _requester_can_act_on(requester: discord.Member, target: discord.Member) -> 
 
 
 def _bot_can_manage_role(
-    guild, role: discord.Role, bot_member: Optional[discord.Member] = None
+    guild: typing.Any, role: discord.Role, bot_member: Optional[discord.Member] = None
 ) -> Optional[str]:
     me = bot_member or _bot_member(guild)
     if me is None:
@@ -771,16 +816,15 @@ def _bot_can_manage_role(
     if role.is_default():
         return "blocked: can't manage @everyone that way"
     if role >= me.top_role:
-        return (
-            f"blocked: role `{role.name}` is at or above my top role "
-            f"(move my role higher)"
-        )
+        return f"blocked: role `{role.name}` is at or above my top role (move my role higher)"
     if role.managed:
         return f"blocked: `{role.name}` is managed by an integration"
     return None
 
 
-async def _resolve_role(guild, raw, *, fresh: bool = False) -> Optional[discord.Role]:
+async def _resolve_role(
+    guild: discord.Guild | None, raw: typing.Any, *, fresh: bool = False
+) -> Optional[discord.Role]:
     """Resolve a role by exact id or mention, optionally bypassing the cache."""
     if guild is None or raw is None:
         return None
@@ -799,7 +843,7 @@ async def _resolve_role(guild, raw, *, fresh: bool = False) -> Optional[discord.
 
 
 async def _resolve_member(
-    guild, raw, requester=None, *, fresh: bool = False
+    guild: typing.Any, raw: typing.Any, requester: typing.Any = None, *, fresh: bool = False
 ) -> Optional[discord.Member]:
     """Resolve a user id, mention, or name to a Member."""
     if raw is None or guild is None:
@@ -845,7 +889,9 @@ async def _resolve_member(
     return None
 
 
-async def _resolve_channel(guild, current_channel, raw_name, *, fresh: bool = False):
+async def _resolve_channel(
+    guild: typing.Any, current_channel: typing.Any, raw_name: typing.Any, *, fresh: bool = False
+):
     """Look up a channel by name or id.
 
     An omitted target uses the request channel.  An explicit but unknown target
@@ -866,7 +912,7 @@ async def _resolve_channel(guild, current_channel, raw_name, *, fresh: bool = Fa
     return None
 
 
-def action_type(action: dict) -> Optional[str]:
+def action_type(action: dict[typing.Any, typing.Any]) -> Optional[str]:
     """Return the canonical action type for an untrusted model proposal."""
     if not isinstance(action, dict):
         return None
@@ -875,7 +921,7 @@ def action_type(action: dict) -> Optional[str]:
     return str(canonical) if canonical in _PERMS else None
 
 
-def preview_action(action: dict) -> str:
+def preview_action(action: dict[typing.Any, typing.Any]) -> str:
     """Create a bounded, mention-safe summary for confirmation UI."""
     canonical = action_type(action)
     if canonical is None:
@@ -888,7 +934,7 @@ def preview_action(action: dict) -> str:
         or action.get("user_id")
         or action.get("target_member")
     )
-    details = []
+    details: list[typing.Any] = []
     if target is not None:
         details.append(f"target={str(target)[:80]}")
     if action.get("channel") is not None:
@@ -898,8 +944,10 @@ def preview_action(action: dict) -> str:
         details.append(f"role={str(role)[:80]}")
     if canonical == "set_nickname":
         nickname = (
-            action.get("nickname") or action.get("nick")
-            or action.get("new_nickname") or action.get("new_nick")
+            action.get("nickname")
+            or action.get("nick")
+            or action.get("new_nickname")
+            or action.get("new_nick")
         )
         details.append(f"nickname={str(nickname)[:80] if nickname else '(reset)'}")
     if canonical in {"create_role", "create_channel", "set_server_name"}:
@@ -919,7 +967,7 @@ def preview_action(action: dict) -> str:
     return discord.utils.escape_mentions(summary[:400])
 
 
-def _member_target(action: dict):
+def _member_target(action: dict[typing.Any, typing.Any]):
     return (
         action.get("target_user")
         or action.get("user")
@@ -931,8 +979,11 @@ def _member_target(action: dict):
 
 
 async def prepare_inverse(
-    action: dict, requester, guild, channel=None,
-) -> Optional[dict]:
+    action: dict[typing.Any, typing.Any],
+    requester: typing.Any,
+    guild: typing.Any,
+    channel: typing.Any = None,
+) -> Optional[dict[typing.Any, typing.Any]]:
     """Capture the pre-action state needed for a safe one-step undo."""
     action_name = action_type(action)
     if guild is None or action_name is None:
@@ -940,15 +991,20 @@ async def prepare_inverse(
     target_raw = _member_target(action)
     target = None
     if target_raw is not None:
-        target = await _resolve_member(
-            guild, target_raw, requester=requester, fresh=True
-        )
+        target = await _resolve_member(guild, target_raw, requester=requester, fresh=True)
 
     if action_name == "set_nickname" and target is not None:
-        requested = str(
-            action.get("nickname") or action.get("nick") or action.get("name")
-            or action.get("new_nickname") or action.get("new_nick") or ""
-        ).strip() or None
+        requested = (
+            str(
+                action.get("nickname")
+                or action.get("nick")
+                or action.get("name")
+                or action.get("new_nickname")
+                or action.get("new_nick")
+                or ""
+            ).strip()
+            or None
+        )
         if requested == getattr(target, "nick", None):
             return None
         return {
@@ -996,9 +1052,7 @@ async def prepare_inverse(
         return None
 
     if action_name in {"set_slowmode", "set_channel_topic"}:
-        scoped = await _resolve_channel(
-            guild, channel, action.get("channel"), fresh=True
-        )
+        scoped = await _resolve_channel(guild, channel, action.get("channel"), fresh=True)
         if scoped is None:
             return None
         if action_name == "set_slowmode":
@@ -1010,16 +1064,20 @@ async def prepare_inverse(
             if requested == previous:
                 return None
             return {
-                "type": "set_slowmode", "channel": str(scoped.id),
-                "seconds": previous, "reason": "revert previous assistant action",
+                "type": "set_slowmode",
+                "channel": str(scoped.id),
+                "seconds": previous,
+                "reason": "revert previous assistant action",
             }
         requested = str(action.get("topic") or "")[:1024]
         previous = str(getattr(scoped, "topic", None) or "")[:1024]
         if requested == previous:
             return None
         return {
-            "type": "set_channel_topic", "channel": str(scoped.id),
-            "topic": previous, "reason": "revert previous assistant action",
+            "type": "set_channel_topic",
+            "channel": str(scoped.id),
+            "topic": previous,
+            "reason": "revert previous assistant action",
         }
 
     if action_name == "set_server_name":
@@ -1028,7 +1086,8 @@ async def prepare_inverse(
         if not previous or requested == previous:
             return None
         return {
-            "type": "set_server_name", "name": previous,
+            "type": "set_server_name",
+            "name": previous,
             "reason": "revert previous assistant action",
         }
 
@@ -1039,7 +1098,9 @@ async def prepare_inverse(
             existing_roles = getattr(guild, "roles", [])
         return {
             "_created_type": "role",
-            "name": str(action.get("role") or action.get("name") or action.get("role_name") or "")[:100],
+            "name": str(action.get("role") or action.get("name") or action.get("role_name") or "")[
+                :100
+            ],
             "existing_ids": [str(role.id) for role in existing_roles],
         }
     if action_name == "create_channel":
@@ -1055,14 +1116,22 @@ async def prepare_inverse(
     return None
 
 
-async def finalize_inverse(seed: Optional[dict], guild) -> Optional[dict]:
+async def finalize_inverse(
+    seed: Optional[dict[typing.Any, typing.Any]], guild: typing.Any
+) -> Optional[dict[typing.Any, typing.Any]]:
     """Resolve ids for newly created resources after a successful action."""
     if not seed or guild is None:
         return None
     created_type = seed.get("_created_type")
     if created_type is None:
         return seed if action_type(seed) is not None else None
-    existing = {str(value) for value in seed.get("existing_ids") or []}
+    existing: typing.Any = typing.cast(
+        typing.Any,
+        {
+            str(value)
+            for value in typing.cast(typing.Iterable[typing.Any], seed.get("existing_ids") or [])
+        },
+    )
     name = str(seed.get("name") or "")
     try:
         if created_type == "role":
@@ -1078,20 +1147,23 @@ async def finalize_inverse(seed: Optional[dict], guild) -> Optional[dict]:
     except (discord.Forbidden, discord.HTTPException):
         return None
     candidates = [
-        item for item in resources
-        if str(getattr(item, "id", "")) not in existing
-        and getattr(item, "name", None) == name
+        item
+        for item in resources
+        if str(getattr(item, "id", "")) not in existing and getattr(item, "name", None) == name
     ]
     if not candidates:
         return None
     created = max(candidates, key=lambda item: int(item.id))
     return {
-        "type": inverse_type, target_key: str(created.id),
+        "type": inverse_type,
+        target_key: str(created.id),
         "reason": "revert previous assistant action",
     }
 
 
-def _resolve_emoji(guild, raw) -> Optional[Union[str, discord.Emoji, discord.PartialEmoji]]:
+def _resolve_emoji(
+    guild: typing.Any, raw: typing.Any
+) -> Optional[Union[str, discord.Emoji, discord.PartialEmoji]]:
     """Turn model output into something message.add_reaction accepts.
 
     Accepts unicode ('😂'), :name: / name for server custom emoji, raw id,
@@ -1120,28 +1192,28 @@ def _resolve_emoji(guild, raw) -> Optional[Union[str, discord.Emoji, discord.Par
 
 
 async def _react_message(
-    a: dict,
-    guild,
-    channel,
-    source_message,
-    requester=None,
+    a: dict[typing.Any, typing.Any],
+    guild: typing.Any,
+    channel: typing.Any,
+    source_message: typing.Any,
+    requester: typing.Any = None,
     bot_member: Optional[discord.Member] = None,
 ) -> Optional[str]:
     """Add one or more emoji reactions to a message (default: the trigger msg)."""
-    raw_list = []
+    raw_list: list[typing.Any] = []
     if a.get("emojis") is not None:
         if isinstance(a["emojis"], list):
-            raw_list.extend(a["emojis"])
+            raw_list.extend(typing.cast(typing.Any, a["emojis"]))
         else:
             raw_list.append(a["emojis"])
     if a.get("emoji") is not None:
         if isinstance(a["emoji"], list):
-            raw_list.extend(a["emoji"])
+            raw_list.extend(typing.cast(typing.Any, a["emoji"]))
         else:
             raw_list.append(a["emoji"])
     if a.get("reactions") is not None:
         if isinstance(a["reactions"], list):
-            raw_list.extend(a["reactions"])
+            raw_list.extend(typing.cast(typing.Any, a["reactions"]))
         else:
             raw_list.append(a["reactions"])
 
@@ -1157,9 +1229,7 @@ async def _react_message(
             return "react: bad message_id"
         ch = channel
         if a.get("channel") and guild is not None:
-            ch = await _resolve_channel(
-                guild, channel, a.get("channel"), fresh=True
-            )
+            ch = await _resolve_channel(guild, channel, a.get("channel"), fresh=True)
             if ch is None:
                 return "react: target channel not found"
         if ch is None or not hasattr(ch, "fetch_message"):
@@ -1190,10 +1260,7 @@ async def _react_message(
         requester_perms = react_ch.permissions_for(requester)
         if not (
             requester_perms.administrator
-            or (
-                requester_perms.view_channel
-                and requester_perms.read_message_history
-            )
+            or (requester_perms.view_channel and requester_perms.read_message_history)
         ):
             return "react failed: you cannot view that message"
     if me is not None and react_ch is not None and hasattr(react_ch, "permissions_for"):
@@ -1203,8 +1270,8 @@ async def _react_message(
         if not (bp.read_message_history or bp.administrator):
             return "react failed: I need `read_message_history` here"
 
-    added = []
-    failed = []
+    added: list[typing.Any] = []
+    failed: list[typing.Any] = []
     for raw in raw_list[:_MAX_REACTS]:
         emoji = _resolve_emoji(g, raw)
         if emoji is None:
@@ -1225,15 +1292,15 @@ async def _react_message(
 
 
 async def execute_all(
-    actions,
-    requester,
-    guild,
-    client,
-    channel=None,
-    source_message=None,
+    actions: typing.Any,
+    requester: typing.Any,
+    guild: typing.Any,
+    client: typing.Any,
+    channel: typing.Any = None,
+    source_message: typing.Any = None,
     *,
     confirmed: bool = False,
-    batch_actions: Optional[List[dict]] = None,
+    batch_actions: Optional[List[dict[typing.Any, typing.Any]]] = None,
 ) -> List[str]:
     """Run each action; return short human-readable result lines for the embed.
 
@@ -1247,13 +1314,18 @@ async def execute_all(
     if rid is not None and config.is_blocked(rid):
         return []
 
-    proposals = [a for a in (actions or []) if isinstance(a, dict)]
+    proposals: typing.Any = typing.cast(
+        typing.Any,
+        [
+            a
+            for a in typing.cast(typing.Iterable[typing.Any], (actions or []))
+            if isinstance(a, dict)
+        ],
+    )
     if not proposals:
         return []
     if not confirmed:
-        return [
-            f"confirmation required — nothing executed: {preview_action(proposals[0])}"
-        ]
+        return [f"confirmation required — nothing executed: {preview_action(proposals[0])}"]
     if len(proposals) > _MAX_ACTIONS_PER_CONFIRMATION:
         return ["denied: a confirmation may execute exactly one action"]
     if guild is None or requester is None or getattr(requester, "id", None) is None:
@@ -1273,7 +1345,7 @@ async def execute_all(
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             return ["blocked: the bot's current guild permissions could not be revalidated"]
 
-    out = []
+    out: list[typing.Any] = []
     for a in proposals:
         dependency = str(a.get("_assistant_depends_on_role_name") or "").strip()
         if dependency:
@@ -1281,19 +1353,16 @@ async def execute_all(
             for earlier in batch_actions or []:
                 if earlier is a:
                     break
-                if (
-                    action_type(earlier) == "create_role"
-                    and _role_name(
-                        earlier.get("role") or earlier.get("name") or earlier.get("role_name")
-                    ) == _role_name(dependency)
-                ):
+                if action_type(earlier) == "create_role" and _role_name(
+                    earlier.get("role") or earlier.get("name") or earlier.get("role_name")
+                ) == _role_name(dependency):
                     created_role_id = _role_id(earlier.get("_assistant_created_role_id"))
             if created_role_id is None:
                 out.append(
                     f"blocked: create the `{dependency}` role first, then confirm this assignment"
                 )
                 continue
-            a = dict(a)
+            a: typing.Any = dict(a)
             a["role"] = str(created_role_id)
         try:
             line = await _one(
@@ -1306,10 +1375,10 @@ async def execute_all(
                 bot_member=bot_member,
             )
         except discord.Forbidden:
-            act_name = a.get("type") or a.get("action") or "action"
+            act_name: typing.Any = a.get("type") or a.get("action") or "action"
             line = f"blocked: I lack permission or role position for `{act_name}`"
         except Exception:  # noqa: BLE001 - action boundary must fail closed
-            act_name = a.get("type") or a.get("action") or "action"
+            act_name: typing.Any = a.get("type") or a.get("action") or "action"
             log.exception("confirmed action %s failed", act_name)
             line = f"failed `{act_name}`; check the bot logs with the request id"
         if line:
@@ -1318,12 +1387,12 @@ async def execute_all(
 
 
 async def _one(
-    a: dict,
-    requester,
-    guild,
-    client,
-    channel=None,
-    source_message=None,
+    a: dict[typing.Any, typing.Any],
+    requester: typing.Any,
+    guild: typing.Any,
+    client: typing.Any,
+    channel: typing.Any = None,
+    source_message: typing.Any = None,
     *,
     bot_member: Optional[discord.Member] = None,
 ) -> Optional[str]:
@@ -1350,9 +1419,7 @@ async def _one(
         requested_channel = a.get("channel")
         if requested_channel and _channel_id(requested_channel) is None:
             return "denied: `react_message` requires an exact channel id or mention"
-        fresh_channel = await _resolve_channel(
-            guild, channel, requested_channel, fresh=True
-        )
+        fresh_channel = await _resolve_channel(guild, channel, requested_channel, fresh=True)
         if fresh_channel is None:
             return "react: target channel not found"
         return await _react_message(
@@ -1377,10 +1444,11 @@ async def _one(
         or a.get("target_member")
     )
     if t in _EXACT_MEMBER_TARGET_ACTIONS and raw_target:
-        self_target = (
-            t in {"set_nickname", "list_roles"}
-            and str(raw_target).strip().lower() in {"me", "myself", "self"}
-        )
+        self_target = t in {"set_nickname", "list_roles"} and str(raw_target).strip().lower() in {
+            "me",
+            "myself",
+            "self",
+        }
         if not self_target and _uid(raw_target) is None:
             return f"denied: `{t}` requires an exact user id or mention"
     target = (
@@ -1413,9 +1481,7 @@ async def _one(
     ):
         return f"denied: `{t}` requires an exact channel id or mention"
     if t in ("purge_messages", "set_slowmode", "set_channel_topic", "deny_media_perms"):
-        scope_channel = await _resolve_channel(
-            guild, channel, a.get("channel"), fresh=True
-        )
+        scope_channel = await _resolve_channel(guild, channel, a.get("channel"), fresh=True)
     elif t == "delete_channel":
         scope_channel = await _resolve_channel(
             guild,
@@ -1431,10 +1497,7 @@ async def _one(
         if not getattr(config, "OWNER_ID", "") or str(requester.id) != str(config.OWNER_ID):
             return "denied: changing the bot's global status is owner-only"
     elif t == "set_nickname" and target and requester.id == target.id:
-        if not (
-            _has(requester, "manage_nicknames")
-            or _has(requester, "change_nickname")
-        ):
+        if not (_has(requester, "manage_nicknames") or _has(requester, "change_nickname")):
             return "denied: you need `change_nickname` to set your own nickname"
     elif t == "set_slowmode" and _is_slowmode_channel(scope_channel):
         perm_needed = _slowmode_permission(scope_channel)
@@ -1457,7 +1520,9 @@ async def _one(
             return f"kick: target user '{raw_target or ''}' not found"
         if target.id == requester.id:
             return "kick: won't kick yourself"
-        if me is None or not (me.guild_permissions.kick_members or me.guild_permissions.administrator):
+        if me is None or not (
+            me.guild_permissions.kick_members or me.guild_permissions.administrator
+        ):
             return "blocked: I need `kick_members`"
         err = _bot_can_act_on(guild, target, me) or _requester_can_act_on(requester, target)
         if err:
@@ -1470,7 +1535,9 @@ async def _one(
             return f"ban: target user '{raw_target or ''}' not found"
         if target.id == requester.id:
             return "ban: won't ban yourself"
-        if me is None or not (me.guild_permissions.ban_members or me.guild_permissions.administrator):
+        if me is None or not (
+            me.guild_permissions.ban_members or me.guild_permissions.administrator
+        ):
             return "blocked: I need `ban_members`"
         err = _bot_can_act_on(guild, target, me) or _requester_can_act_on(requester, target)
         if err:
@@ -1508,7 +1575,9 @@ async def _one(
         name = str(a.get("role") or a.get("name") or a.get("role_name") or "").strip()
         if not name:
             return "create_role: no name given"
-        if me is None or not (me.guild_permissions.manage_roles or me.guild_permissions.administrator):
+        if me is None or not (
+            me.guild_permissions.manage_roles or me.guild_permissions.administrator
+        ):
             return "blocked: I need `manage_roles`"
         colour = discord.Colour.default()
         hex_colour = str(a.get("color") or "").strip().lstrip("#")
@@ -1585,7 +1654,9 @@ async def _one(
             return f"timeout: target user '{raw_target or ''}' not found"
         if target.id == requester.id:
             return "timeout: won't timeout yourself"
-        if me is None or not (me.guild_permissions.moderate_members or me.guild_permissions.administrator):
+        if me is None or not (
+            me.guild_permissions.moderate_members or me.guild_permissions.administrator
+        ):
             return "blocked: I need `moderate_members`"
         err = _bot_can_act_on(guild, target, me) or _requester_can_act_on(requester, target)
         if err:
@@ -1608,7 +1679,13 @@ async def _one(
                 return "timeout: invalid restore time"
         if until is None:
             try:
-                minutes = max(1, min(_MAX_TIMEOUT_MINUTES, int(a.get("minutes") or a.get("duration") or a.get("time") or 10)))
+                minutes = max(
+                    1,
+                    min(
+                        _MAX_TIMEOUT_MINUTES,
+                        int(a.get("minutes") or a.get("duration") or a.get("time") or 10),
+                    ),
+                )
             except (TypeError, ValueError):
                 minutes = 10
             until = now_utc + datetime.timedelta(minutes=minutes)
@@ -1620,7 +1697,9 @@ async def _one(
     if t == "remove_timeout":
         if not target:
             return f"remove_timeout: target user '{raw_target or ''}' not found"
-        if me is None or not (me.guild_permissions.moderate_members or me.guild_permissions.administrator):
+        if me is None or not (
+            me.guild_permissions.moderate_members or me.guild_permissions.administrator
+        ):
             return "blocked: I need `moderate_members`"
         err = _bot_can_act_on(guild, target, me) or _requester_can_act_on(requester, target)
         if err:
@@ -1644,14 +1723,17 @@ async def _one(
             err = _bot_can_act_on(guild, target, me)
             if err:
                 return err
-        nick = str(
-            a.get("nickname")
-            or a.get("nick")
-            or a.get("name")
-            or a.get("new_nickname")
-            or a.get("new_nick")
-            or ""
-        ).strip() or None
+        nick = (
+            str(
+                a.get("nickname")
+                or a.get("nick")
+                or a.get("name")
+                or a.get("new_nickname")
+                or a.get("new_nick")
+                or ""
+            ).strip()
+            or None
+        )
         if nick and len(nick) > 32:
             nick = nick[:32]
         await target.edit(nick=nick, reason=reason)
@@ -1666,20 +1748,30 @@ async def _one(
             if not (bp.manage_messages or bp.administrator):
                 return f"blocked: I need `manage_messages` in #{getattr(ch, 'name', ch.id)}"
         try:
-            count = max(1, min(_MAX_PURGE, int(a.get("count") or a.get("amount") or a.get("limit") or a.get("number") or 10)))
+            count = max(
+                1,
+                min(
+                    _MAX_PURGE,
+                    int(
+                        a.get("count") or a.get("amount") or a.get("limit") or a.get("number") or 10
+                    ),
+                ),
+            )
         except (TypeError, ValueError):
             count = 10
         purge_target_raw = a.get("target_user") or a.get("user")
         if purge_target_raw and _uid(purge_target_raw) is None:
             return "denied: a purge target requires an exact user id or mention"
         purge_target = (
-            await _resolve_member(guild, purge_target_raw, fresh=True)
-            if purge_target_raw
-            else None
+            await _resolve_member(guild, purge_target_raw, fresh=True) if purge_target_raw else None
         )
         if purge_target_raw and purge_target is None:
             return "purge_messages: target user not found; nothing was deleted"
-        check = (lambda m: m.author.id == purge_target.id) if purge_target else None
+
+        def _matches_target(candidate: discord.Message) -> bool:
+            return purge_target is not None and candidate.author.id == purge_target.id
+
+        check = _matches_target if purge_target else None
         deleted = await ch.purge(limit=count, check=check, reason=reason)
         return f"purged {len(deleted)} message(s) in #{getattr(ch, 'name', ch.id)}"
 
@@ -1689,7 +1781,9 @@ async def _one(
             return "create_channel: no name given"
         if len(name) > 100:
             return "create_channel: channel name is too long"
-        if me is None or not (me.guild_permissions.manage_channels or me.guild_permissions.administrator):
+        if me is None or not (
+            me.guild_permissions.manage_channels or me.guild_permissions.administrator
+        ):
             return "blocked: I need `manage_channels`"
         kind = str(a.get("channel_type") or "text").lower()
         topic = str(a.get("topic") or "")[:1024] or None
@@ -1704,7 +1798,9 @@ async def _one(
         ch = scope_channel
         if not ch:
             return f"delete_channel: '{name}' not found"
-        if me is None or not (me.guild_permissions.manage_channels or me.guild_permissions.administrator):
+        if me is None or not (
+            me.guild_permissions.manage_channels or me.guild_permissions.administrator
+        ):
             return "blocked: I need `manage_channels`"
         ch_name = getattr(ch, "name", str(ch.id))
         await ch.delete(reason=reason)
@@ -1715,16 +1811,16 @@ async def _one(
         if not _is_slowmode_channel(ch):
             return "set_slowmode: no slowmode-capable channel to set"
         if me is not None and hasattr(ch, "permissions_for"):
-            bp = ch.permissions_for(me)
+            bp = typing.cast(typing.Any, ch).permissions_for(me)
             required = _slowmode_permission(ch)
             if not (getattr(bp, required, False) or bp.administrator):
-                return f"blocked: I need `{required}` in #{ch.name}"
+                return f"blocked: I need `{required}` in #{typing.cast(typing.Any, ch).name}"
         try:
             seconds = max(0, min(_MAX_SLOWMODE, int(a.get("seconds") or 0)))
         except (TypeError, ValueError):
             seconds = 0
-        await ch.edit(slowmode_delay=seconds, reason=reason)
-        return f"slowmode in #{ch.name} set to {seconds}s"
+        await typing.cast(typing.Any, ch).edit(slowmode_delay=seconds, reason=reason)
+        return f"slowmode in #{typing.cast(typing.Any, ch).name} set to {seconds}s"
 
     if t == "set_channel_topic":
         ch = scope_channel
@@ -1744,17 +1840,20 @@ async def _one(
             return "set_server_name: no name given"
         if len(name) > 100:
             return "set_server_name: server name is too long"
-        if me is None or not (me.guild_permissions.manage_guild or me.guild_permissions.administrator):
+        if me is None or not (
+            me.guild_permissions.manage_guild or me.guild_permissions.administrator
+        ):
             return "blocked: I need `manage_guild`"
         await guild.edit(name=name, reason=reason)
         return f"renamed server to {name}"
 
     if t == "set_status":
-        kind = _STATUS_KINDS.get(str(a.get("status_kind", "playing")).lower(),
-                                 discord.ActivityType.playing)
+        kind = _STATUS_KINDS.get(
+            str(a.get("status_kind", "playing")).lower(), discord.ActivityType.playing
+        )
         text = str(a.get("status_text", "") or "around")[:128]
         await client.change_presence(activity=discord.Activity(type=kind, name=text))
-        return f"status set to {a.get('status_kind','playing')} {text}"
+        return f"status set to {a.get('status_kind', 'playing')} {text}"
 
     if t == "deny_media_perms":
         if not target:

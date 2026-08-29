@@ -4,6 +4,7 @@ import os
 import socket
 import tempfile
 import time
+import typing
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -33,9 +34,7 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
         config.TOS_ACCEPTANCE_SECRET = "a" * 64
         config.TOS_PROXY_SECRET = "p" * 64
         self.state = ReadinessState()
-        app = create_app(
-            privacy_contact="privacy@example.test", readiness=self.state
-        )
+        app = create_app(privacy_contact="privacy@example.test", readiness=self.state)
         self.client = TestClient(TestServer(app))
         await self.client.start_server()
 
@@ -54,9 +53,7 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.status, 200)
                 self.assertEqual(response.content_type, "text/html")
                 self.assertEqual(response.headers["X-Frame-Options"], "DENY")
-                self.assertEqual(
-                    response.headers["X-Content-Type-Options"], "nosniff"
-                )
+                self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
                 self.assertEqual(response.headers["Server"], "owaua")
                 self.assertIn(
                     "max-age=31536000",
@@ -66,9 +63,7 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
                     "frame-ancestors 'none'",
                     response.headers["Content-Security-Policy"],
                 )
-                self.assertEqual(
-                    response.headers["Cache-Control"], "public, max-age=300"
-                )
+                self.assertEqual(response.headers["Cache-Control"], "public, max-age=300")
                 body = await response.text()
                 self.assertIn("owaua", body)
                 if path != "/owaua":
@@ -162,8 +157,8 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("submitted for review", await response.text())
         self.assertFalse(tos.has_accepted(established_user))
         record = db.tos_acceptance_get(established_user)
-        self.assertEqual("review", record["status"])
-        self.assertEqual("blocked_network_match", record["risk_code"])
+        self.assertEqual("review", typing.cast(typing.Any, record)["status"])
+        self.assertEqual("blocked_network_match", typing.cast(typing.Any, record)["risk_code"])
 
     async def test_blocking_account_reviews_preaccepted_network_peer(self) -> None:
         address = "198.51.100.44"
@@ -173,9 +168,7 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("accepted", tos.record_web_acceptance(blocked_user, address))
         self.assertEqual("accepted", tos.record_web_acceptance(peer_user, address))
-        self.assertEqual(
-            "accepted", tos.record_web_acceptance(other_user, "198.51.100.45")
-        )
+        self.assertEqual("accepted", tos.record_web_acceptance(other_user, "198.51.100.45"))
 
         blocked.block_user(
             blocked_user,
@@ -184,8 +177,8 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
         )
 
         peer_record = db.tos_acceptance_get(peer_user)
-        self.assertEqual("review", peer_record["status"])
-        self.assertEqual("blocked_network_match", peer_record["risk_code"])
+        self.assertEqual("review", typing.cast(typing.Any, peer_record)["status"])
+        self.assertEqual("blocked_network_match", typing.cast(typing.Any, peer_record)["risk_code"])
         self.assertFalse(tos.has_accepted(peer_user))
         self.assertTrue(tos.has_accepted(other_user))
 
@@ -401,7 +394,7 @@ class WebConfigurationTests(unittest.TestCase):
                         privacy_contact="privacy@example.test",
                         readiness=lambda: True,
                         host=host,
-                        port=port,
+                        port=typing.cast(typing.Any, port),
                     )
 
     def test_daki_server_port_is_used_when_railway_port_is_unset(self) -> None:
@@ -426,9 +419,7 @@ class PublicSiteTests(unittest.IsolatedAsyncioTestCase):
         (wearegays / "pages").mkdir(parents=True)
         (wearegays / "index.html").write_text("<html>wag-home</html>", encoding="utf-8")
         (wearegays / "nano-terms.html").write_text("<html>terms</html>", encoding="utf-8")
-        (wearegays / "pages" / "wearegays.html").write_text(
-            "<html>pride</html>", encoding="utf-8"
-        )
+        (wearegays / "pages" / "wearegays.html").write_text("<html>pride</html>", encoding="utf-8")
         femsec = root / "femsec"
         (femsec / "boxes" / "exhibits").mkdir(parents=True)
         (femsec / "index.html").write_text("<html>owaua-files</html>", encoding="utf-8")
@@ -497,9 +488,7 @@ class PublicSiteTests(unittest.IsolatedAsyncioTestCase):
         blocked = await self.client.get("/secret.env", headers={"Host": "kozzyx.org"})
         self.assertEqual(blocked.status, 404)
         self.assertNotIn("token=nope", await blocked.text())
-        traversal = await self.client.get(
-            "/../../secret.env", headers={"Host": "kozzyx.org"}
-        )
+        traversal = await self.client.get("/../../secret.env", headers={"Host": "kozzyx.org"})
         self.assertEqual(traversal.status, 404)
 
     async def test_html_extension_fallback_and_wearegays_redirects(self) -> None:

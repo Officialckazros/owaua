@@ -1,4 +1,5 @@
 import asyncio
+import typing
 import unittest
 from unittest import mock
 
@@ -29,11 +30,16 @@ class BoosterLedgerTests(unittest.TestCase):
         self.assertEqual(second["all_time_boosts"], 2)
         self.assertEqual(
             db.booster_stats("guild:1"),
-            {"current_boosts": 2, "all_time_boosts": 2, "current_boosters": 1, "all_time_boosters": 1},
+            {
+                "current_boosts": 2,
+                "all_time_boosts": 2,
+                "current_boosters": 1,
+                "all_time_boosters": 1,
+            },
         )
 
     @mock.patch("owaua.db.now", return_value=1000.0)
-    def test_member_transition_and_matching_system_message_count_once(self, _now):
+    def test_member_transition_and_matching_system_message_count_once(self, _now: typing.Any):
         imported, started = db.booster_record_sync(
             "guild:1", "42", boosted_since=900.0, source="member"
         )
@@ -76,10 +82,19 @@ class BoosterLedgerTests(unittest.TestCase):
         settings = db.module_config("guild:1", "boosters")["settings"]
 
         for key in (
-            "tracking_enabled", "greetings_enabled", "automatic_role_enabled",
-            "personal_roles_enabled", "role_gifts_enabled", "boost_level_roles",
-            "boost_age_roles", "private_channels_enabled", "mention_reactions_enabled",
-            "emoji_restrictions", "stat_channels", "log_events", "manager_role_ids",
+            "tracking_enabled",
+            "greetings_enabled",
+            "automatic_role_enabled",
+            "personal_roles_enabled",
+            "role_gifts_enabled",
+            "boost_level_roles",
+            "boost_age_roles",
+            "private_channels_enabled",
+            "mention_reactions_enabled",
+            "emoji_restrictions",
+            "stat_channels",
+            "log_events",
+            "manager_role_ids",
         ):
             self.assertIn(key, settings)
 
@@ -98,15 +113,11 @@ class BoosterLedgerTests(unittest.TestCase):
         guild = mock.Mock(id=1)
         client = mock.Mock(guilds=[guild])
 
-        with mock.patch(
-            "owaua.boosters.sync_guild", new=mock.AsyncMock(return_value=3)
-        ) as sync:
+        with mock.patch("owaua.boosters.sync_guild", new=mock.AsyncMock(return_value=3)) as sync:
             asyncio.run(boosters._dashboard_actions_tick(client))
 
         sync.assert_awaited_once_with(guild)
-        records = db.community_records(
-            "booster_dashboard_action", "guild:1", status=None, limit=10
-        )
+        records = db.community_records("booster_dashboard_action", "guild:1", status=None, limit=10)
         self.assertEqual(records[0]["status"], "completed")
         self.assertEqual(records[0]["data"]["result"], "synchronized; 3 newly imported")
 

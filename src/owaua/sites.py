@@ -5,6 +5,7 @@ from __future__ import annotations
 import mimetypes
 import os
 import re
+import typing
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
@@ -24,9 +25,7 @@ SITE_HOSTS: Final[Mapping[str, str]] = {
     "femsec.wearegays.net": "femsec",
 }
 FEMSEC_ORIGIN: Final = "https://femsec.wearegays.net"
-_FEMSEC_LEAF_REDIRECTS: Final = frozenset(
-    {"/about.html", "/css/files.css", "/js/search.js"}
-)
+_FEMSEC_LEAF_REDIRECTS: Final = frozenset({"/about.html", "/css/files.css", "/js/search.js"})
 _FEMSEC_PREFIXES: Final = (
     "/boxes",
     "/logs",
@@ -102,7 +101,7 @@ SITE_FLAG: Final = "public_site"
 
 
 def hostname_of(request: web.Request) -> str:
-    candidates = []
+    candidates: list[typing.Any] = []
     forwarded = request.headers.get("X-Forwarded-Host", "")
     if forwarded:
         candidates.append(forwarded.split(",", 1)[0])
@@ -168,20 +167,14 @@ def resolve_site_file(sites_root: Path, site: str, url_path: str) -> Path | None
         candidate = raw_candidate.resolve()
     if candidate.is_file():
         try:
-            return (
-                candidate
-                if not _blocked_relative(candidate.relative_to(root))
-                else None
-            )
+            return candidate if not _blocked_relative(candidate.relative_to(root)) else None
         except ValueError:
             return None
     if candidate.suffix.lower() != ".html":
         html_candidate = candidate.with_name(candidate.name + ".html")
         if _has_internal_symlink(root, html_candidate):
             return None
-        if html_candidate.is_file() and not _blocked_relative(
-            html_candidate.relative_to(root)
-        ):
+        if html_candidate.is_file() and not _blocked_relative(html_candidate.relative_to(root)):
             try:
                 html_candidate.resolve().relative_to(root)
             except ValueError:
@@ -204,9 +197,7 @@ def _has_internal_symlink(root: Path, candidate: Path) -> bool:
 
 
 def apply_site_headers(response: web.StreamResponse, path: str) -> None:
-    response.headers["Strict-Transport-Security"] = (
-        "max-age=31536000; includeSubDomains; preload"
-    )
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -215,8 +206,10 @@ def apply_site_headers(response: web.StreamResponse, path: str) -> None:
         "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
     )
     lowered = path.lower()
-    if lowered == "/shield.js" or lowered.startswith("/chat/") and lowered.endswith(
-        (".css", ".js")
+    if (
+        lowered == "/shield.js"
+        or lowered.startswith("/chat/")
+        and lowered.endswith((".css", ".js"))
     ):
         response.headers["Cache-Control"] = "no-store"
         response.headers["Expires"] = "0"
@@ -261,9 +254,7 @@ async def serve_public_site(request: web.Request, sites_root: Path) -> web.Strea
         if site != "wearegays":
             raise web.HTTPNotFound()
         if request.method != "POST":
-            raise web.HTTPMethodNotAllowed(
-                method=request.method, allowed_methods=("POST",)
-            )
+            raise web.HTTPMethodNotAllowed(method=request.method, allowed_methods=("POST",))
         return web.json_response(
             {
                 "ok": True,

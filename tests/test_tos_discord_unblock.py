@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 import types
+import typing
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -68,9 +69,13 @@ class TosDiscordUnblockTest(unittest.IsolatedAsyncioTestCase):
         recipient.send.assert_awaited_once()
         response = message.channel.send.await_args.kwargs["embed"].description
         self.assertIn(f"unblocked user `{uid}`", response)
-        audit = db.conn().execute(
-            "SELECT action,target_id,status FROM action_audit ORDER BY created DESC LIMIT 1"
-        ).fetchone()
+        audit = (
+            db.conn()
+            .execute(
+                "SELECT action,target_id,status FROM action_audit ORDER BY created DESC LIMIT 1"
+            )
+            .fetchone()
+        )
         self.assertEqual(("tos_unblock", uid, "completed"), tuple(audit))
 
     async def test_non_owner_cannot_unblock_tos_user(self) -> None:
@@ -105,18 +110,18 @@ class TosDiscordUnblockTest(unittest.IsolatedAsyncioTestCase):
         )
 
         other_response = types.SimpleNamespace(send_message=mock.AsyncMock())
-        other = types.SimpleNamespace(
-            user=types.SimpleNamespace(id=43), response=other_response
-        )
-        self.assertFalse(await view.interaction_check(other))
+        other = types.SimpleNamespace(user=types.SimpleNamespace(id=43), response=other_response)
+        self.assertFalse(await view.interaction_check(typing.cast(typing.Any, other)))
         other_response.send_message.assert_awaited_once()
 
         owner_response = types.SimpleNamespace(send_message=mock.AsyncMock())
-        owner = types.SimpleNamespace(
-            user=types.SimpleNamespace(id=42), response=owner_response
+        owner = types.SimpleNamespace(user=types.SimpleNamespace(id=42), response=owner_response)
+        read_button = next(
+            button
+            for button in buttons
+            if typing.cast(typing.Any, button.custom_id).startswith("tos:read:")
         )
-        read_button = next(button for button in buttons if button.custom_id.startswith("tos:read:"))
-        await read_button.callback(owner)
+        await read_button.callback(typing.cast(typing.Any, owner))
         owner_response.send_message.assert_awaited_once_with(
             f"[Open the Terms acceptance page]({view.acceptance_url})",
             ephemeral=True,
@@ -128,7 +133,7 @@ class TosDiscordUnblockTest(unittest.IsolatedAsyncioTestCase):
         direct_other = types.SimpleNamespace(
             user=types.SimpleNamespace(id=43), response=direct_other_response
         )
-        await read_button.callback(direct_other)
+        await read_button.callback(typing.cast(typing.Any, direct_other))
         direct_other_response.send_message.assert_awaited_once()
 
     async def test_tos_command_does_not_remove_manual_block(self) -> None:

@@ -7,6 +7,7 @@ import os
 import stat
 import tempfile
 import time
+import typing
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -277,7 +278,9 @@ class StatePersistenceTest(unittest.TestCase):
             inverse={"type": "set_nickname", "target_user": "11", "nickname": "Before"},
             source_nonce="first",
         )
-        self.assertEqual(first_id, db.latest_assistant_action("10", "guild:1")["id"])
+        self.assertEqual(
+            first_id, typing.cast(typing.Any, db.latest_assistant_action("10", "guild:1"))["id"]
+        )
         self.assertIsNone(db.latest_assistant_action("10", "guild:2"))
         self.assertIsNone(db.latest_assistant_action("99", "guild:1"))
 
@@ -294,8 +297,10 @@ class StatePersistenceTest(unittest.TestCase):
             consumed_action_id=first_id,
         )
         latest = db.latest_assistant_action("10", "guild:1")
-        self.assertNotEqual(first_id, latest["id"])
-        self.assertEqual("Raven", latest["inverse"]["nickname"])
+        self.assertNotEqual(first_id, typing.cast(typing.Any, latest)["id"])
+        self.assertEqual(
+            "Raven", typing.cast(typing.Any, typing.cast(typing.Any, latest)["inverse"])["nickname"]
+        )
         history = db.recent_assistant_actions("10", "guild:1")
         self.assertEqual(2, len(history))
         self.assertIsNotNone(history[1]["consumed"])

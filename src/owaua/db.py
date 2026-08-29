@@ -13,6 +13,7 @@ conversations : short-term user↔bot turns
 quotes        : hall of shame / saved lines
 guild_settings: per-server config (persona, lurk, language, etc.)
 """
+
 import json
 import math
 import os
@@ -20,6 +21,7 @@ import re
 import sqlite3
 import threading
 import time
+import typing
 from pathlib import Path
 from typing import List, Optional
 
@@ -42,15 +44,15 @@ class _SerializedConnection(sqlite3.Connection):
     for their complete transaction.
     """
 
-    def execute(self, *args, **kwargs):
+    def execute(self, *args: typing.Any, **kwargs: typing.Any):
         with _db_lock:
             return super().execute(*args, **kwargs)
 
-    def executemany(self, *args, **kwargs):
+    def executemany(self, *args: typing.Any, **kwargs: typing.Any):
         with _db_lock:
             return super().executemany(*args, **kwargs)
 
-    def executescript(self, *args, **kwargs):
+    def executescript(self, *args: typing.Any, **kwargs: typing.Any):
         with _db_lock:
             return super().executescript(*args, **kwargs)
 
@@ -65,23 +67,23 @@ class _SerializedConnection(sqlite3.Connection):
 
 _conn: Optional[sqlite3.Connection] = None
 
-_gs_cache: dict = {}
+_gs_cache: dict[typing.Any, typing.Any] = {}
 _GS_TTL = 5.0
-_lessons_cache: Optional[dict[str, list]] = None
+_lessons_cache: Optional[dict[str, list[typing.Any]]] = None
 _lessons_ts: float = 0.0
 _LESSONS_TTL = 30.0
-_mem_cache: dict = {}
+_mem_cache: dict[typing.Any, typing.Any] = {}
 _MEM_TTL = 15.0
 _MEM_CACHE_MAX = 256
 
 
-def _mem_cache_set(key, rows) -> None:
+def _mem_cache_set(key: typing.Any, rows: typing.Any) -> None:
     if len(_mem_cache) >= _MEM_CACHE_MAX:
         _mem_cache.clear()
     _mem_cache[key] = (time.time(), rows)
 
 
-def _mem_cache_get(key):
+def _mem_cache_get(key: typing.Any):
     hit = _mem_cache.get(key)
     if hit is not None and time.time() - hit[0] < _MEM_TTL:
         return hit[1]
@@ -546,9 +548,7 @@ def _rescope_legacy_rows(c: sqlite3.Connection) -> None:
         else:
             c.execute("DELETE FROM memories WHERE id=?", (row["id"],))
 
-    for row in c.execute(
-        "SELECT user_id,guild_id FROM relationships"
-    ).fetchall():
+    for row in c.execute("SELECT user_id,guild_id FROM relationships").fetchall():
         original_scope = row["guild_id"]
         scope = _canonical_scope(original_scope, row["user_id"])
         if scope:
@@ -617,8 +617,13 @@ def _rescope_legacy_rows(c: sqlite3.Connection) -> None:
             "INSERT OR REPLACE INTO commands_v3 VALUES(?,?,?,?,?,?,?,?)",
             (
                 scope or "legacy:disabled",
-                row["name"], row["description"], row["behavior"], row["author"],
-                row["uses"], row["created"], enabled,
+                row["name"],
+                row["description"],
+                row["behavior"],
+                row["author"],
+                row["uses"],
+                row["created"],
+                enabled,
             ),
         )
     c.execute("DROP TABLE commands")
@@ -665,9 +670,7 @@ def _migrate(c: sqlite3.Connection) -> None:
                     "NOT NULL DEFAULT 0 CHECK(gems >= 0)"
                 )
 
-            c.execute(
-                "CREATE INDEX IF NOT EXISTS idx_mem_subject ON memories(subject,guild_id)"
-            )
+            c.execute("CREATE INDEX IF NOT EXISTS idx_mem_subject ON memories(subject,guild_id)")
 
             # Version 3 was the destructive privacy cut-over.  Later schema
             # additions must never replay it: commands no longer even have
@@ -708,9 +711,7 @@ def _migrate(c: sqlite3.Connection) -> None:
                     "INSERT INTO server_messages_fts(rowid,content) "
                     "VALUES (new.id,new.content); END"
                 )
-                c.execute(
-                    "INSERT INTO server_messages_fts(server_messages_fts) VALUES('rebuild')"
-                )
+                c.execute("INSERT INTO server_messages_fts(server_messages_fts) VALUES('rebuild')")
             c.execute(f"PRAGMA user_version={LATEST_SCHEMA_VERSION}")
             c.commit()
             c.execute("PRAGMA optimize")
@@ -776,21 +777,22 @@ def integrity_check() -> None:
         raise RuntimeError("database integrity check failed")
 
 
-def _json_dict(raw: object) -> dict:
+def _json_dict(raw: object) -> dict[typing.Any, typing.Any]:
     """Decode an object stored in SQLite without trusting its shape."""
     if isinstance(raw, dict):
-        return dict(raw)
+        return dict(typing.cast(typing.Any, raw))
     try:
         value = json.loads(str(raw or "{}"))
     except (TypeError, ValueError, json.JSONDecodeError):
         return {}
-    return value if isinstance(value, dict) else {}
+    return typing.cast(typing.Any, value if isinstance(value, dict) else {})
 
 
 def _migration_exists(c: sqlite3.Connection, name: str) -> bool:
-    return c.execute(
-        "SELECT 1 FROM state_migrations WHERE name=?", (str(name),)
-    ).fetchone() is not None
+    return (
+        c.execute("SELECT 1 FROM state_migrations WHERE name=?", (str(name),)).fetchone()
+        is not None
+    )
 
 
 def legacy_state_migrated(name: str) -> bool:
@@ -800,7 +802,7 @@ def legacy_state_migrated(name: str) -> bool:
 
 def import_legacy_dynamic_blocks(
     migration_name: str,
-    records: list[tuple[str, str, dict]],
+    records: list[tuple[str, str, dict[typing.Any, typing.Any]]],
 ) -> bool:
     """Import legacy block records once, without replacing live SQLite data.
 
@@ -830,16 +832,19 @@ def import_legacy_dynamic_blocks(
                     "(user_id,block_source,metadata,blocked_at,updated_at) "
                     "VALUES(?,?,?,?,?)",
                     (
-                        str(user_id), source,
+                        str(user_id),
+                        source,
                         json.dumps(clean, ensure_ascii=False, sort_keys=True),
-                        blocked_at, updated_at,
+                        blocked_at,
+                        updated_at,
                     ),
                 )
                 imported += max(0, int(cur.rowcount))
             c.execute(
                 "INSERT INTO state_migrations(name,migrated_at,details) VALUES(?,?,?)",
                 (
-                    str(migration_name), now(),
+                    str(migration_name),
+                    now(),
                     json.dumps({"records": imported}, sort_keys=True),
                 ),
             )
@@ -854,8 +859,8 @@ def dynamic_block_apply(
     user_id: str,
     *,
     block_source: str,
-    fields: dict,
-    history_event: dict,
+    fields: dict[typing.Any, typing.Any],
+    history_event: dict[typing.Any, typing.Any],
 ) -> bool:
     """Atomically create/update one dynamic block and append its history.
 
@@ -864,31 +869,24 @@ def dynamic_block_apply(
     that entry into a ToS block that the ToS-review CLI is allowed to remove.
     """
     uid = str(user_id)
-    incoming_source = (
-        block_source if block_source in {"manual", "tos", "other"} else "other"
-    )
+    incoming_source = block_source if block_source in {"manual", "tos", "other"} else "other"
     c = conn()
     with _db_lock:
         try:
             c.execute("BEGIN IMMEDIATE")
             row = c.execute(
-                "SELECT block_source,metadata,blocked_at FROM dynamic_blocks "
-                "WHERE user_id=?",
+                "SELECT block_source,metadata,blocked_at FROM dynamic_blocks WHERE user_id=?",
                 (uid,),
             ).fetchone()
             timestamp = now()
             newly_blocked = row is None
             if row is None:
                 source = incoming_source
-                metadata: dict = {}
+                metadata: dict[typing.Any, typing.Any] = {}
                 blocked_at = timestamp
             else:
                 old_source = str(row["block_source"] or "other")
-                source = (
-                    "manual"
-                    if "manual" in {old_source, incoming_source}
-                    else incoming_source
-                )
+                source = "manual" if "manual" in {old_source, incoming_source} else incoming_source
                 metadata = _json_dict(row["metadata"])
                 blocked_at = _safe_timestamp(row["blocked_at"], timestamp)
 
@@ -904,9 +902,10 @@ def dynamic_block_apply(
                     if value not in (None, "") or key in {"reason", "offending_text"}:
                         metadata[str(key)] = value
 
-            history = metadata.get("history")
-            if not isinstance(history, list):
-                history = []
+            raw_history = metadata.get("history")
+            history: list[typing.Any] = (
+                typing.cast(list[typing.Any], raw_history) if isinstance(raw_history, list) else []
+            )
             event = dict(history_event) if isinstance(history_event, dict) else {}
             event["block_source"] = incoming_source
             history.append(event)
@@ -922,9 +921,11 @@ def dynamic_block_apply(
                 "block_source=excluded.block_source,metadata=excluded.metadata,"
                 "blocked_at=excluded.blocked_at,updated_at=excluded.updated_at",
                 (
-                    uid, source,
+                    uid,
+                    source,
                     json.dumps(metadata, ensure_ascii=False, sort_keys=True),
-                    blocked_at, timestamp,
+                    blocked_at,
+                    timestamp,
                 ),
             )
 
@@ -972,9 +973,7 @@ def dynamic_block_apply(
             raise
 
 
-def dynamic_block_remove(
-    user_id: str, *, expected_sources: set[str] | None = None
-) -> bool:
+def dynamic_block_remove(user_id: str, *, expected_sources: set[str] | None = None) -> bool:
     """Atomically remove a block, optionally only if its source still matches."""
     uid = str(user_id)
     c = conn()
@@ -985,9 +984,7 @@ def dynamic_block_remove(
                 cur = c.execute("DELETE FROM dynamic_blocks WHERE user_id=?", (uid,))
             else:
                 allowed = {
-                    value
-                    for value in expected_sources
-                    if value in {"manual", "tos", "other"}
+                    value for value in expected_sources if value in {"manual", "tos", "other"}
                 }
                 if not allowed:
                     c.rollback()
@@ -1011,12 +1008,16 @@ def dynamic_block_remove(
             raise
 
 
-def dynamic_block_get(user_id: str) -> dict | None:
-    row = conn().execute(
-        "SELECT block_source,metadata,blocked_at,updated_at FROM dynamic_blocks "
-        "WHERE user_id=?",
-        (str(user_id),),
-    ).fetchone()
+def dynamic_block_get(user_id: str) -> dict[typing.Any, typing.Any] | None:
+    row = (
+        conn()
+        .execute(
+            "SELECT block_source,metadata,blocked_at,updated_at FROM dynamic_blocks "
+            "WHERE user_id=?",
+            (str(user_id),),
+        )
+        .fetchone()
+    )
     if row is None:
         return None
     metadata = _json_dict(row["metadata"])
@@ -1026,12 +1027,16 @@ def dynamic_block_get(user_id: str) -> dict | None:
     return metadata
 
 
-def dynamic_blocks_all() -> dict[str, dict]:
-    rows = conn().execute(
-        "SELECT user_id,block_source,metadata,blocked_at,updated_at "
-        "FROM dynamic_blocks ORDER BY user_id"
-    ).fetchall()
-    result: dict[str, dict] = {}
+def dynamic_blocks_all() -> dict[str, dict[typing.Any, typing.Any]]:
+    rows = (
+        conn()
+        .execute(
+            "SELECT user_id,block_source,metadata,blocked_at,updated_at "
+            "FROM dynamic_blocks ORDER BY user_id"
+        )
+        .fetchall()
+    )
+    result: dict[str, dict[typing.Any, typing.Any]] = {}
     for row in rows:
         metadata = _json_dict(row["metadata"])
         metadata["source"] = str(row["block_source"])
@@ -1043,7 +1048,7 @@ def dynamic_blocks_all() -> dict[str, dict]:
 
 def _safe_timestamp(value: object, default: float) -> float:
     try:
-        timestamp = float(value)
+        timestamp = float(typing.cast(typing.Any, value))
     except (TypeError, ValueError, OverflowError):
         return float(default)
     if not (0 <= timestamp <= now() + 86_400):
@@ -1051,9 +1056,7 @@ def _safe_timestamp(value: object, default: float) -> float:
     return timestamp
 
 
-def import_legacy_dm_contacts(
-    migration_name: str, records: list[tuple[str, str, str]]
-) -> bool:
+def import_legacy_dm_contacts(migration_name: str, records: list[tuple[str, str, str]]) -> bool:
     """Import legacy DM contacts exactly once without overwriting live rows."""
     c = conn()
     with _db_lock:
@@ -1073,7 +1076,8 @@ def import_legacy_dm_contacts(
             c.execute(
                 "INSERT INTO state_migrations(name,migrated_at,details) VALUES(?,?,?)",
                 (
-                    str(migration_name), now(),
+                    str(migration_name),
+                    now(),
                     json.dumps({"records": imported}, sort_keys=True),
                 ),
             )
@@ -1110,11 +1114,15 @@ def dm_contacts_upsert(records: list[tuple[str, str, str]]) -> None:
             raise
 
 
-def dm_contacts_all() -> dict[str, dict]:
-    rows = conn().execute(
-        "SELECT user_id,name,last_message_at FROM dm_contacts "
-        "ORDER BY last_message_at DESC,user_id"
-    ).fetchall()
+def dm_contacts_all() -> dict[str, dict[typing.Any, typing.Any]]:
+    rows = (
+        conn()
+        .execute(
+            "SELECT user_id,name,last_message_at FROM dm_contacts "
+            "ORDER BY last_message_at DESC,user_id"
+        )
+        .fetchall()
+    )
     return {
         str(row["user_id"]): {
             "name": str(row["name"]),
@@ -1124,9 +1132,7 @@ def dm_contacts_all() -> dict[str, dict]:
     }
 
 
-def import_legacy_cli_active(
-    migration_name: str, records: list[tuple[str, str, float]]
-) -> bool:
+def import_legacy_cli_active(migration_name: str, records: list[tuple[str, str, float]]) -> bool:
     """Import legacy active-chat heartbeats exactly once."""
     c = conn()
     with _db_lock:
@@ -1146,7 +1152,8 @@ def import_legacy_cli_active(
             c.execute(
                 "INSERT INTO state_migrations(name,migrated_at,details) VALUES(?,?,?)",
                 (
-                    str(migration_name), now(),
+                    str(migration_name),
+                    now(),
                     json.dumps({"records": imported}, sort_keys=True),
                 ),
             )
@@ -1203,11 +1210,14 @@ def cli_active_is_claimed(
 ) -> bool:
     ttl = max(1.0, min(float(ttl_seconds), 3_600.0))
     cutoff = (now() if at is None else float(at)) - ttl
-    row = conn().execute(
-        "SELECT 1 FROM cli_active_conversations "
-        "WHERE user_id=? AND heartbeat>=? LIMIT 1",
-        (str(user_id), cutoff),
-    ).fetchone()
+    row = (
+        conn()
+        .execute(
+            "SELECT 1 FROM cli_active_conversations WHERE user_id=? AND heartbeat>=? LIMIT 1",
+            (str(user_id), cutoff),
+        )
+        .fetchone()
+    )
     return row is not None
 
 
@@ -1233,15 +1243,14 @@ def now() -> float:
     return time.time()
 
 
-def kv_get(key: str, default=None):
+def kv_get(key: str, default: typing.Any = None):
     row = conn().execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
     return row["value"] if row else default
 
 
-def kv_set(key: str, value) -> None:
+def kv_set(key: str, value: typing.Any) -> None:
     conn().execute(
-        "INSERT INTO kv(key,value) VALUES(?,?) "
-        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        "INSERT INTO kv(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         (key, str(value)),
     )
     conn().commit()
@@ -1270,7 +1279,7 @@ def release_first_use_notice(user_id: str) -> None:
 _DEFAULT_MOOD = {"label": "neutral", "intensity": 0.4, "valence": 0.0}
 
 
-def mood_get(guild_id: str) -> dict:
+def mood_get(guild_id: str) -> dict[typing.Any, typing.Any]:
     raw = kv_get(f"mood:{guild_id}")
     if not raw:
         return {**_DEFAULT_MOOD, "updated": now()}
@@ -1282,10 +1291,17 @@ def mood_get(guild_id: str) -> dict:
 
 
 def mood_set(guild_id: str, label: str, intensity: float, valence: float) -> None:
-    kv_set(f"mood:{guild_id}", json.dumps({
-        "label": str(label)[:24], "intensity": float(intensity),
-        "valence": float(valence), "updated": now(),
-    }))
+    kv_set(
+        f"mood:{guild_id}",
+        json.dumps(
+            {
+                "label": str(label)[:24],
+                "intensity": float(intensity),
+                "valence": float(valence),
+                "updated": now(),
+            }
+        ),
+    )
 
 
 def mood_nudge(guild_id: str, dv: float) -> None:
@@ -1302,14 +1318,12 @@ def _guild_settings_key(guild_id: str) -> str:
     return f"guild:{raw}" if raw.isdigit() else raw
 
 
-def guild_settings(guild_id: str) -> dict:
+def guild_settings(guild_id: str) -> dict[typing.Any, typing.Any]:
     guild_id = _guild_settings_key(guild_id)
     hit = _gs_cache.get(guild_id)
     if hit is not None and time.time() - hit[0] < _GS_TTL:
         return dict(hit[1])
-    row = conn().execute(
-        "SELECT data FROM guild_settings WHERE guild_id=?", (guild_id,)
-    ).fetchone()
+    row = conn().execute("SELECT data FROM guild_settings WHERE guild_id=?", (guild_id,)).fetchone()
     if not row:
         d = dict(_DEFAULT_GUILD)
     else:
@@ -1321,7 +1335,7 @@ def guild_settings(guild_id: str) -> dict:
     return dict(d)
 
 
-def guild_settings_set(guild_id: str, **patch) -> dict:
+def guild_settings_set(guild_id: str, **patch: typing.Any) -> dict[typing.Any, typing.Any]:
     guild_id = _guild_settings_key(guild_id)
     cur = merge_server_settings({**guild_settings(guild_id), **patch})
     c = conn()
@@ -1337,8 +1351,8 @@ def guild_settings_set(guild_id: str, **patch) -> dict:
 
 
 def dashboard_guild_settings_set(
-    guild_id: str, settings: dict, *, actor_id: str
-) -> dict:
+    guild_id: str, settings: dict[typing.Any, typing.Any], *, actor_id: str
+) -> dict[typing.Any, typing.Any]:
     """Validate, persist and audit one complete dashboard settings update."""
     gid = _guild_settings_key(guild_id)
     previous = guild_settings(gid)
@@ -1377,7 +1391,7 @@ def dashboard_guild_settings_set(
     return clean
 
 
-def module_config(guild_id: str, module: str) -> dict:
+def module_config(guild_id: str, module: str) -> dict[typing.Any, typing.Any]:
     """Return one module's stored state merged with its current defaults."""
     from owaua.module_catalog import MODULES, merge_settings
 
@@ -1385,11 +1399,15 @@ def module_config(guild_id: str, module: str) -> dict:
     if name not in MODULES:
         raise KeyError(name)
     gid = f"guild:{guild_id}" if str(guild_id).isdigit() else str(guild_id)
-    row = conn().execute(
-        "SELECT enabled,data,updated,actor_id FROM module_settings "
-        "WHERE guild_id=? AND module=?",
-        (gid, name),
-    ).fetchone()
+    row = (
+        conn()
+        .execute(
+            "SELECT enabled,data,updated,actor_id FROM module_settings "
+            "WHERE guild_id=? AND module=?",
+            (gid, name),
+        )
+        .fetchone()
+    )
     if row is None:
         return {
             "module": name,
@@ -1407,7 +1425,7 @@ def module_config(guild_id: str, module: str) -> dict:
     }
 
 
-def module_configs(guild_id: str) -> list[dict]:
+def module_configs(guild_id: str) -> list[dict[typing.Any, typing.Any]]:
     from owaua.module_catalog import MODULES
 
     return [module_config(guild_id, name) for name in MODULES]
@@ -1418,9 +1436,9 @@ def module_config_set(
     module: str,
     *,
     enabled: bool,
-    settings: dict,
+    settings: dict[typing.Any, typing.Any],
     actor_id: str,
-) -> dict:
+) -> dict[typing.Any, typing.Any]:
     """Validate and atomically persist a dashboard-controlled module."""
     from owaua.module_catalog import MODULES, merge_settings
 
@@ -1463,14 +1481,18 @@ def module_config_set(
     return module_config(gid, name)
 
 
-def dashboard_audit_list(guild_id: str, limit: int = 100) -> list[dict]:
+def dashboard_audit_list(guild_id: str, limit: int = 100) -> list[dict[typing.Any, typing.Any]]:
     gid = f"guild:{guild_id}" if str(guild_id).isdigit() else str(guild_id)
-    rows = conn().execute(
-        "SELECT id,actor_id,action,module,detail,created FROM dashboard_audit "
-        "WHERE guild_id=? ORDER BY created DESC,id DESC LIMIT ?",
-        (gid, max(1, min(500, int(limit)))),
-    ).fetchall()
-    output = []
+    rows = (
+        conn()
+        .execute(
+            "SELECT id,actor_id,action,module,detail,created FROM dashboard_audit "
+            "WHERE guild_id=? ORDER BY created DESC,id DESC LIMIT ?",
+            (gid, max(1, min(500, int(limit)))),
+        )
+        .fetchall()
+    )
+    output: list[typing.Any] = []
     for row in rows:
         item = dict(row)
         item["detail"] = _json_dict(item.get("detail"))
@@ -1484,7 +1506,7 @@ def dashboard_audit_record(
     actor_id: str,
     action: str,
     module: str = "",
-    detail: dict | None = None,
+    detail: dict[typing.Any, typing.Any] | None = None,
 ) -> None:
     """Append one bounded dashboard action to the server audit trail."""
     gid = _guild_settings_key(guild_id)
@@ -1507,10 +1529,14 @@ def swear_jar_count(guild_id: str, user_id: str) -> int:
     uid = str(user_id).strip()
     if not is_guild_scope(gid) or not uid.isdigit():
         return 0
-    row = conn().execute(
-        "SELECT count FROM swear_jar_counts WHERE guild_id=? AND user_id=?",
-        (gid, uid),
-    ).fetchone()
+    row = (
+        conn()
+        .execute(
+            "SELECT count FROM swear_jar_counts WHERE guild_id=? AND user_id=?",
+            (gid, uid),
+        )
+        .fetchone()
+    )
     return max(0, int(row["count"])) if row else 0
 
 
@@ -1546,12 +1572,19 @@ def swear_jar_increment(guild_id: str, user_id: str, amount: int) -> int:
     return max(0, int(row["count"])) if row else 0
 
 
-def _booster_row(row) -> dict:
+def _booster_row(row: typing.Any) -> dict[typing.Any, typing.Any]:
     if row is None:
         return {
-            "guild_id": "", "user_id": "", "current_boosts": 0,
-            "all_time_boosts": 0, "active": False, "first_boosted": None,
-            "last_boosted": None, "stopped": None, "last_source": "", "updated": 0.0,
+            "guild_id": "",
+            "user_id": "",
+            "current_boosts": 0,
+            "all_time_boosts": 0,
+            "active": False,
+            "first_boosted": None,
+            "last_boosted": None,
+            "stopped": None,
+            "last_source": "",
+            "updated": 0.0,
         }
     item = dict(row)
     item["current_boosts"] = max(0, int(item.get("current_boosts") or 0))
@@ -1560,21 +1593,25 @@ def _booster_row(row) -> dict:
     return item
 
 
-def booster_member(guild_id: str, user_id: str) -> dict:
+def booster_member(guild_id: str, user_id: str) -> dict[typing.Any, typing.Any]:
     """Return the durable boost record for one server member."""
     gid = _guild_settings_key(guild_id)
     uid = str(user_id).strip()
     if not is_guild_scope(gid) or not uid.isdigit():
         return _booster_row(None)
-    row = conn().execute(
-        "SELECT * FROM booster_members WHERE guild_id=? AND user_id=?", (gid, uid)
-    ).fetchone()
+    row = (
+        conn()
+        .execute("SELECT * FROM booster_members WHERE guild_id=? AND user_id=?", (gid, uid))
+        .fetchone()
+    )
     result = _booster_row(row)
     result["guild_id"], result["user_id"] = gid, uid
     return result
 
 
-def booster_members(guild_id: str, *, active: bool | None = None, limit: int = 1000) -> list[dict]:
+def booster_members(
+    guild_id: str, *, active: bool | None = None, limit: int = 1000
+) -> list[dict[typing.Any, typing.Any]]:
     """List current or historical boosters, newest activity first."""
     gid = _guild_settings_key(guild_id)
     if not is_guild_scope(gid):
@@ -1593,22 +1630,33 @@ def booster_stats(guild_id: str) -> dict[str, int]:
     """Return current/all-time boost and booster totals for a server."""
     gid = _guild_settings_key(guild_id)
     if not is_guild_scope(gid):
-        return {"current_boosts": 0, "all_time_boosts": 0, "current_boosters": 0, "all_time_boosters": 0}
-    row = conn().execute(
-        "SELECT COALESCE(SUM(CASE WHEN active=1 THEN current_boosts ELSE 0 END),0) current_boosts,"
-        "COALESCE(SUM(all_time_boosts),0) all_time_boosts,"
-        "COALESCE(SUM(active),0) current_boosters,"
-        "COALESCE(SUM(CASE WHEN all_time_boosts>0 THEN 1 ELSE 0 END),0) all_time_boosters "
-        "FROM booster_members WHERE guild_id=?", (gid,),
-    ).fetchone()
-    return {name: max(0, int(row[name] or 0)) for name in (
-        "current_boosts", "all_time_boosts", "current_boosters", "all_time_boosters"
-    )}
+        return {
+            "current_boosts": 0,
+            "all_time_boosts": 0,
+            "current_boosters": 0,
+            "all_time_boosters": 0,
+        }
+    row = (
+        conn()
+        .execute(
+            "SELECT COALESCE(SUM(CASE WHEN active=1 THEN current_boosts ELSE 0 END),0) current_boosts,"
+            "COALESCE(SUM(all_time_boosts),0) all_time_boosts,"
+            "COALESCE(SUM(active),0) current_boosters,"
+            "COALESCE(SUM(CASE WHEN all_time_boosts>0 THEN 1 ELSE 0 END),0) all_time_boosters "
+            "FROM booster_members WHERE guild_id=?",
+            (gid,),
+        )
+        .fetchone()
+    )
+    return {
+        name: max(0, int(row[name] or 0))
+        for name in ("current_boosts", "all_time_boosts", "current_boosters", "all_time_boosters")
+    }
 
 
 def booster_record_sync(
     guild_id: str, user_id: str, *, boosted_since: float | None = None, source: str = "sync"
-) -> tuple[dict, bool]:
+) -> tuple[dict[typing.Any, typing.Any], bool]:
     """Mark a member active. Returns the record and whether this was a new boost period."""
     gid, uid = _guild_settings_key(guild_id), str(user_id).strip()
     if not is_guild_scope(gid) or not uid.isdigit():
@@ -1654,7 +1702,9 @@ def booster_record_sync(
     return _booster_row(row), started
 
 
-def booster_record_event(guild_id: str, user_id: str, event_id: str) -> tuple[dict, bool]:
+def booster_record_event(
+    guild_id: str, user_id: str, event_id: str
+) -> tuple[dict[typing.Any, typing.Any], bool]:
     """Record a Discord boost system message once and increment the member count."""
     gid, uid = _guild_settings_key(guild_id), str(user_id).strip()
     eid = str(event_id).strip()[:200]
@@ -1665,10 +1715,13 @@ def booster_record_event(guild_id: str, user_id: str, event_id: str) -> tuple[di
     with _db_lock:
         try:
             c.execute("BEGIN IMMEDIATE")
-            inserted = c.execute(
-                "INSERT OR IGNORE INTO booster_events(guild_id,event_id,user_id,created) VALUES(?,?,?,?)",
-                (gid, eid, uid, timestamp),
-            ).rowcount > 0
+            inserted = (
+                c.execute(
+                    "INSERT OR IGNORE INTO booster_events(guild_id,event_id,user_id,created) VALUES(?,?,?,?)",
+                    (gid, eid, uid, timestamp),
+                ).rowcount
+                > 0
+            )
             if not inserted:
                 row = c.execute(
                     "SELECT * FROM booster_members WHERE guild_id=? AND user_id=?", (gid, uid)
@@ -1681,7 +1734,9 @@ def booster_record_event(guild_id: str, user_id: str, event_id: str) -> tuple[di
             # Gateway order is not stable: a premium_since update can arrive seconds before
             # the matching system message. Count that pair once, while later messages are boosts.
             paired_sync = bool(
-                old and old["active"] and old["last_source"] in {"sync", "member", "import"}
+                old
+                and old["active"]
+                and old["last_source"] in {"sync", "member", "import"}
                 and timestamp - float(old["updated"] or 0) <= 30
             )
             if old is None:
@@ -1693,7 +1748,8 @@ def booster_record_event(guild_id: str, user_id: str, event_id: str) -> tuple[di
             elif paired_sync:
                 c.execute(
                     "UPDATE booster_members SET last_source='system',last_boosted=?,updated=? "
-                    "WHERE guild_id=? AND user_id=?", (timestamp, timestamp, gid, uid),
+                    "WHERE guild_id=? AND user_id=?",
+                    (timestamp, timestamp, gid, uid),
                 )
             else:
                 c.execute(
@@ -1712,7 +1768,7 @@ def booster_record_event(guild_id: str, user_id: str, event_id: str) -> tuple[di
     return _booster_row(row), not paired_sync
 
 
-def booster_record_stop(guild_id: str, user_id: str) -> tuple[dict, bool]:
+def booster_record_stop(guild_id: str, user_id: str) -> tuple[dict[typing.Any, typing.Any], bool]:
     """Mark all boosts removed; Discord cannot expose partial boost removals."""
     gid, uid = _guild_settings_key(guild_id), str(user_id).strip()
     old = booster_member(gid, uid)
@@ -1722,13 +1778,14 @@ def booster_record_stop(guild_id: str, user_id: str) -> tuple[dict, bool]:
     with _db_lock:
         conn().execute(
             "UPDATE booster_members SET current_boosts=0,active=0,stopped=?,last_source='member',updated=? "
-            "WHERE guild_id=? AND user_id=?", (timestamp, timestamp, gid, uid),
+            "WHERE guild_id=? AND user_id=?",
+            (timestamp, timestamp, gid, uid),
         )
         conn().commit()
     return booster_member(gid, uid), True
 
 
-def booster_adjust(guild_id: str, user_id: str, delta: int) -> dict:
+def booster_adjust(guild_id: str, user_id: str, delta: int) -> dict[typing.Any, typing.Any]:
     """Apply a manager correction to current and all-time recorded boosts."""
     gid, uid = _guild_settings_key(guild_id), str(user_id).strip()
     change = max(-10_000, min(10_000, int(delta)))
@@ -1752,8 +1809,18 @@ def booster_adjust(guild_id: str, user_id: str, delta: int) -> dict:
                 c.execute(
                     "INSERT INTO booster_members(guild_id,user_id,current_boosts,all_time_boosts,active,"
                     "first_boosted,last_boosted,stopped,last_source,updated) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                    (gid, uid, current, lifetime, int(current > 0), first,
-                     timestamp if current else None, None if current else timestamp, "manual", timestamp),
+                    (
+                        gid,
+                        uid,
+                        current,
+                        lifetime,
+                        int(current > 0),
+                        first,
+                        timestamp if current else None,
+                        None if current else timestamp,
+                        "manual",
+                        timestamp,
+                    ),
                 )
             else:
                 c.execute(
@@ -1761,8 +1828,19 @@ def booster_adjust(guild_id: str, user_id: str, delta: int) -> dict:
                     "first_boosted=?,last_boosted=CASE WHEN ?>0 THEN ? ELSE last_boosted END,"
                     "stopped=CASE WHEN ?>0 THEN NULL ELSE ? END,last_source='manual',updated=? "
                     "WHERE guild_id=? AND user_id=?",
-                    (current, lifetime, int(current > 0), first, current, timestamp,
-                     current, timestamp, timestamp, gid, uid),
+                    (
+                        current,
+                        lifetime,
+                        int(current > 0),
+                        first,
+                        current,
+                        timestamp,
+                        current,
+                        timestamp,
+                        timestamp,
+                        gid,
+                        uid,
+                    ),
                 )
             row = c.execute(
                 "SELECT * FROM booster_members WHERE guild_id=? AND user_id=?", (gid, uid)
@@ -1777,7 +1855,7 @@ def booster_adjust(guild_id: str, user_id: str, delta: int) -> dict:
 def community_record_create(
     kind: str,
     guild_id: str,
-    data: dict,
+    data: dict[typing.Any, typing.Any],
     *,
     user_id: str | None = None,
     record_key: str | None = None,
@@ -1808,7 +1886,7 @@ def community_record_create(
         ),
     )
     conn().commit()
-    return int(cur.lastrowid)
+    return int(typing.cast(typing.Any, cur.lastrowid))
 
 
 def community_records(
@@ -1819,21 +1897,32 @@ def community_records(
     status: str | None = "active",
     due_before: float | None = None,
     limit: int = 500,
-) -> list[dict]:
+) -> list[dict[typing.Any, typing.Any]]:
     uid = str(user_id) if user_id is not None else None
     wanted_status = str(status) if status is not None else None
     deadline = float(due_before) if due_before is not None else None
-    rows = conn().execute(
-        "SELECT * FROM community_records WHERE kind=? AND guild_id=? "
-        "AND (? IS NULL OR user_id=?) AND (? IS NULL OR status=?) "
-        "AND (? IS NULL OR (due IS NOT NULL AND due<=?)) "
-        "ORDER BY COALESCE(due,created),id LIMIT ?",
-        (
-            str(kind), str(guild_id), uid, uid, wanted_status, wanted_status,
-            deadline, deadline, max(1, min(5000, int(limit))),
-        ),
-    ).fetchall()
-    output = []
+    rows = (
+        conn()
+        .execute(
+            "SELECT * FROM community_records WHERE kind=? AND guild_id=? "
+            "AND (? IS NULL OR user_id=?) AND (? IS NULL OR status=?) "
+            "AND (? IS NULL OR (due IS NOT NULL AND due<=?)) "
+            "ORDER BY COALESCE(due,created),id LIMIT ?",
+            (
+                str(kind),
+                str(guild_id),
+                uid,
+                uid,
+                wanted_status,
+                wanted_status,
+                deadline,
+                deadline,
+                max(1, min(5000, int(limit))),
+            ),
+        )
+        .fetchall()
+    )
+    output: list[typing.Any] = []
     for row in rows:
         item = dict(row)
         item["data"] = _json_dict(item.get("data"))
@@ -1844,20 +1933,18 @@ def community_records(
 def community_record_update(
     record_id: int,
     *,
-    data: dict | None = None,
+    data: dict[typing.Any, typing.Any] | None = None,
     status: str | None = None,
     due: float | None = None,
 ) -> bool:
-    row = conn().execute(
-        "SELECT data,status,due FROM community_records WHERE id=?", (int(record_id),)
-    ).fetchone()
+    row = (
+        conn()
+        .execute("SELECT data,status,due FROM community_records WHERE id=?", (int(record_id),))
+        .fetchone()
+    )
     if row is None:
         return False
-    payload = (
-        json.dumps(data, ensure_ascii=False)
-        if isinstance(data, dict)
-        else str(row["data"])
-    )
+    payload = json.dumps(data, ensure_ascii=False) if isinstance(data, dict) else str(row["data"])
     cur = conn().execute(
         "UPDATE community_records SET data=?,status=?,due=?,updated=? WHERE id=?",
         (
@@ -1898,32 +1985,42 @@ def afk_set(
         "reason=excluded.reason,original_nick=excluded.original_nick,"
         "notify_return=excluded.notify_return,created=excluded.created",
         (
-            str(guild_id), str(user_id), str(reason)[:1000],
+            str(guild_id),
+            str(user_id),
+            str(reason)[:1000],
             str(original_nick)[:100] if original_nick else None,
-            1 if notify_return else 0, now(),
+            1 if notify_return else 0,
+            now(),
         ),
     )
     conn().commit()
 
 
-def afk_get(guild_id: str, user_id: str) -> dict | None:
-    row = conn().execute(
-        "SELECT * FROM afk_statuses WHERE guild_id=? AND user_id=?",
-        (str(guild_id), str(user_id)),
-    ).fetchone()
+def afk_get(guild_id: str, user_id: str) -> dict[typing.Any, typing.Any] | None:
+    row = (
+        conn()
+        .execute(
+            "SELECT * FROM afk_statuses WHERE guild_id=? AND user_id=?",
+            (str(guild_id), str(user_id)),
+        )
+        .fetchone()
+    )
     return dict(row) if row else None
 
 
-def afk_list(guild_id: str, limit: int = 100) -> list[dict]:
+def afk_list(guild_id: str, limit: int = 100) -> list[dict[typing.Any, typing.Any]]:
     return [
-        dict(row) for row in conn().execute(
+        dict(row)
+        for row in conn()
+        .execute(
             "SELECT * FROM afk_statuses WHERE guild_id=? ORDER BY created DESC LIMIT ?",
             (str(guild_id), max(1, min(1000, int(limit)))),
-        ).fetchall()
+        )
+        .fetchall()
     ]
 
 
-def afk_clear(guild_id: str, user_id: str | None = None) -> list[dict]:
+def afk_clear(guild_id: str, user_id: str | None = None) -> list[dict[typing.Any, typing.Any]]:
     rows = afk_list(guild_id, 1000) if user_id is None else [afk_get(guild_id, user_id)]
     clean_rows = [row for row in rows if row is not None]
     if user_id is None:
@@ -1950,25 +2047,28 @@ def afk_note_add(
         "INSERT INTO afk_notes(guild_id,target_id,author_id,channel_id,message_id,"
         "content,created) VALUES(?,?,?,?,?,?,?)",
         (
-            str(guild_id), str(target_id), str(author_id),
+            str(guild_id),
+            str(target_id),
+            str(author_id),
             str(channel_id) if channel_id else None,
             str(message_id) if message_id else None,
-            str(content)[:1800], now(),
+            str(content)[:1800],
+            now(),
         ),
     )
     conn().commit()
-    return int(cur.lastrowid)
+    return int(typing.cast(typing.Any, cur.lastrowid))
 
 
-def afk_notes_pop(guild_id: str, target_id: str) -> list[dict]:
+def afk_notes_pop(guild_id: str, target_id: str) -> list[dict[typing.Any, typing.Any]]:
     c = conn()
     with _db_lock:
         try:
             c.execute("BEGIN IMMEDIATE")
             rows = [
-                dict(row) for row in c.execute(
-                    "SELECT * FROM afk_notes WHERE guild_id=? AND target_id=? "
-                    "ORDER BY created,id",
+                dict(row)
+                for row in c.execute(
+                    "SELECT * FROM afk_notes WHERE guild_id=? AND target_id=? ORDER BY created,id",
                     (str(guild_id), str(target_id)),
                 ).fetchall()
             ]
@@ -1999,15 +2099,23 @@ def _bond_label(score: float) -> str:
     return "nemesis"
 
 
-def relationship_get(user_id: str, guild_id: str) -> dict:
-    row = conn().execute(
-        "SELECT * FROM relationships WHERE user_id=? AND guild_id=?",
-        (user_id, guild_id),
-    ).fetchone()
+def relationship_get(user_id: str, guild_id: str) -> dict[typing.Any, typing.Any]:
+    row = (
+        conn()
+        .execute(
+            "SELECT * FROM relationships WHERE user_id=? AND guild_id=?",
+            (user_id, guild_id),
+        )
+        .fetchone()
+    )
     if not row:
         return {
-            "user_id": user_id, "guild_id": guild_id, "score": 0.0,
-            "nickname": None, "grudge": None, "bond_label": "stranger",
+            "user_id": user_id,
+            "guild_id": guild_id,
+            "score": 0.0,
+            "nickname": None,
+            "grudge": None,
+            "bond_label": "stranger",
             "updated": now(),
         }
     return dict(row)
@@ -2020,7 +2128,7 @@ def relationship_set(
     nickname: Optional[str] = None,
     grudge: Optional[str] = None,
     delta: float = 0.0,
-) -> dict:
+) -> dict[typing.Any, typing.Any]:
     cur = relationship_get(user_id, guild_id)
     s = float(cur["score"])
     if score is not None:
@@ -2047,7 +2155,9 @@ def relationship_set(
     return relationship_get(user_id, guild_id)
 
 
-def relationship_top(guild_id: str, limit: int = 10, worst: bool = False) -> List[dict]:
+def relationship_top(
+    guild_id: str, limit: int = 10, worst: bool = False
+) -> List[dict[typing.Any, typing.Any]]:
     query = (
         "SELECT * FROM relationships WHERE guild_id=? ORDER BY score ASC LIMIT ?"
         if worst
@@ -2057,20 +2167,28 @@ def relationship_top(guild_id: str, limit: int = 10, worst: bool = False) -> Lis
     return [dict(r) for r in rows]
 
 
-def relationships_for_user(user_id: str) -> List[dict]:
-    rows = conn().execute(
-        "SELECT * FROM relationships WHERE user_id=?",
-        (str(user_id),),
-    ).fetchall()
+def relationships_for_user(user_id: str) -> List[dict[typing.Any, typing.Any]]:
+    rows = (
+        conn()
+        .execute(
+            "SELECT * FROM relationships WHERE user_id=?",
+            (str(user_id),),
+        )
+        .fetchall()
+    )
     return [dict(r) for r in rows]
 
 
 def memories_for_subject(subject: str) -> List[sqlite3.Row]:
     subject = normalize_subject(subject)
-    return conn().execute(
-        "SELECT * FROM memories WHERE subject=?",
-        (subject,),
-    ).fetchall()
+    return (
+        conn()
+        .execute(
+            "SELECT * FROM memories WHERE subject=?",
+            (subject,),
+        )
+        .fetchall()
+    )
 
 
 def convo_add(user_id: str, guild_id: str, role: str, content: str) -> None:
@@ -2092,22 +2210,32 @@ def convo_add(user_id: str, guild_id: str, role: str, content: str) -> None:
     c.commit()
 
 
-def convo_get(user_id: str, guild_id: str, limit: int = None) -> List[dict]:
+def convo_get(
+    user_id: str, guild_id: str, limit: int | None = None
+) -> List[dict[typing.Any, typing.Any]]:
     limit = limit or config.CONVO_TURNS * 2
-    rows = conn().execute(
-        "SELECT role, content, created FROM conversations "
-        "WHERE user_id=? AND guild_id=? ORDER BY created DESC LIMIT ?",
-        (user_id, guild_id, limit),
-    ).fetchall()
+    rows = (
+        conn()
+        .execute(
+            "SELECT role, content, created FROM conversations "
+            "WHERE user_id=? AND guild_id=? ORDER BY created DESC LIMIT ?",
+            (user_id, guild_id, limit),
+        )
+        .fetchall()
+    )
     return [dict(r) for r in reversed(rows)]
 
 
-def conversation_summary_get(user_id: str, guild_id: str) -> dict | None:
-    row = conn().execute(
-        "SELECT summary,source_through,updated FROM conversation_summaries "
-        "WHERE user_id=? AND guild_id=?",
-        (str(user_id), str(guild_id)),
-    ).fetchone()
+def conversation_summary_get(user_id: str, guild_id: str) -> dict[typing.Any, typing.Any] | None:
+    row = (
+        conn()
+        .execute(
+            "SELECT summary,source_through,updated FROM conversation_summaries "
+            "WHERE user_id=? AND guild_id=?",
+            (str(user_id), str(guild_id)),
+        )
+        .fetchone()
+    )
     return dict(row) if row is not None else None
 
 
@@ -2154,34 +2282,46 @@ def convo_clear_user(user_id: str) -> int:
     return max(0, int(cur.rowcount))
 
 
-def quote_add(guild_id: str, text: str, about: str = None, author: str = None) -> int:
+def quote_add(guild_id: str, text: str, about: str | None = None, author: str | None = None) -> int:
     cur = conn().execute(
         "INSERT INTO quotes(guild_id,text,about,author,created) VALUES(?,?,?,?,?)",
         (guild_id, text.strip()[:500], about, author, now()),
     )
     conn().commit()
-    return cur.lastrowid
+    return int(cur.lastrowid or 0)
 
 
-def quote_random(guild_id: str, about: str = None) -> Optional[dict]:
+def quote_random(guild_id: str, about: str | None = None) -> Optional[dict[typing.Any, typing.Any]]:
     if about:
-        row = conn().execute(
-            "SELECT * FROM quotes WHERE guild_id=? AND about=? ORDER BY RANDOM() LIMIT 1",
-            (guild_id, about),
-        ).fetchone()
+        row = (
+            conn()
+            .execute(
+                "SELECT * FROM quotes WHERE guild_id=? AND about=? ORDER BY RANDOM() LIMIT 1",
+                (guild_id, about),
+            )
+            .fetchone()
+        )
     else:
-        row = conn().execute(
-            "SELECT * FROM quotes WHERE guild_id=? ORDER BY RANDOM() LIMIT 1",
-            (guild_id,),
-        ).fetchone()
+        row = (
+            conn()
+            .execute(
+                "SELECT * FROM quotes WHERE guild_id=? ORDER BY RANDOM() LIMIT 1",
+                (guild_id,),
+            )
+            .fetchone()
+        )
     return dict(row) if row else None
 
 
-def quote_list(guild_id: str, limit: int = 20) -> List[dict]:
-    rows = conn().execute(
-        "SELECT * FROM quotes WHERE guild_id=? ORDER BY created DESC LIMIT ?",
-        (guild_id, limit),
-    ).fetchall()
+def quote_list(guild_id: str, limit: int = 20) -> List[dict[typing.Any, typing.Any]]:
+    rows = (
+        conn()
+        .execute(
+            "SELECT * FROM quotes WHERE guild_id=? ORDER BY created DESC LIMIT ?",
+            (guild_id, limit),
+        )
+        .fetchall()
+    )
     return [dict(r) for r in rows]
 
 
@@ -2194,9 +2334,7 @@ def quote_delete(
 ) -> bool:
     """Delete only a quote owned by this scope and actor (or its moderator)."""
     if can_moderate:
-        cur = conn().execute(
-            "DELETE FROM quotes WHERE id=? AND guild_id=?", (qid, scope_id)
-        )
+        cur = conn().execute("DELETE FROM quotes WHERE id=? AND guild_id=?", (qid, scope_id))
     else:
         cur = conn().execute(
             "DELETE FROM quotes WHERE id=? AND guild_id=? AND author=?",
@@ -2209,7 +2347,7 @@ def quote_delete(
 _SNOWFLAKE = re.compile(r"(\d{15,22})")
 
 
-def normalize_subject(about, default_user: str = None) -> str:
+def normalize_subject(about: typing.Any, default_user: str | None = None) -> str:
     """Canonical subject key: raw user id, or 'server'.
 
     The model sometimes emits <@id>, bare ids, or 'me'/'user' — normalize so
@@ -2229,13 +2367,19 @@ def normalize_subject(about, default_user: str = None) -> str:
     return s
 
 
-def _tokens(text: str) -> set:
+def _tokens(text: str) -> set[typing.Any]:
     return set(_WORD.findall((text or "").lower()))
 
 
 def add_memory(
-    content, author, guild_id, subject="server", importance=0.5,
-    *, category: str = "fact", expires: float | None = None,
+    content: typing.Any,
+    author: typing.Any,
+    guild_id: typing.Any,
+    subject: str = "server",
+    importance: float = 0.5,
+    *,
+    category: str = "fact",
+    expires: float | None = None,
 ) -> int:
     """Insert a memory, merging into a near-duplicate if one exists."""
     content = (content or "").strip()
@@ -2246,8 +2390,15 @@ def add_memory(
     importance = max(0.0, min(1.0, float(importance)))
     category = str(category or "fact").strip().lower()
     if category not in {
-        "identity", "preference", "project", "relationship", "habit",
-        "future_plan", "server_fact", "temporary", "fact",
+        "identity",
+        "preference",
+        "project",
+        "relationship",
+        "habit",
+        "future_plan",
+        "server_fact",
+        "temporary",
+        "fact",
     }:
         category = "fact"
     expires = float(expires) if expires is not None else None
@@ -2279,7 +2430,7 @@ def add_memory(
     conn().commit()
     _invalidate_memory_cache(subject=subject, scope_id=guild_id)
     _enforce_memory_cap(subject, guild_id)
-    return cur.lastrowid
+    return int(cur.lastrowid or 0)
 
 
 def _enforce_memory_cap(subject: str, guild_id: str) -> None:
@@ -2301,7 +2452,7 @@ def _enforce_memory_cap(subject: str, guild_id: str) -> None:
     _invalidate_memory_cache(subject=subject, scope_id=guild_id)
 
 
-def update_memory(mem_id: int, content: str = None, importance: float = None) -> bool:
+def update_memory(mem_id: int, content: str | None = None, importance: float | None = None) -> bool:
     row = conn().execute("SELECT * FROM memories WHERE id=?", (mem_id,)).fetchone()
     if not row:
         return False
@@ -2309,7 +2460,7 @@ def update_memory(mem_id: int, content: str = None, importance: float = None) ->
     importance = float(importance) if importance is not None else float(row["importance"])
     conn().execute(
         "UPDATE memories SET content=?, importance=?, updated=? WHERE id=?",
-        (content.strip(), max(0.0, min(1.0, importance)), now(), mem_id),
+        (typing.cast(typing.Any, content).strip(), max(0.0, min(1.0, importance)), now(), mem_id),
     )
     conn().commit()
     _invalidate_memory_cache(subject=str(row["subject"]), scope_id=str(row["guild_id"] or ""))
@@ -2325,12 +2476,16 @@ def memories_about(subject: str, guild_id: Optional[str]) -> List[sqlite3.Row]:
         return cached
     if gid is None:
         return []
-    rows = conn().execute(
-        "SELECT * FROM memories WHERE subject=? AND guild_id=? "
-        "AND superseded_by IS NULL AND (expires IS NULL OR expires>?) "
-        "ORDER BY importance DESC, created DESC",
-        (subject, gid, now()),
-    ).fetchall()
+    rows = (
+        conn()
+        .execute(
+            "SELECT * FROM memories WHERE subject=? AND guild_id=? "
+            "AND superseded_by IS NULL AND (expires IS NULL OR expires>?) "
+            "ORDER BY importance DESC, created DESC",
+            (subject, gid, now()),
+        )
+        .fetchall()
+    )
     _mem_cache_set(key, rows)
     return rows
 
@@ -2343,19 +2498,21 @@ def scope_memories(guild_id: Optional[str]) -> List[sqlite3.Row]:
     cached = _mem_cache_get(key)
     if cached is not None:
         return cached
-    rows = conn().execute(
-        "SELECT * FROM memories WHERE guild_id=? AND superseded_by IS NULL "
-        "AND (expires IS NULL OR expires>?)",
-        (gid, now()),
-    ).fetchall()
+    rows = (
+        conn()
+        .execute(
+            "SELECT * FROM memories WHERE guild_id=? AND superseded_by IS NULL "
+            "AND (expires IS NULL OR expires>?)",
+            (gid, now()),
+        )
+        .fetchall()
+    )
     _mem_cache_set(key, rows)
     return rows
 
 
 def get_memory(mem_id: int) -> Optional[sqlite3.Row]:
-    return conn().execute(
-        "SELECT * FROM memories WHERE id=?", (int(mem_id),)
-    ).fetchone()
+    return conn().execute("SELECT * FROM memories WHERE id=?", (int(mem_id),)).fetchone()
 
 
 def mark_memories_used(memory_ids: list[int]) -> None:
@@ -2401,7 +2558,7 @@ def forget_memories_about(
     *,
     clear_convo: bool = True,
     all_guilds: bool = False,
-) -> dict:
+) -> dict[typing.Any, typing.Any]:
     """Wipe long-term memories about a subject.
 
     Also clears short-term conversation history for that user (so the model
@@ -2420,9 +2577,7 @@ def forget_memories_about(
     n_convo = 0
     if clear_convo and subject.isdigit():
         if all_guilds or gid is None:
-            cur2 = conn().execute(
-                "DELETE FROM conversations WHERE user_id=?", (subject,)
-            )
+            cur2 = conn().execute("DELETE FROM conversations WHERE user_id=?", (subject,))
             n_convo = cur2.rowcount
         else:
             n_convo = convo_clear(subject, gid)
@@ -2467,15 +2622,19 @@ def add_lesson(content: str, source: str = "reflection", scope_id: str | None = 
 def all_lessons(scope_id: str | None = None):
     global _lessons_cache, _lessons_ts
     if not scope_id:
-        return []
+        return typing.cast(typing.Any, [])
     now_t = time.time()
     cache_key = str(scope_id)
     if isinstance(_lessons_cache, dict) and now_t - _lessons_ts < _LESSONS_TTL:
         return _lessons_cache.get(cache_key, [])
-    rows = conn().execute(
-        "SELECT * FROM lessons WHERE scope_id=? AND enabled=1 ORDER BY created",
-        (scope_id,),
-    ).fetchall()
+    rows = (
+        conn()
+        .execute(
+            "SELECT * FROM lessons WHERE scope_id=? AND enabled=1 ORDER BY created",
+            (scope_id,),
+        )
+        .fetchall()
+    )
     _lessons_cache = {cache_key: rows}
     _lessons_ts = now_t
     return rows
@@ -2483,16 +2642,21 @@ def all_lessons(scope_id: str | None = None):
 
 def delete_lesson(lesson_id: int, scope_id: str) -> bool:
     global _lessons_cache
-    cur = conn().execute(
-        "DELETE FROM lessons WHERE id=? AND scope_id=?", (lesson_id, scope_id)
-    )
+    cur = conn().execute("DELETE FROM lessons WHERE id=? AND scope_id=?", (lesson_id, scope_id))
     conn().commit()
     if cur.rowcount:
         _lessons_cache = None
     return cur.rowcount > 0
 
 
-def add_feedback(user_msg, bot_msg, verdict, author, note=None, scope_id: str | None = None) -> int:
+def add_feedback(
+    user_msg: typing.Any,
+    bot_msg: typing.Any,
+    verdict: typing.Any,
+    author: typing.Any,
+    note: typing.Any = None,
+    scope_id: str | None = None,
+) -> int:
     if not scope_id:
         return 0
     cur = conn().execute(
@@ -2501,35 +2665,49 @@ def add_feedback(user_msg, bot_msg, verdict, author, note=None, scope_id: str | 
         (user_msg, bot_msg, verdict, note, author, now(), scope_id),
     )
     conn().commit()
-    return cur.lastrowid
+    return int(cur.lastrowid or 0)
 
 
 def unprocessed_feedback(limit: int, scope_id: str | None = None):
     selected_scope = str(scope_id or "")
     if not selected_scope:
-        first = conn().execute(
-            "SELECT scope_id FROM feedback WHERE processed=0 AND scope_id IS NOT NULL "
-            "ORDER BY created LIMIT 1"
-        ).fetchone()
+        first = (
+            conn()
+            .execute(
+                "SELECT scope_id FROM feedback WHERE processed=0 AND scope_id IS NOT NULL "
+                "ORDER BY created LIMIT 1"
+            )
+            .fetchone()
+        )
         if not first:
-            return []
+            return typing.cast(typing.Any, [])
         selected_scope = str(first["scope_id"] or "")
     if not (is_guild_scope(selected_scope) or is_dm_scope(selected_scope)):
-        return []
-    return conn().execute(
-        "SELECT * FROM feedback WHERE processed=0 AND scope_id=? ORDER BY created LIMIT ?",
-        (selected_scope, limit),
-    ).fetchall()
+        return typing.cast(typing.Any, [])
+    return (
+        conn()
+        .execute(
+            "SELECT * FROM feedback WHERE processed=0 AND scope_id=? ORDER BY created LIMIT ?",
+            (selected_scope, limit),
+        )
+        .fetchall()
+    )
 
 
-def mark_feedback_processed(ids) -> None:
+def mark_feedback_processed(ids: typing.Any) -> None:
     if not ids:
         return
     conn().executemany("UPDATE feedback SET processed=1 WHERE id=?", [(i,) for i in ids])
     conn().commit()
 
 
-def add_command(name, description, behavior, author, guild_id) -> None:
+def add_command(
+    name: typing.Any,
+    description: typing.Any,
+    behavior: typing.Any,
+    author: typing.Any,
+    guild_id: typing.Any,
+) -> None:
     conn().execute(
         "INSERT INTO commands(scope_id,name,description,behavior,author,created,enabled) "
         "VALUES(?,?,?,?,?,?,1) "
@@ -2540,21 +2718,29 @@ def add_command(name, description, behavior, author, guild_id) -> None:
     conn().commit()
 
 
-def get_command(name, scope_id: str):
-    return conn().execute(
-        "SELECT * FROM commands WHERE scope_id=? AND name=? AND enabled=1",
-        (scope_id, name.lower()),
-    ).fetchone()
+def get_command(name: typing.Any, scope_id: str):
+    return (
+        conn()
+        .execute(
+            "SELECT * FROM commands WHERE scope_id=? AND name=? AND enabled=1",
+            (scope_id, name.lower()),
+        )
+        .fetchone()
+    )
 
 
 def all_commands(scope_id: str):
-    return conn().execute(
-        "SELECT * FROM commands WHERE scope_id=? AND enabled=1 ORDER BY uses DESC",
-        (scope_id,),
-    ).fetchall()
+    return (
+        conn()
+        .execute(
+            "SELECT * FROM commands WHERE scope_id=? AND enabled=1 ORDER BY uses DESC",
+            (scope_id,),
+        )
+        .fetchall()
+    )
 
 
-def bump_command(name, scope_id: str) -> None:
+def bump_command(name: typing.Any, scope_id: str) -> None:
     conn().execute(
         "UPDATE commands SET uses=uses+1 WHERE scope_id=? AND name=?",
         (scope_id, name.lower()),
@@ -2562,7 +2748,9 @@ def bump_command(name, scope_id: str) -> None:
     conn().commit()
 
 
-def delete_command(name, scope_id: str, requester_id: str, *, can_moderate: bool = False) -> bool:
+def delete_command(
+    name: typing.Any, scope_id: str, requester_id: str, *, can_moderate: bool = False
+) -> bool:
     if can_moderate:
         cur = conn().execute(
             "DELETE FROM commands WHERE scope_id=? AND name=?", (scope_id, name.lower())
@@ -2576,7 +2764,7 @@ def delete_command(name, scope_id: str, requester_id: str, *, can_moderate: bool
     return cur.rowcount > 0
 
 
-def log_interaction(kind, author, guild_id) -> None:
+def log_interaction(kind: typing.Any, author: typing.Any, guild_id: typing.Any) -> None:
     conn().execute(
         "INSERT INTO interactions(kind,author,guild_id,created) VALUES(?,?,?,?)",
         (kind, author, guild_id, now()),
@@ -2585,10 +2773,21 @@ def log_interaction(kind, author, guild_id) -> None:
 
 
 def ai_trace_record(
-    *, trace_id: str, scope_id: str, task: str, route: str,
-    requested_model: str, served_model: str, prompt_version: str,
-    status: str, latency_ms: int, input_tokens: int, output_tokens: int,
-    attempts: int, fallbacks: int, error_type: str = "",
+    *,
+    trace_id: str,
+    scope_id: str,
+    task: str,
+    route: str,
+    requested_model: str,
+    served_model: str,
+    prompt_version: str,
+    status: str,
+    latency_ms: int,
+    input_tokens: int,
+    output_tokens: int,
+    attempts: int,
+    fallbacks: int,
+    error_type: str = "",
 ) -> None:
     """Persist metadata only; prompt and response text are never accepted."""
     if not bool(guild_settings(scope_id).get("ai_tracing_enabled", True)):
@@ -2599,37 +2798,56 @@ def ai_trace_record(
         "status,latency_ms,input_tokens,output_tokens,attempts,fallbacks,error_type,created"
         ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
-            trace_id, scope_id, task, route, requested_model, served_model,
-            prompt_version, status, max(0, int(latency_ms)), max(0, int(input_tokens)),
-            max(0, int(output_tokens)), max(0, int(attempts)), max(0, int(fallbacks)),
-            str(error_type or "")[:80], now(),
+            trace_id,
+            scope_id,
+            task,
+            route,
+            requested_model,
+            served_model,
+            prompt_version,
+            status,
+            max(0, int(latency_ms)),
+            max(0, int(input_tokens)),
+            max(0, int(output_tokens)),
+            max(0, int(attempts)),
+            max(0, int(fallbacks)),
+            str(error_type or "")[:80],
+            now(),
         ),
     )
     conn().commit()
 
 
-def ai_traces_recent(scope_id: str, limit: int = 20) -> list[dict]:
-    rows = conn().execute(
-        "SELECT trace_id,task,route,requested_model,served_model,prompt_version,status,"
-        "latency_ms,input_tokens,output_tokens,attempts,fallbacks,error_type,created "
-        "FROM ai_traces WHERE scope_id=? ORDER BY created DESC LIMIT ?",
-        (str(scope_id), max(1, min(100, int(limit)))),
-    ).fetchall()
+def ai_traces_recent(scope_id: str, limit: int = 20) -> list[dict[typing.Any, typing.Any]]:
+    rows = (
+        conn()
+        .execute(
+            "SELECT trace_id,task,route,requested_model,served_model,prompt_version,status,"
+            "latency_ms,input_tokens,output_tokens,attempts,fallbacks,error_type,created "
+            "FROM ai_traces WHERE scope_id=? ORDER BY created DESC LIMIT ?",
+            (str(scope_id), max(1, min(100, int(limit)))),
+        )
+        .fetchall()
+    )
     return [dict(row) for row in rows]
 
 
-def ai_trace_summary(scope_id: str, hours: int = 24) -> dict:
+def ai_trace_summary(scope_id: str, hours: int = 24) -> dict[typing.Any, typing.Any]:
     cutoff = now() - max(1, min(720, int(hours))) * 3600
-    row = conn().execute(
-        "SELECT COUNT(*) requests,"
-        "SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) successes,"
-        "SUM(CASE WHEN fallbacks>0 THEN 1 ELSE 0 END) fallback_requests,"
-        "COALESCE(AVG(latency_ms),0) average_latency_ms,"
-        "COALESCE(SUM(input_tokens),0) input_tokens,"
-        "COALESCE(SUM(output_tokens),0) output_tokens "
-        "FROM ai_traces WHERE scope_id=? AND created>=?",
-        (str(scope_id), cutoff),
-    ).fetchone()
+    row = (
+        conn()
+        .execute(
+            "SELECT COUNT(*) requests,"
+            "SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) successes,"
+            "SUM(CASE WHEN fallbacks>0 THEN 1 ELSE 0 END) fallback_requests,"
+            "COALESCE(AVG(latency_ms),0) average_latency_ms,"
+            "COALESCE(SUM(input_tokens),0) input_tokens,"
+            "COALESCE(SUM(output_tokens),0) output_tokens "
+            "FROM ai_traces WHERE scope_id=? AND created>=?",
+            (str(scope_id), cutoff),
+        )
+        .fetchone()
+    )
     data = dict(row) if row is not None else {}
     requests = int(data.get("requests") or 0)
     successes = int(data.get("successes") or 0)
@@ -2647,7 +2865,10 @@ def ai_trace_summary(scope_id: str, hours: int = 24) -> dict:
 def ai_spend_paused() -> bool:
     """Return the durable host-level paid-AI emergency-stop state."""
     return str(kv_get("ai:spend_paused", "0") or "0").strip().lower() in {
-        "1", "true", "yes", "on",
+        "1",
+        "true",
+        "yes",
+        "on",
     }
 
 
@@ -2659,7 +2880,10 @@ def ai_spend_set_paused(paused: bool) -> None:
 def ai_user_spend_paused(user_id: str) -> bool:
     """Return whether one Discord user is denied paid AI but not other bot features."""
     return str(user_flag_get(str(user_id), "ai_spend_paused") or "").lower() in {
-        "1", "true", "yes", "on",
+        "1",
+        "true",
+        "yes",
+        "on",
     }
 
 
@@ -2682,7 +2906,7 @@ def ai_spend_reserve(
     user_daily_limit_microusd: int | None,
     scope_daily_limit_microusd: int | None,
     at: float | None = None,
-) -> dict:
+) -> dict[typing.Any, typing.Any]:
     """Atomically reserve worst-case paid-provider cost across durable windows.
 
     Reservations are deliberately not refunded: a timed-out or disconnected
@@ -2700,13 +2924,23 @@ def ai_spend_reserve(
     ]
     if uid and user_daily_limit_microusd is not None:
         dimensions.append(
-            ("user_daily", 86400.0, max(0, int(user_daily_limit_microusd)),
-             " AND user_id=?", (uid,))
+            (
+                "user_daily",
+                86400.0,
+                max(0, int(user_daily_limit_microusd)),
+                " AND user_id=?",
+                (uid,),
+            )
         )
     if scope and scope_daily_limit_microusd is not None:
         dimensions.append(
-            ("scope_daily", 86400.0, max(0, int(scope_daily_limit_microusd)),
-             " AND scope_id=?", (scope,))
+            (
+                "scope_daily",
+                86400.0,
+                max(0, int(scope_daily_limit_microusd)),
+                " AND scope_id=?",
+                (scope,),
+            )
         )
 
     c = conn()
@@ -2742,9 +2976,14 @@ def ai_spend_reserve(
                 "user_id,scope_id,provider,model,input_tokens,max_output_tokens,"
                 "reserved_microusd,created) VALUES(?,?,?,?,?,?,?,?)",
                 (
-                    uid, scope, str(provider)[:40], str(model)[:160],
-                    max(0, int(input_tokens)), max(0, int(max_output_tokens)),
-                    cost, created,
+                    uid,
+                    scope,
+                    str(provider)[:40],
+                    str(model)[:160],
+                    max(0, int(input_tokens)),
+                    max(0, int(max_output_tokens)),
+                    cost,
+                    created,
                 ),
             )
             c.commit()
@@ -2758,7 +2997,7 @@ def ai_spend_summary(*, at: float | None = None) -> dict[str, int | bool]:
     """Return privacy-safe host totals for emergency operations."""
     created = now() if at is None else float(at)
     c = conn()
-    totals = {}
+    totals: dict[typing.Any, typing.Any] = {}
     for name, window in (("hour", 3600.0), ("day", 86400.0), ("month", 30 * 86400.0)):
         row = c.execute(
             "SELECT COUNT(*) requests,COALESCE(SUM(reserved_microusd),0) cost "
@@ -2771,10 +3010,10 @@ def ai_spend_summary(*, at: float | None = None) -> dict[str, int | bool]:
     return totals
 
 
-def stats() -> dict:
+def stats() -> dict[typing.Any, typing.Any]:
     c = conn()
 
-    def q(sql: str, *a):
+    def q(sql: str, *a: typing.Any):
         return c.execute(sql, a).fetchone()["n"]
 
     return {
@@ -2789,7 +3028,7 @@ def stats() -> dict:
     }
 
 
-def export_guild(guild_id: str) -> dict:
+def export_guild(guild_id: str) -> dict[typing.Any, typing.Any]:
     """Dump a versioned, exact-scope guild bundle."""
     return {
         "schema_version": 2,
@@ -2800,9 +3039,10 @@ def export_guild(guild_id: str) -> dict:
         "commands": [dict(r) for r in all_commands(guild_id)],
         "quotes": quote_list(guild_id, limit=500),
         "relationships": [
-            dict(r) for r in conn().execute(
-                "SELECT * FROM relationships WHERE guild_id=?", (guild_id,)
-            ).fetchall()
+            dict(r)
+            for r in conn()
+            .execute("SELECT * FROM relationships WHERE guild_id=?", (guild_id,))
+            .fetchall()
         ],
     }
 
@@ -2815,7 +3055,9 @@ _IMPORT_LIMITS = {
 }
 
 
-def validate_import_bundle(data: dict, scope_id: str) -> dict:
+def validate_import_bundle(
+    data: dict[typing.Any, typing.Any], scope_id: str
+) -> dict[typing.Any, typing.Any]:
     """Validate and normalize ImportBundleV2 before any database mutation."""
     if not isinstance(data, dict):
         raise ValueError("import must be a JSON object")
@@ -2834,19 +3076,23 @@ def validate_import_bundle(data: dict, scope_id: str) -> dict:
     if str(data.get("scope") or "") != str(scope_id):
         raise ValueError("import scope does not match this server")
 
-    clean: dict = {"schema_version": 2, "scope": scope_id}
-    settings = data.get("settings") or {}
+    clean: dict[typing.Any, typing.Any] = {"schema_version": 2, "scope": scope_id}
+    settings: typing.Any = data.get("settings") or {}
     if not isinstance(settings, dict):
         raise ValueError("settings must be an object")
-    clean["settings"] = {k: v for k, v in settings.items() if k in _DEFAULT_GUILD}
+    clean["settings"] = {
+        k: v
+        for k, v in typing.cast(typing.Iterable[typing.Any], settings.items())
+        if k in _DEFAULT_GUILD
+    }
 
     for section, maximum in _IMPORT_LIMITS.items():
-        rows = data.get(section) or []
+        rows: typing.Any = data.get(section) or []
         if not isinstance(rows, list):
             raise ValueError(f"{section} must be an array")
-        if len(rows) > maximum:
+        if len(typing.cast(typing.Any, rows)) > maximum:
             raise ValueError(f"{section} exceeds the {maximum}-row limit")
-        if not all(isinstance(row, dict) for row in rows):
+        if not all(isinstance(row, dict) for row in typing.cast(typing.Iterable[typing.Any], rows)):
             raise ValueError(f"every {section} entry must be an object")
         clean[section] = rows
 
@@ -2883,7 +3129,7 @@ def validate_import_bundle(data: dict, scope_id: str) -> dict:
     return clean
 
 
-def import_guild(data: dict, guild_id: str) -> dict:
+def import_guild(data: dict[typing.Any, typing.Any], guild_id: str) -> dict[typing.Any, typing.Any]:
     """Validate and atomically import a versioned exact-scope bundle."""
     counts = {"memories": 0, "lessons": 0, "commands": 0, "quotes": 0, "relationships": 0}
     bundle = validate_import_bundle(data, guild_id)
@@ -2904,9 +3150,12 @@ def import_guild(data: dict, guild_id: str) -> dict:
                     "VALUES(?,?,?,?,?,?,?)",
                     (
                         normalize_subject(row.get("subject"), row.get("author")),
-                        str(row["content"]).strip(), str(row.get("author") or "import"),
-                        guild_id, max(0.0, min(1.0, float(row.get("importance", 0.5)))),
-                        now(), now(),
+                        str(row["content"]).strip(),
+                        str(row.get("author") or "import"),
+                        guild_id,
+                        max(0.0, min(1.0, float(row.get("importance", 0.5)))),
+                        now(),
+                        now(),
                     ),
                 )
                 counts["memories"] += 1
@@ -2917,17 +3166,25 @@ def import_guild(data: dict, guild_id: str) -> dict:
                     "description=excluded.description,behavior=excluded.behavior,"
                     "author=excluded.author,enabled=1",
                     (
-                        guild_id, str(row["name"]).lower(),
+                        guild_id,
+                        str(row["name"]).lower(),
                         str(row.get("description") or row["name"])[:200],
                         str(row.get("behavior") or "Respond helpfully.")[:4000],
-                        str(row.get("author") or "import"), now(),
+                        str(row.get("author") or "import"),
+                        now(),
                     ),
                 )
                 counts["commands"] += 1
             for row in bundle["quotes"]:
                 c.execute(
                     "INSERT INTO quotes(guild_id,text,about,author,created) VALUES(?,?,?,?,?)",
-                    (guild_id, str(row["text"]).strip(), row.get("about"), row.get("author"), now()),
+                    (
+                        guild_id,
+                        str(row["text"]).strip(),
+                        row.get("about"),
+                        row.get("author"),
+                        now(),
+                    ),
                 )
                 counts["quotes"] += 1
             for row in bundle["relationships"]:
@@ -2941,8 +3198,13 @@ def import_guild(data: dict, guild_id: str) -> dict:
                     "score=excluded.score,nickname=excluded.nickname,grudge=excluded.grudge,"
                     "bond_label=excluded.bond_label,updated=excluded.updated",
                     (
-                        uid, guild_id, score, str(row.get("nickname") or "")[:40] or None,
-                        str(row.get("grudge") or "")[:200] or None, _bond_label(score), now(),
+                        uid,
+                        guild_id,
+                        score,
+                        str(row.get("nickname") or "")[:40] or None,
+                        str(row.get("grudge") or "")[:200] or None,
+                        _bond_label(score),
+                        now(),
                     ),
                 )
                 counts["relationships"] += 1
@@ -2955,11 +3217,11 @@ def import_guild(data: dict, guild_id: str) -> dict:
     return counts
 
 
-def user_flag_get(user_id: str, key: str, default: str = None) -> Optional[str]:
+def user_flag_get(user_id: str, key: str, default: str | None = None) -> Optional[str]:
     return kv_get(f"uf:{user_id}:{key}", default)
 
 
-def user_flag_set(user_id: str, key: str, value) -> None:
+def user_flag_set(user_id: str, key: str, value: typing.Any) -> None:
     kv_set(f"uf:{user_id}:{key}", value)
 
 
@@ -2973,9 +3235,7 @@ def user_flag_int(user_id: str, key: str, default: int = 0) -> int:
         return default
 
 
-def tos_challenge_create(
-    user_id: str, token_hash: str, version: str, expires_at: float
-) -> None:
+def tos_challenge_create(user_id: str, token_hash: str, version: str, expires_at: float) -> None:
     """Replace a user's pending web-acceptance challenge with a new one."""
     uid = str(user_id)
     c = conn()
@@ -3016,11 +3276,7 @@ def tos_challenge_consume(
         except Exception:
             c.rollback()
             raise
-    if (
-        row is None
-        or str(row["version"]) != str(version)
-        or float(row["expires_at"]) < timestamp
-    ):
+    if row is None or str(row["version"]) != str(version) or float(row["expires_at"]) < timestamp:
         return None
     return str(row["user_id"])
 
@@ -3064,23 +3320,31 @@ def tos_acceptance_set(
     c.commit()
 
 
-def tos_acceptance_get(user_id: str) -> dict | None:
-    row = conn().execute(
-        "SELECT user_id,version,status,network_hash,network_seen_at,risk_code,"
-        "submitted_at,reviewed_at FROM tos_acceptances WHERE user_id=?",
-        (str(user_id),),
-    ).fetchone()
+def tos_acceptance_get(user_id: str) -> dict[typing.Any, typing.Any] | None:
+    row = (
+        conn()
+        .execute(
+            "SELECT user_id,version,status,network_hash,network_seen_at,risk_code,"
+            "submitted_at,reviewed_at FROM tos_acceptances WHERE user_id=?",
+            (str(user_id),),
+        )
+        .fetchone()
+    )
     return dict(row) if row is not None else None
 
 
 def tos_acceptance_network_users(network_hash: str, *, since: float) -> list[str]:
     if not network_hash:
         return []
-    rows = conn().execute(
-        "SELECT user_id FROM tos_acceptances WHERE network_hash=? "
-        "AND network_seen_at>=? ORDER BY network_seen_at DESC LIMIT 100",
-        (str(network_hash), float(since)),
-    ).fetchall()
+    rows = (
+        conn()
+        .execute(
+            "SELECT user_id FROM tos_acceptances WHERE network_hash=? "
+            "AND network_seen_at>=? ORDER BY network_seen_at DESC LIMIT 100",
+            (str(network_hash), float(since)),
+        )
+        .fetchall()
+    )
     return [str(row["user_id"]) for row in rows]
 
 
@@ -3090,21 +3354,29 @@ def tos_acceptance_network_has_dynamic_block(
     """Return whether a recent matching acceptance belongs to a live block."""
     if not network_hash:
         return False
-    row = conn().execute(
-        "SELECT 1 FROM tos_acceptances a "
-        "JOIN dynamic_blocks b ON b.user_id=a.user_id "
-        "WHERE a.network_hash=? AND a.network_seen_at>=? AND a.user_id!=? LIMIT 1",
-        (str(network_hash), float(since), str(exclude_user_id)),
-    ).fetchone()
+    row = (
+        conn()
+        .execute(
+            "SELECT 1 FROM tos_acceptances a "
+            "JOIN dynamic_blocks b ON b.user_id=a.user_id "
+            "WHERE a.network_hash=? AND a.network_seen_at>=? AND a.user_id!=? LIMIT 1",
+            (str(network_hash), float(since), str(exclude_user_id)),
+        )
+        .fetchone()
+    )
     return row is not None
 
 
-def tos_acceptance_reviews(limit: int = 100) -> list[dict]:
-    rows = conn().execute(
-        "SELECT user_id,version,status,risk_code,submitted_at FROM tos_acceptances "
-        "WHERE status='review' ORDER BY submitted_at ASC LIMIT ?",
-        (max(1, min(500, int(limit))),),
-    ).fetchall()
+def tos_acceptance_reviews(limit: int = 100) -> list[dict[typing.Any, typing.Any]]:
+    rows = (
+        conn()
+        .execute(
+            "SELECT user_id,version,status,risk_code,submitted_at FROM tos_acceptances "
+            "WHERE status='review' ORDER BY submitted_at ASC LIMIT ?",
+            (max(1, min(500, int(limit))),),
+        )
+        .fetchall()
+    )
     return [dict(row) for row in rows]
 
 
@@ -3120,10 +3392,14 @@ def tos_acceptance_allow(user_id: str, version: str) -> bool:
 
 
 def privacy_opted_in(user_id: str, scope_id: str) -> bool:
-    row = conn().execute(
-        "SELECT opted_in FROM privacy_consents WHERE user_id=? AND scope_id=?",
-        (str(user_id), str(scope_id)),
-    ).fetchone()
+    row = (
+        conn()
+        .execute(
+            "SELECT opted_in FROM privacy_consents WHERE user_id=? AND scope_id=?",
+            (str(user_id), str(scope_id)),
+        )
+        .fetchone()
+    )
     return bool(row and row["opted_in"])
 
 
@@ -3177,7 +3453,7 @@ def archive_scope_enabled(scope_id: str) -> bool:
     return value.startswith("guild:") and value[6:] in config.ARCHIVE_GUILD_IDS
 
 
-def privacy_export(user_id: str) -> dict:
+def privacy_export(user_id: str) -> dict[typing.Any, typing.Any]:
     """Return only data owned by, authored by, or explicitly about a user."""
     uid = str(user_id)
     c = conn()
@@ -3186,28 +3462,31 @@ def privacy_export(user_id: str) -> dict:
         "user_id": uid,
         "exported_at": now(),
         "consents": [
-            dict(r) for r in c.execute(
+            dict(r)
+            for r in c.execute(
                 "SELECT scope_id,opted_in,updated FROM privacy_consents WHERE user_id=?",
                 (uid,),
             ).fetchall()
         ],
         "memories": [
-            dict(r) for r in c.execute(
+            dict(r)
+            for r in c.execute(
                 "SELECT * FROM memories WHERE subject=? OR author=?", (uid, uid)
             ).fetchall()
         ],
         "conversations": [
-            dict(r) for r in c.execute(
-                "SELECT * FROM conversations WHERE user_id=?", (uid,)
-            ).fetchall()
+            dict(r)
+            for r in c.execute("SELECT * FROM conversations WHERE user_id=?", (uid,)).fetchall()
         ],
         "conversation_summaries": [
-            dict(r) for r in c.execute(
+            dict(r)
+            for r in c.execute(
                 "SELECT * FROM conversation_summaries WHERE user_id=?", (uid,)
             ).fetchall()
         ],
         "ai_traces": [
-            dict(r) for r in c.execute(
+            dict(r)
+            for r in c.execute(
                 "SELECT trace_id,scope_id,task,route,requested_model,served_model,"
                 "prompt_version,status,latency_ms,input_tokens,output_tokens,attempts,"
                 "fallbacks,error_type,created FROM ai_traces WHERE scope_id=?",
@@ -3215,33 +3494,33 @@ def privacy_export(user_id: str) -> dict:
             ).fetchall()
         ],
         "relationships": [
-            dict(r) for r in c.execute(
-                "SELECT * FROM relationships WHERE user_id=?", (uid,)
-            ).fetchall()
+            dict(r)
+            for r in c.execute("SELECT * FROM relationships WHERE user_id=?", (uid,)).fetchall()
         ],
         "quotes": [
-            dict(r) for r in c.execute(
+            dict(r)
+            for r in c.execute(
                 "SELECT * FROM quotes WHERE author=? OR about=?", (uid, uid)
             ).fetchall()
         ],
         "feedback": [
-            dict(r) for r in c.execute(
-                "SELECT * FROM feedback WHERE author=?", (uid,)
-            ).fetchall()
+            dict(r) for r in c.execute("SELECT * FROM feedback WHERE author=?", (uid,)).fetchall()
         ],
         "interactions": [
-            dict(r) for r in c.execute(
-                "SELECT * FROM interactions WHERE author=?", (uid,)
-            ).fetchall()
+            dict(r)
+            for r in c.execute("SELECT * FROM interactions WHERE author=?", (uid,)).fetchall()
         ],
         "messages": [
-            dict(r) for r in c.execute(
+            dict(r)
+            for r in c.execute(
                 "SELECT message_id,guild_id,channel_id,content,created FROM server_messages "
-                "WHERE user_id=? ORDER BY created", (uid,)
+                "WHERE user_id=? ORDER BY created",
+                (uid,),
             ).fetchall()
         ],
         "dm_contacts": [
-            dict(r) for r in c.execute(
+            dict(r)
+            for r in c.execute(
                 "SELECT user_id,name,last_message_at FROM dm_contacts WHERE user_id=?",
                 (uid,),
             ).fetchall()
@@ -3252,50 +3531,59 @@ def privacy_export(user_id: str) -> dict:
             if metadata is not None
         ],
         "tos_acceptance": [
-            dict(r) for r in c.execute(
+            dict(r)
+            for r in c.execute(
                 "SELECT user_id,version,status,network_hash,network_seen_at,risk_code,"
                 "submitted_at,reviewed_at FROM tos_acceptances WHERE user_id=?",
                 (uid,),
             ).fetchall()
         ],
         "assistant_actions": [
-            dict(r) for r in c.execute(
+            dict(r)
+            for r in c.execute(
                 "SELECT id,scope_id,channel_id,action,target_id,parameters,result,"
                 "inverse,created,consumed FROM assistant_action_history "
-                "WHERE actor_id=? ORDER BY created", (uid,)
+                "WHERE actor_id=? ORDER BY created",
+                (uid,),
             ).fetchall()
         ],
         "community_records": [
-            dict(r) for r in c.execute(
+            dict(r)
+            for r in c.execute(
                 "SELECT * FROM community_records WHERE user_id=? ORDER BY created", (uid,)
             ).fetchall()
         ],
         "afk_statuses": [
-            dict(r) for r in c.execute(
+            dict(r)
+            for r in c.execute(
                 "SELECT * FROM afk_statuses WHERE user_id=? ORDER BY created", (uid,)
             ).fetchall()
         ],
         "afk_notes": [
-            dict(r) for r in c.execute(
+            dict(r)
+            for r in c.execute(
                 "SELECT * FROM afk_notes WHERE target_id=? OR author_id=? ORDER BY created",
                 (uid, uid),
             ).fetchall()
         ],
         "swear_jar_counts": [
-            dict(r) for r in c.execute(
+            dict(r)
+            for r in c.execute(
                 "SELECT guild_id,user_id,count,updated FROM swear_jar_counts "
                 "WHERE user_id=? ORDER BY guild_id",
                 (uid,),
             ).fetchall()
         ],
         "booster_members": [
-            dict(r) for r in c.execute(
+            dict(r)
+            for r in c.execute(
                 "SELECT * FROM booster_members WHERE user_id=? ORDER BY guild_id",
                 (uid,),
             ).fetchall()
         ],
         "first_use_notice": [
-            dict(r) for r in c.execute(
+            dict(r)
+            for r in c.execute(
                 "SELECT user_id,sent_at FROM first_use_notices WHERE user_id=?",
                 (uid,),
             ).fetchall()
@@ -3309,9 +3597,7 @@ def privacy_delete_user(user_id: str) -> dict[str, int]:
     delete_queries = {
         "memories": ("DELETE FROM memories WHERE subject=? OR author=?", (uid, uid)),
         "conversations": ("DELETE FROM conversations WHERE user_id=?", (uid,)),
-        "conversation_summaries": (
-            "DELETE FROM conversation_summaries WHERE user_id=?", (uid,)
-        ),
+        "conversation_summaries": ("DELETE FROM conversation_summaries WHERE user_id=?", (uid,)),
         "ai_traces": ("DELETE FROM ai_traces WHERE scope_id=?", (f"dm:{uid}",)),
         "relationships": ("DELETE FROM relationships WHERE user_id=?", (uid,)),
         "quotes": ("DELETE FROM quotes WHERE author=? OR about=?", (uid, uid)),
@@ -3320,22 +3606,25 @@ def privacy_delete_user(user_id: str) -> dict[str, int]:
         "server_messages": ("DELETE FROM server_messages WHERE user_id=?", (uid,)),
         "privacy_consents": ("DELETE FROM privacy_consents WHERE user_id=?", (uid,)),
         "tos_acceptance_challenges": (
-            "DELETE FROM tos_acceptance_challenges WHERE user_id=?", (uid,)
+            "DELETE FROM tos_acceptance_challenges WHERE user_id=?",
+            (uid,),
         ),
         "tos_acceptances": ("DELETE FROM tos_acceptances WHERE user_id=?", (uid,)),
         "commands": ("DELETE FROM commands WHERE author=?", (uid,)),
         "economy_accounts": ("DELETE FROM economy_accounts WHERE user_id=?", (uid,)),
         "work_cooldowns": ("DELETE FROM work_cooldowns WHERE user_id=?", (uid,)),
         "dm_contacts": ("DELETE FROM dm_contacts WHERE user_id=?", (uid,)),
-        "cli_active_conversations": ("DELETE FROM cli_active_conversations WHERE user_id=?", (uid,)),
+        "cli_active_conversations": (
+            "DELETE FROM cli_active_conversations WHERE user_id=?",
+            (uid,),
+        ),
         "assistant_action_history": (
-            "DELETE FROM assistant_action_history WHERE actor_id=?", (uid,)
+            "DELETE FROM assistant_action_history WHERE actor_id=?",
+            (uid,),
         ),
         "community_records": ("DELETE FROM community_records WHERE user_id=?", (uid,)),
         "afk_statuses": ("DELETE FROM afk_statuses WHERE user_id=?", (uid,)),
-        "afk_notes": (
-            "DELETE FROM afk_notes WHERE target_id=? OR author_id=?", (uid, uid)
-        ),
+        "afk_notes": ("DELETE FROM afk_notes WHERE target_id=? OR author_id=?", (uid, uid)),
         "swear_jar_counts": ("DELETE FROM swear_jar_counts WHERE user_id=?", (uid,)),
         "booster_members": ("DELETE FROM booster_members WHERE user_id=?", (uid,)),
         "booster_events": ("DELETE FROM booster_events WHERE user_id=?", (uid,)),
@@ -3355,11 +3644,10 @@ def privacy_delete_user(user_id: str) -> dict[str, int]:
             block_metadata = _json_dict(block_row["metadata"]) if block_row else {}
             preserve_malware_block = (
                 str(block_metadata.get("category") or "").lower() == "malware"
-                and str(block_metadata.get("trigger_source") or "").lower()
-                == "clamav_attachment"
+                and str(block_metadata.get("trigger_source") or "").lower() == "clamav_attachment"
             )
             if preserve_malware_block:
-                minimal_block = {
+                minimal_block: typing.Any = {
                     "reason": "malware attachment detected",
                     "category": "malware",
                     "offending_text": str(block_metadata.get("offending_text") or "")[:100],
@@ -3397,7 +3685,7 @@ def cleanup_expired_content(retention_days: int = MAX_RETENTION_DAYS) -> dict[st
     days = max(1, min(MAX_RETENTION_DAYS, int(retention_days)))
     cutoff = now() - days * 86_400
     c = conn()
-    counts = {}
+    counts: dict[typing.Any, typing.Any] = {}
     with _db_lock:
         try:
             c.execute("BEGIN IMMEDIATE")
@@ -3422,19 +3710,17 @@ def cleanup_expired_content(retention_days: int = MAX_RETENTION_DAYS) -> dict[st
             counts["feedback"] = max(0, int(cur.rowcount))
             cur = c.execute("DELETE FROM ai_traces WHERE created<?", (cutoff,))
             counts["ai_traces"] = max(0, int(cur.rowcount))
-            cur = c.execute("DELETE FROM memories WHERE expires IS NOT NULL AND expires<=?", (now(),))
-            counts["expired_memories"] = max(0, int(cur.rowcount))
             cur = c.execute(
-                "DELETE FROM assistant_action_history WHERE created<?", (cutoff,)
+                "DELETE FROM memories WHERE expires IS NOT NULL AND expires<=?", (now(),)
             )
+            counts["expired_memories"] = max(0, int(cur.rowcount))
+            cur = c.execute("DELETE FROM assistant_action_history WHERE created<?", (cutoff,))
             counts["assistant_action_history"] = max(0, int(cur.rowcount))
             cur = c.execute("DELETE FROM dashboard_audit WHERE created<?", (cutoff,))
             counts["dashboard_audit"] = max(0, int(cur.rowcount))
             cur = c.execute("DELETE FROM booster_events WHERE created<?", (cutoff,))
             counts["booster_events"] = max(0, int(cur.rowcount))
-            cur = c.execute(
-                "DELETE FROM tos_acceptance_challenges WHERE expires_at<?", (now(),)
-            )
+            cur = c.execute("DELETE FROM tos_acceptance_challenges WHERE expires_at<?", (now(),))
             counts["tos_acceptance_challenges"] = max(0, int(cur.rowcount))
             cur = c.execute(
                 "DELETE FROM tos_acceptances WHERE status!='accepted' AND submitted_at<?",
@@ -3471,10 +3757,17 @@ def cleanup_guild_content(guild_id: str, retention_days: int) -> dict[str, int]:
     days = max(1, min(MAX_RETENTION_DAYS, int(retention_days)))
     cutoff = now() - days * 86_400
     statements = {
-        "server_messages": ("DELETE FROM server_messages WHERE guild_id=? AND created<?", (gid, cutoff)),
-        "conversations": ("DELETE FROM conversations WHERE guild_id=? AND created<?", (gid, cutoff)),
+        "server_messages": (
+            "DELETE FROM server_messages WHERE guild_id=? AND created<?",
+            (gid, cutoff),
+        ),
+        "conversations": (
+            "DELETE FROM conversations WHERE guild_id=? AND created<?",
+            (gid, cutoff),
+        ),
         "conversation_summaries": (
-            "DELETE FROM conversation_summaries WHERE guild_id=? AND updated<?", (gid, cutoff)
+            "DELETE FROM conversation_summaries WHERE guild_id=? AND updated<?",
+            (gid, cutoff),
         ),
         "feedback": ("DELETE FROM feedback WHERE scope_id=? AND created<?", (gid, cutoff)),
         "ai_traces": ("DELETE FROM ai_traces WHERE scope_id=? AND created<?", (gid, cutoff)),
@@ -3486,7 +3779,10 @@ def cleanup_guild_content(guild_id: str, retention_days: int) -> dict[str, int]:
             "DELETE FROM assistant_action_history WHERE scope_id=? AND created<?",
             (gid, cutoff),
         ),
-        "dashboard_audit": ("DELETE FROM dashboard_audit WHERE guild_id=? AND created<?", (gid, cutoff)),
+        "dashboard_audit": (
+            "DELETE FROM dashboard_audit WHERE guild_id=? AND created<?",
+            (gid, cutoff),
+        ),
         "community_records": (
             "DELETE FROM community_records WHERE guild_id=? AND status!='active' AND updated<?",
             (gid, cutoff),
@@ -3511,9 +3807,17 @@ def cleanup_guild_content(guild_id: str, retention_days: int) -> dict[str, int]:
 
 
 def record_action_audit(
-    *, nonce: str, actor_id: str, scope_id: str, action: str,
-    target_id: str | None, parameters: dict, source: str,
-    correlation_id: str, status: str, result: str | None = None,
+    *,
+    nonce: str,
+    actor_id: str,
+    scope_id: str,
+    action: str,
+    target_id: str | None,
+    parameters: dict[typing.Any, typing.Any],
+    source: str,
+    correlation_id: str,
+    status: str,
+    result: str | None = None,
 ) -> None:
     conn().execute(
         "INSERT INTO action_audit(nonce,actor_id,scope_id,action,target_id,parameters,"
@@ -3521,19 +3825,35 @@ def record_action_audit(
         "ON CONFLICT(nonce) DO UPDATE SET status=excluded.status,result=excluded.result,"
         "completed=excluded.completed",
         (
-            nonce, actor_id, scope_id, action[:80], target_id,
-            json.dumps(parameters, sort_keys=True, default=str)[:4000], source[:40],
-            correlation_id[:80], status[:40], (result or "")[:500] or None,
-            now(), now() if status not in {"pending"} else None,
+            nonce,
+            actor_id,
+            scope_id,
+            action[:80],
+            target_id,
+            json.dumps(parameters, sort_keys=True, default=str)[:4000],
+            source[:40],
+            correlation_id[:80],
+            status[:40],
+            (result or "")[:500] or None,
+            now(),
+            now() if status not in {"pending"} else None,
         ),
     )
     conn().commit()
 
 
 def record_assistant_action(
-    *, actor_id: str, scope_id: str, channel_id: str | None, action: str,
-    target_id: str | None, parameters: dict, result: str,
-    inverse: dict | None, source_nonce: str, consumed_action_id: int | None = None,
+    *,
+    actor_id: str,
+    scope_id: str,
+    channel_id: str | None,
+    action: str,
+    target_id: str | None,
+    parameters: dict[typing.Any, typing.Any],
+    result: str,
+    inverse: dict[typing.Any, typing.Any] | None,
+    source_nonce: str,
+    consumed_action_id: int | None = None,
 ) -> int:
     """Persist one confirmed assistant outcome and optionally consume its undo."""
     c = conn()
@@ -3551,17 +3871,19 @@ def record_assistant_action(
                 "action,target_id,parameters,result,inverse,source_nonce,created) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (
-                    str(actor_id), str(scope_id),
+                    str(actor_id),
+                    str(scope_id),
                     str(channel_id) if channel_id is not None else None,
-                    str(action)[:80], str(target_id) if target_id else None,
+                    str(action)[:80],
+                    str(target_id) if target_id else None,
                     json.dumps(parameters, sort_keys=True, default=str)[:4000],
                     str(result)[:500],
-                    json.dumps(inverse, sort_keys=True, default=str)[:4000]
-                    if inverse else None,
-                    str(source_nonce)[:100], now(),
+                    json.dumps(inverse, sort_keys=True, default=str)[:4000] if inverse else None,
+                    str(source_nonce)[:100],
+                    now(),
                 ),
             )
-            action_id = int(cur.lastrowid)
+            action_id = int(typing.cast(typing.Any, cur.lastrowid))
             c.commit()
             return action_id
         except Exception:
@@ -3569,14 +3891,18 @@ def record_assistant_action(
             raise
 
 
-def latest_assistant_action(actor_id: str, scope_id: str) -> dict | None:
+def latest_assistant_action(actor_id: str, scope_id: str) -> dict[typing.Any, typing.Any] | None:
     """Return the most recent unconsumed assistant outcome for this exact scope."""
-    row = conn().execute(
-        "SELECT id,channel_id,action,target_id,result,inverse,created "
-        "FROM assistant_action_history WHERE actor_id=? AND scope_id=? "
-        "AND consumed IS NULL ORDER BY created DESC,id DESC LIMIT 1",
-        (str(actor_id), str(scope_id)),
-    ).fetchone()
+    row = (
+        conn()
+        .execute(
+            "SELECT id,channel_id,action,target_id,result,inverse,created "
+            "FROM assistant_action_history WHERE actor_id=? AND scope_id=? "
+            "AND consumed IS NULL ORDER BY created DESC,id DESC LIMIT 1",
+            (str(actor_id), str(scope_id)),
+        )
+        .fetchone()
+    )
     if row is None:
         return None
     item = dict(row)
@@ -3588,31 +3914,42 @@ def latest_assistant_action(actor_id: str, scope_id: str) -> dict | None:
 
 
 def recent_assistant_actions(
-    actor_id: str, scope_id: str, limit: int = 5,
-) -> list[dict]:
+    actor_id: str,
+    scope_id: str,
+    limit: int = 5,
+) -> list[dict[typing.Any, typing.Any]]:
     """Return bounded action summaries for assistant self-knowledge."""
     safe_limit = max(1, min(10, int(limit)))
     return [
-        dict(row) for row in conn().execute(
+        dict(row)
+        for row in conn()
+        .execute(
             "SELECT action,target_id,result,created,consumed FROM assistant_action_history "
             "WHERE actor_id=? AND scope_id=? ORDER BY created DESC,id DESC LIMIT ?",
             (str(actor_id), str(scope_id), safe_limit),
-        ).fetchall()
+        )
+        .fetchall()
     ]
 
 
 def economy_balance(user_id: str) -> int:
-    row = conn().execute(
-        "SELECT balance FROM economy_accounts WHERE user_id=?", (str(user_id),)
-    ).fetchone()
+    row = (
+        conn()
+        .execute("SELECT balance FROM economy_accounts WHERE user_id=?", (str(user_id),))
+        .fetchone()
+    )
     return int(row["balance"]) if row else 0
 
 
 def economy_profile(user_id: str) -> dict[str, int]:
-    row = conn().execute(
-        "SELECT balance,deposit,gems FROM economy_accounts WHERE user_id=?",
-        (str(user_id),),
-    ).fetchone()
+    row = (
+        conn()
+        .execute(
+            "SELECT balance,deposit,gems FROM economy_accounts WHERE user_id=?",
+            (str(user_id),),
+        )
+        .fetchone()
+    )
     if row is None:
         return {"balance": 0, "deposit": 0, "gems": 0}
     return {key: int(row[key]) for key in ("balance", "deposit", "gems")}
@@ -3713,11 +4050,15 @@ def economy_transfer(sender_id: str, receiver_id: str, amount: int) -> tuple[int
             raise
 
 
-def economy_leaderboard(limit: int = 10) -> list[tuple[str, dict]]:
-    rows = conn().execute(
-        "SELECT user_id,balance,deposit FROM economy_accounts ORDER BY balance DESC LIMIT ?",
-        (max(1, min(100, int(limit))),),
-    ).fetchall()
+def economy_leaderboard(limit: int = 10) -> list[tuple[str, dict[typing.Any, typing.Any]]]:
+    rows = (
+        conn()
+        .execute(
+            "SELECT user_id,balance,deposit FROM economy_accounts ORDER BY balance DESC LIMIT ?",
+            (max(1, min(100, int(limit))),),
+        )
+        .fetchall()
+    )
     return [
         (str(r["user_id"]), {"balance": int(r["balance"]), "deposit": int(r["deposit"])})
         for r in rows
@@ -3740,11 +4081,15 @@ def level_for_xp(xp: int) -> int:
     return level
 
 
-def levels_profile(user_id: str, guild_id: str) -> dict:
-    row = conn().execute(
-        "SELECT xp,level,messages,last_xp FROM user_levels WHERE user_id=? AND guild_id=?",
-        (str(user_id), str(guild_id)),
-    ).fetchone()
+def levels_profile(user_id: str, guild_id: str) -> dict[typing.Any, typing.Any]:
+    row = (
+        conn()
+        .execute(
+            "SELECT xp,level,messages,last_xp FROM user_levels WHERE user_id=? AND guild_id=?",
+            (str(user_id), str(guild_id)),
+        )
+        .fetchone()
+    )
     if not row:
         return {"xp": 0, "level": 0, "messages": 0, "last_xp": 0.0}
     return {
@@ -3757,7 +4102,7 @@ def levels_profile(user_id: str, guild_id: str) -> dict:
 
 def levels_award(
     user_id: str, guild_id: str, amount: int, cooldown_seconds: float
-) -> dict | None:
+) -> dict[typing.Any, typing.Any] | None:
     """Atomically award XP if off cooldown.
 
     Returns ``None`` while the user is still on cooldown, otherwise a dict
@@ -3771,8 +4116,7 @@ def levels_award(
         try:
             c.execute("BEGIN IMMEDIATE")
             row = c.execute(
-                "SELECT xp,level,messages,last_xp FROM user_levels "
-                "WHERE user_id=? AND guild_id=?",
+                "SELECT xp,level,messages,last_xp FROM user_levels WHERE user_id=? AND guild_id=?",
                 (uid, gid),
             ).fetchone()
             current_time = now()
@@ -3816,12 +4160,16 @@ def levels_award(
             raise
 
 
-def levels_top(guild_id: str, limit: int = 10) -> list[dict]:
-    rows = conn().execute(
-        "SELECT user_id,xp,level,messages FROM user_levels "
-        "WHERE guild_id=? ORDER BY xp DESC LIMIT ?",
-        (str(guild_id), max(1, min(100, int(limit)))),
-    ).fetchall()
+def levels_top(guild_id: str, limit: int = 10) -> list[dict[typing.Any, typing.Any]]:
+    rows = (
+        conn()
+        .execute(
+            "SELECT user_id,xp,level,messages FROM user_levels "
+            "WHERE guild_id=? ORDER BY xp DESC LIMIT ?",
+            (str(guild_id), max(1, min(100, int(limit)))),
+        )
+        .fetchall()
+    )
     return [
         {
             "user_id": str(r["user_id"]),
@@ -3886,7 +4234,9 @@ def economy_claim_work(user_id: str, reward: int, cooldown_seconds: int = 60) ->
             ).fetchone()
             current_time = now()
             if row:
-                remaining = int(max(0.0, cooldown_seconds - (current_time - float(row["last_work"]))))
+                remaining = int(
+                    max(0.0, cooldown_seconds - (current_time - float(row["last_work"])))
+                )
                 if remaining > 0:
                     balance = economy_balance(uid)
                     c.rollback()
@@ -3911,16 +4261,32 @@ def economy_claim_work(user_id: str, reward: int, cooldown_seconds: int = 60) ->
 
 
 _BAD_PATTERNS = [
-    r"\bfuck\w*", r"\bshit\w*", r"\bbitch\w*", r"\basshole\w*", r"\bbastard\w*",
-    r"\bdick\w*", r"\bpussy\w*", r"\bcunt\w*", r"\bwhore\w*", r"\bslut\w*",
-    r"\bnigger\w*", r"\bnigga\w*", r"\bfaggot\w*", r"\bretard\w*", r"\bkys\b",
-    r"\bkill\s+your\s*self\b", r"\bstfu\b", r"\bshut\s+the\s+fuck\s+up\b",
-    r"\bdumbass\w*", r"\bmotherfucker\w*", r"\bpiece\s+of\s+shit\b"
+    r"\bfuck\w*",
+    r"\bshit\w*",
+    r"\bbitch\w*",
+    r"\basshole\w*",
+    r"\bbastard\w*",
+    r"\bdick\w*",
+    r"\bpussy\w*",
+    r"\bcunt\w*",
+    r"\bwhore\w*",
+    r"\bslut\w*",
+    r"\bnigger\w*",
+    r"\bnigga\w*",
+    r"\bfaggot\w*",
+    r"\bretard\w*",
+    r"\bkys\b",
+    r"\bkill\s+your\s*self\b",
+    r"\bstfu\b",
+    r"\bshut\s+the\s+fuck\s+up\b",
+    r"\bdumbass\w*",
+    r"\bmotherfucker\w*",
+    r"\bpiece\s+of\s+shit\b",
 ]
 _BAD_RE = re.compile("|".join(_BAD_PATTERNS), re.IGNORECASE)
 
 
-def detect_bad_words(content: str) -> tuple:
+def detect_bad_words(content: str) -> tuple[typing.Any, ...]:
     if not content:
         return False, []
     matches = list(set(_BAD_RE.findall(content.lower())))
@@ -3965,29 +4331,47 @@ def record_server_message(
     c.commit()
 
 
-def server_message_get(guild_id: str, message_id: str) -> dict | None:
+def server_message_get(guild_id: str, message_id: str) -> dict[typing.Any, typing.Any] | None:
     """Return one consent-scoped stored message for an audit-log recovery."""
-    row = conn().execute(
-        "SELECT message_id,guild_id,channel_id,channel_name,user_id,username,"
-        "display_name,content,created FROM server_messages "
-        "WHERE guild_id=? AND message_id=?",
-        (str(guild_id), str(message_id)),
-    ).fetchone()
+    row = (
+        conn()
+        .execute(
+            "SELECT message_id,guild_id,channel_id,channel_name,user_id,username,"
+            "display_name,content,created FROM server_messages "
+            "WHERE guild_id=? AND message_id=?",
+            (str(guild_id), str(message_id)),
+        )
+        .fetchone()
+    )
     return dict(row) if row is not None else None
 
 
-def server_messages_get(guild_id: str, message_ids: object) -> dict[str, dict]:
+def server_messages_get(
+    guild_id: str, message_ids: object
+) -> dict[str, dict[typing.Any, typing.Any]]:
     """Return bounded stored-message rows keyed by ID for bulk delete recovery."""
-    ids = list(dict.fromkeys(str(message_id) for message_id in message_ids))[:100]
+    ids: typing.Any = typing.cast(
+        typing.Any,
+        list(
+            dict.fromkeys(
+                str(message_id)
+                for message_id in typing.cast(typing.Iterable[typing.Any], message_ids)
+            )
+        )[:100],
+    )
     if not ids:
         return {}
     placeholders = ",".join("?" for _ in ids)
-    rows = conn().execute(
-        "SELECT message_id,guild_id,channel_id,channel_name,user_id,username,"  # noqa: S608
-        "display_name,content,created FROM server_messages "
-        f"WHERE guild_id=? AND message_id IN ({placeholders})",
-        (str(guild_id), *ids),
-    ).fetchall()
+    rows = (
+        conn()
+        .execute(
+            "SELECT message_id,guild_id,channel_id,channel_name,user_id,username,"  # noqa: S608
+            "display_name,content,created FROM server_messages "
+            f"WHERE guild_id=? AND message_id IN ({placeholders})",
+            (str(guild_id), *ids),
+        )
+        .fetchall()
+    )
     return {str(row["message_id"]): dict(row) for row in rows}
 
 
@@ -4025,11 +4409,19 @@ def _record_server_message_row(
             bad_words_found=excluded.bad_words_found
         """,
         (
-            str(message_id), str(guild_id), str(guild_name or "DM/Unknown"),
-            str(channel_id), str(channel_name or "unknown"), str(user_id),
-            str(username), str(display_name or username), clean_content,
-            1 if has_bad else 0, bad_str, timestamp
-        )
+            str(message_id),
+            str(guild_id),
+            str(guild_name or "DM/Unknown"),
+            str(channel_id),
+            str(channel_name or "unknown"),
+            str(user_id),
+            str(username),
+            str(display_name or username),
+            clean_content,
+            1 if has_bad else 0,
+            bad_str,
+            timestamp,
+        ),
     )
 
 
@@ -4037,7 +4429,7 @@ def record_archived_message_batch(
     guild_id: str,
     channel_id: str,
     channel_name: str,
-    records: list[dict],
+    records: list[dict[typing.Any, typing.Any]],
     *,
     last_message_id: str | None,
     messages_seen: int | None = None,
@@ -4072,9 +4464,7 @@ def record_archived_message_batch(
                     user_id=str(record["user_id"]),
                     username=str(record.get("username") or record["user_id"]),
                     display_name=str(
-                        record.get("display_name")
-                        or record.get("username")
-                        or record["user_id"]
+                        record.get("display_name") or record.get("username") or record["user_id"]
                     ),
                     content=content,
                     created_at=record.get("created_at"),
@@ -4109,25 +4499,35 @@ def record_archived_message_batch(
     return saved
 
 
-def archive_channel_cursor(guild_id: str, channel_id: str) -> dict | None:
-    row = conn().execute(
-        "SELECT * FROM guild_archive_channels WHERE guild_id=? AND channel_id=?",
-        (str(guild_id), str(channel_id)),
-    ).fetchone()
+def archive_channel_cursor(guild_id: str, channel_id: str) -> dict[typing.Any, typing.Any] | None:
+    row = (
+        conn()
+        .execute(
+            "SELECT * FROM guild_archive_channels WHERE guild_id=? AND channel_id=?",
+            (str(guild_id), str(channel_id)),
+        )
+        .fetchone()
+    )
     return dict(row) if row else None
 
 
-def archive_status(guild_id: str) -> dict:
+def archive_status(guild_id: str) -> dict[typing.Any, typing.Any]:
     gid = str(guild_id)
-    rows = conn().execute(
-        "SELECT channel_id,channel_name,last_message_id,messages_seen,complete,"
-        "last_error,updated FROM guild_archive_channels WHERE guild_id=? "
-        "ORDER BY channel_name,channel_id",
-        (gid,),
-    ).fetchall()
-    total = conn().execute(
-        "SELECT COUNT(*) FROM server_messages WHERE guild_id=?", (gid,)
-    ).fetchone()[0]
+    rows = (
+        conn()
+        .execute(
+            "SELECT channel_id,channel_name,last_message_id,messages_seen,complete,"
+            "last_error,updated FROM guild_archive_channels WHERE guild_id=? "
+            "ORDER BY channel_name,channel_id",
+            (gid,),
+        )
+        .fetchall()
+    )
+    total = (
+        conn()
+        .execute("SELECT COUNT(*) FROM server_messages WHERE guild_id=?", (gid,))
+        .fetchone()[0]
+    )
     return {
         "guild_id": gid,
         "stored_messages": int(total),
@@ -4150,7 +4550,7 @@ def remove_archived_message(guild_id: str, message_id: str) -> bool:
     return bool(cur.rowcount)
 
 
-def normalize_archived_message_text(guild_id: str, sanitizer) -> dict[str, int]:
+def normalize_archived_message_text(guild_id: str, sanitizer: typing.Any) -> dict[str, int]:
     """Rewrite legacy archive rows to the current text-only storage format."""
     gid = str(guild_id)
     if not archive_scope_enabled(gid):
@@ -4210,38 +4610,169 @@ def normalize_archived_message_text(guild_id: str, sanitizer) -> dict[str, int]:
 
 
 _STOP_WORDS = {
-    "and", "the", "to", "a", "of", "in", "is", "you", "i", "it", "that", "for",
-    "on", "my", "me", "we", "they", "are", "was", "this", "with", "your", "at",
-    "be", "but", "so", "like", "just", "have", "has", "not", "do", "did", "im",
-    "u", "ur", "what", "when", "who", "how", "why", "can", "cant", "dont", "get",
-    "go", "up", "out", "off", "no", "yeah", "yes", "ok", "okay", "lol", "lmao",
-    "fr", "ngl", "tbh", "rn", "bro", "man", "guys", "about", "there", "here",
-    "them", "him", "her", "his", "their", "would", "could", "should", "will",
-    "am", "an", "or", "as", "if", "than", "then", "too", "very", "really",
-    "actually", "know", "think", "say", "said", "says", "want", "need", "let",
-    "tell", "make", "made", "come", "came", "see", "look", "back", "been",
-    "being", "from", "into", "over", "under", "again", "more", "most", "some",
-    "any", "all", "every", "one", "two", "time", "day", "still", "even",
-    "though", "though", "thing", "things", "cause", "cuz", "cause", "gonna",
-    "wanna", "gotta", "dont", "didnt", "doesnt", "wasnt", "isnt", "arent",
-    "aint", "idk", "ikr", "omg", "wtf", "bruh", "dude", "yall", "y'all",
+    "and",
+    "the",
+    "to",
+    "a",
+    "of",
+    "in",
+    "is",
+    "you",
+    "i",
+    "it",
+    "that",
+    "for",
+    "on",
+    "my",
+    "me",
+    "we",
+    "they",
+    "are",
+    "was",
+    "this",
+    "with",
+    "your",
+    "at",
+    "be",
+    "but",
+    "so",
+    "like",
+    "just",
+    "have",
+    "has",
+    "not",
+    "do",
+    "did",
+    "im",
+    "u",
+    "ur",
+    "what",
+    "when",
+    "who",
+    "how",
+    "why",
+    "can",
+    "cant",
+    "dont",
+    "get",
+    "go",
+    "up",
+    "out",
+    "off",
+    "no",
+    "yeah",
+    "yes",
+    "ok",
+    "okay",
+    "lol",
+    "lmao",
+    "fr",
+    "ngl",
+    "tbh",
+    "rn",
+    "bro",
+    "man",
+    "guys",
+    "about",
+    "there",
+    "here",
+    "them",
+    "him",
+    "her",
+    "his",
+    "their",
+    "would",
+    "could",
+    "should",
+    "will",
+    "am",
+    "an",
+    "or",
+    "as",
+    "if",
+    "than",
+    "then",
+    "too",
+    "very",
+    "really",
+    "actually",
+    "know",
+    "think",
+    "say",
+    "said",
+    "says",
+    "want",
+    "need",
+    "let",
+    "tell",
+    "make",
+    "made",
+    "come",
+    "came",
+    "see",
+    "look",
+    "back",
+    "been",
+    "being",
+    "from",
+    "into",
+    "over",
+    "under",
+    "again",
+    "more",
+    "most",
+    "some",
+    "any",
+    "all",
+    "every",
+    "one",
+    "two",
+    "time",
+    "day",
+    "still",
+    "even",
+    "though",
+    "though",
+    "thing",
+    "things",
+    "cause",
+    "cuz",
+    "cause",
+    "gonna",
+    "wanna",
+    "gotta",
+    "dont",
+    "didnt",
+    "doesnt",
+    "wasnt",
+    "isnt",
+    "arent",
+    "aint",
+    "idk",
+    "ikr",
+    "omg",
+    "wtf",
+    "bruh",
+    "dude",
+    "yall",
+    "y'all",
 }
 
 
 def _top_words(rows: List[sqlite3.Row], n: int = 20) -> List[str]:
     """Most common non-stop words across a batch of recorded messages."""
     from collections import Counter
-    cnt = Counter()
+
+    cnt: typing.Any = typing.cast(typing.Any, Counter())
     for r in rows:
         content = r["content"] or ""
-        cnt.update(
-            w for w in _WORD.findall(content.lower())
-            if w not in _STOP_WORDS
-        )
+        cnt.update(w for w in _WORD.findall(content.lower()) if w not in _STOP_WORDS)
     return [w for w, _ in cnt.most_common(n)]
 
 
-def get_user_intelligence(user_id: str, guild_id: Optional[str] = None) -> dict:
+def get_user_intelligence(
+    user_id: str, guild_id: Optional[str] = None
+) -> dict[typing.Any, typing.Any]:
     """Full recorded history for a user — totals, monthly activity, channels,
     favorite words, flagged messages, recent + random old message samples."""
     c = conn()
@@ -4252,13 +4783,15 @@ def get_user_intelligence(user_id: str, guild_id: Optional[str] = None) -> dict:
     w = "user_id=? AND guild_id=?"
     args = [uid, gid]
 
-    def q(sql: str, extra: str = "", limit: int = None):
+    def q(sql: str, extra: str = "", limit: int | None = None):
         lim = f" LIMIT {int(limit)}" if limit else ""
         return c.execute(sql.format(w=w) + extra + lim, tuple(args))
 
     total_row = q("SELECT COUNT(*) n FROM server_messages WHERE {w}").fetchone()
     bad_row = q("SELECT COUNT(*) n FROM server_messages WHERE {w} AND has_bad_words=1").fetchone()
-    ts = q("SELECT MIN(created) min_ts, MAX(created) max_ts FROM server_messages WHERE {w}").fetchone()
+    ts = q(
+        "SELECT MIN(created) min_ts, MAX(created) max_ts FROM server_messages WHERE {w}"
+    ).fetchone()
     day_row = q(
         "SELECT COUNT(DISTINCT strftime('%Y-%m-%d', created, 'unixepoch')) d "
         "FROM server_messages WHERE {w}"
@@ -4269,25 +4802,30 @@ def get_user_intelligence(user_id: str, guild_id: Optional[str] = None) -> dict:
     ).fetchone()
     bad_msgs = q(
         "SELECT channel_id, channel_name, content, bad_words_found, created FROM server_messages "
-        "WHERE {w} AND has_bad_words=1 ORDER BY created DESC", limit=15
+        "WHERE {w} AND has_bad_words=1 ORDER BY created DESC",
+        limit=15,
     ).fetchall()
     recent_msgs = q(
         "SELECT channel_id, channel_name, content, created FROM server_messages "
-        "WHERE {w} ORDER BY created DESC", limit=60
+        "WHERE {w} ORDER BY created DESC",
+        limit=60,
     ).fetchall()
     sample_msgs = q(
         "SELECT channel_id, channel_name, content, created FROM ("
         "SELECT channel_id, channel_name, content, created FROM server_messages "
         "WHERE {w} ORDER BY created DESC LIMIT 5000"
-        ") ORDER BY RANDOM()", limit=12
+        ") ORDER BY RANDOM()",
+        limit=12,
     ).fetchall()
     monthly = q(
         "SELECT strftime('%Y-%m', created, 'unixepoch') m, COUNT(*) n "
-        "FROM server_messages WHERE {w} GROUP BY m ORDER BY m DESC", limit=12
+        "FROM server_messages WHERE {w} GROUP BY m ORDER BY m DESC",
+        limit=12,
     ).fetchall()
     channels = q(
         "SELECT channel_name, COUNT(*) n FROM server_messages WHERE {w} "
-        "GROUP BY channel_name ORDER BY n DESC", limit=8
+        "GROUP BY channel_name ORDER BY n DESC",
+        limit=8,
     ).fetchall()
     word_rows = q(
         "SELECT content FROM server_messages WHERE {w} ORDER BY created DESC", limit=2000
@@ -4313,7 +4851,9 @@ def get_user_intelligence(user_id: str, guild_id: Optional[str] = None) -> dict:
         "recent_messages": [dict(r) for r in recent_msgs],
         "sample_messages": [dict(r) for r in sample_msgs],
         "monthly": [{"month": r["m"], "n": r["n"]} for r in monthly],
-        "channels": [{"channel_name": r["channel_name"] or "unknown", "n": r["n"]} for r in channels],
+        "channels": [
+            {"channel_name": r["channel_name"] or "unknown", "n": r["n"]} for r in channels
+        ],
         "top_words": _top_words(word_rows, 20),
     }
 
@@ -4323,11 +4863,11 @@ def search_user_messages(
     guild_id: str,
     question: str,
     limit: int = 40,
-) -> List[dict]:
+) -> List[dict[typing.Any, typing.Any]]:
     """Retrieve question-relevant rows from a user's complete text archive."""
     uid, gid = str(user_id), str(guild_id)
     maximum = max(1, min(100, int(limit)))
-    terms = []
+    terms: list[typing.Any] = []
     for term in _WORD.findall(str(question or "").lower()):
         if term not in _STOP_WORDS and term not in terms:
             terms.append(term)
@@ -4370,7 +4910,7 @@ def search_user_messages(
                 row for row in ranked if profile_search.claim_score(str(row["content"])) > 0
             ][:maximum]
             return _with_message_context(c, gid, results)
-        matches: dict[str, dict] = {}
+        matches: dict[str, dict[typing.Any, typing.Any]] = {}
         for term in terms:
             fallback_rows = c.execute(
                 "SELECT message_id,channel_id,channel_name,content,created "
@@ -4380,9 +4920,9 @@ def search_user_messages(
             ).fetchall()
             for row in fallback_rows:
                 matches[str(row["message_id"])] = dict(row)
-        return sorted(
-            matches.values(), key=lambda row: float(row["created"]), reverse=True
-        )[:maximum]
+        return sorted(matches.values(), key=lambda row: float(row["created"]), reverse=True)[
+            :maximum
+        ]
     results = [dict(row) for row in rows]
     if profile_query:
         results.sort(
@@ -4392,16 +4932,14 @@ def search_user_messages(
             ),
             reverse=True,
         )
-        results = [
-            row for row in results if profile_search.claim_score(str(row["content"])) > 0
-        ]
+        results = [row for row in results if profile_search.claim_score(str(row["content"])) > 0]
         return _with_message_context(c, gid, results[:maximum])
     return results
 
 
 def _with_message_context(
-    c: sqlite3.Connection, guild_id: str, rows: list[dict]
-) -> list[dict]:
+    c: sqlite3.Connection, guild_id: str, rows: list[dict[typing.Any, typing.Any]]
+) -> list[dict[typing.Any, typing.Any]]:
     """Attach the immediately preceding visible-scope message as claim context."""
     for row in rows:
         previous = c.execute(
@@ -4416,7 +4954,7 @@ def _with_message_context(
     return rows
 
 
-def _empty_user_intelligence(user_id: str) -> dict:
+def _empty_user_intelligence(user_id: str) -> dict[typing.Any, typing.Any]:
     return {
         "user_id": user_id,
         "username": user_id,
@@ -4437,7 +4975,9 @@ def _empty_user_intelligence(user_id: str) -> dict:
     }
 
 
-def get_user_bad_messages(user_id: str, guild_id: Optional[str] = None, limit: int = 20) -> List[dict]:
+def get_user_bad_messages(
+    user_id: str, guild_id: Optional[str] = None, limit: int = 20
+) -> List[dict[typing.Any, typing.Any]]:
     c = conn()
     uid = str(user_id)
     gid = str(guild_id or "")
@@ -4446,41 +4986,53 @@ def get_user_bad_messages(user_id: str, guild_id: Optional[str] = None, limit: i
     rows = c.execute(
         "SELECT channel_id, channel_name, content, bad_words_found, created FROM server_messages "
         "WHERE user_id=? AND guild_id=? AND has_bad_words=1 ORDER BY created DESC LIMIT ?",
-        (uid, gid, limit)
+        (uid, gid, limit),
     ).fetchall()
     return [dict(r) for r in rows]
 
 
-def get_server_intelligence(guild_id: str) -> dict:
+def get_server_intelligence(guild_id: str) -> dict[typing.Any, typing.Any]:
     """Full recorded history for a server — totals, active users, monthly
     activity, top channels, top words, top senders, flagged messages."""
     c = conn()
     gid = str(guild_id)
-    total = c.execute("SELECT COUNT(*) n FROM server_messages WHERE guild_id=?", (gid,)).fetchone()["n"]
-    bad_total = c.execute("SELECT COUNT(*) n FROM server_messages WHERE guild_id=? AND has_bad_words=1", (gid,)).fetchone()["n"]
-    users = c.execute("SELECT COUNT(DISTINCT user_id) n FROM server_messages WHERE guild_id=?", (gid,)).fetchone()["n"]
+    total = c.execute("SELECT COUNT(*) n FROM server_messages WHERE guild_id=?", (gid,)).fetchone()[
+        "n"
+    ]
+    bad_total = c.execute(
+        "SELECT COUNT(*) n FROM server_messages WHERE guild_id=? AND has_bad_words=1", (gid,)
+    ).fetchone()["n"]
+    users = c.execute(
+        "SELECT COUNT(DISTINCT user_id) n FROM server_messages WHERE guild_id=?", (gid,)
+    ).fetchone()["n"]
     ts = c.execute(
-        "SELECT MIN(created) min_ts, MAX(created) max_ts FROM server_messages WHERE guild_id=?", (gid,)
+        "SELECT MIN(created) min_ts, MAX(created) max_ts FROM server_messages WHERE guild_id=?",
+        (gid,),
     ).fetchone()
     top_senders = c.execute(
         "SELECT user_id, username, display_name, COUNT(*) cnt, "
         "SUM(has_bad_words) bad_cnt FROM server_messages WHERE guild_id=? "
-        "GROUP BY user_id ORDER BY cnt DESC LIMIT 10", (gid,)
+        "GROUP BY user_id ORDER BY cnt DESC LIMIT 10",
+        (gid,),
     ).fetchall()
     recent_bad = c.execute(
         "SELECT username, display_name, channel_name, content, bad_words_found, created "
-        "FROM server_messages WHERE guild_id=? AND has_bad_words=1 ORDER BY created DESC LIMIT 10", (gid,)
+        "FROM server_messages WHERE guild_id=? AND has_bad_words=1 ORDER BY created DESC LIMIT 10",
+        (gid,),
     ).fetchall()
     monthly = c.execute(
         "SELECT strftime('%Y-%m', created, 'unixepoch') m, COUNT(*) n "
-        "FROM server_messages WHERE guild_id=? GROUP BY m ORDER BY m DESC LIMIT 12", (gid,)
+        "FROM server_messages WHERE guild_id=? GROUP BY m ORDER BY m DESC LIMIT 12",
+        (gid,),
     ).fetchall()
     channels = c.execute(
         "SELECT channel_name, COUNT(*) n FROM server_messages WHERE guild_id=? "
-        "GROUP BY channel_name ORDER BY n DESC LIMIT 8", (gid,)
+        "GROUP BY channel_name ORDER BY n DESC LIMIT 8",
+        (gid,),
     ).fetchall()
     word_rows = c.execute(
-        "SELECT content FROM server_messages WHERE guild_id=? ORDER BY created DESC LIMIT 3000", (gid,)
+        "SELECT content FROM server_messages WHERE guild_id=? ORDER BY created DESC LIMIT 3000",
+        (gid,),
     ).fetchall()
     return {
         "guild_id": gid,
@@ -4492,12 +5044,16 @@ def get_server_intelligence(guild_id: str) -> dict:
         "top_senders": [dict(r) for r in top_senders],
         "recent_bad_messages": [dict(r) for r in recent_bad],
         "monthly": [{"month": r["m"], "n": r["n"]} for r in monthly],
-        "channels": [{"channel_name": r["channel_name"] or "unknown", "n": r["n"]} for r in channels],
+        "channels": [
+            {"channel_name": r["channel_name"] or "unknown", "n": r["n"]} for r in channels
+        ],
         "top_words": _top_words(word_rows, 20),
     }
 
 
-def find_user_by_name(query: str, guild_id: Optional[str] = None) -> Optional[dict]:
+def find_user_by_name(
+    query: str, guild_id: Optional[str] = None
+) -> Optional[dict[typing.Any, typing.Any]]:
     """Look up recorded user by username, display_name, or user ID."""
     if not query:
         return None
@@ -4511,7 +5067,8 @@ def find_user_by_name(query: str, guild_id: Optional[str] = None) -> Optional[di
         uid = m.group(1)
         row = c.execute(
             "SELECT user_id, username, display_name FROM server_messages "
-            "WHERE user_id=? AND guild_id=? LIMIT 1", (uid, gid)
+            "WHERE user_id=? AND guild_id=? LIMIT 1",
+            (uid, gid),
         ).fetchone()
         if row:
             return dict(row)
@@ -4521,6 +5078,6 @@ def find_user_by_name(query: str, guild_id: Optional[str] = None) -> Optional[di
         "SELECT user_id, username, display_name FROM server_messages "
         "WHERE guild_id=? AND (username LIKE ? OR display_name LIKE ?) "
         "ORDER BY created DESC LIMIT 1",
-        (gid, f"%{q}%", f"%{q}%")
+        (gid, f"%{q}%", f"%{q}%"),
     ).fetchone()
     return dict(row) if row else None

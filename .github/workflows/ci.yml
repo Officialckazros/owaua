@@ -38,7 +38,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip==26.2.1
           python -m pip install --require-hashes -r requirements.lock
-          python -m pip install ruff==0.16.3 mypy==2.3.1 pip-audit==2.10.1
+          python -m pip install ruff==0.16.3 mypy==2.3.1 pyright==1.1.413 pip-audit==2.10.1
 
       - name: Compile source
         run: python -m compileall -q src desktoppet/pet.py scripts/deploy
@@ -68,6 +68,10 @@ jobs:
       - name: Type-check public web service
         if: matrix.python-version == '3.12'
         run: mypy --ignore-missing-imports --follow-imports=skip src/owaua/web.py
+
+      - name: Type-check all Python code
+        if: matrix.python-version == '3.12'
+        run: pyright
 
       - name: Audit Python dependencies
         if: matrix.python-version == '3.12'

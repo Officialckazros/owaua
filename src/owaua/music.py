@@ -6,6 +6,7 @@ command returns a normal YouTube search URL that the user may open themselves.
 
 from __future__ import annotations
 
+import typing
 from typing import Optional, Tuple
 from urllib.parse import quote_plus, urlsplit
 
@@ -17,14 +18,13 @@ def _safe_youtube_url(value: str) -> bool:
         return False
     return (
         parsed.scheme == "https"
-        and parsed.hostname in {
-            "youtube.com", "www.youtube.com", "youtu.be", "music.youtube.com"
-        }
+        and parsed.hostname in {"youtube.com", "www.youtube.com", "youtu.be", "music.youtube.com"}
         and not parsed.username
         and not parsed.password
     )
 
-async def search_song(query: str) -> Tuple[Optional[dict], Optional[str]]:
+
+async def search_song(query: str) -> Tuple[Optional[dict[typing.Any, typing.Any]], Optional[str]]:
     """Return a validated search link without fetching or downloading media."""
     clean = " ".join((query or "").split())
     if not clean:
@@ -43,15 +43,11 @@ async def search_song(query: str) -> Tuple[Optional[dict], Optional[str]]:
     }, None
 
 
-def format_duration(seconds) -> str:
+def format_duration(seconds: typing.Any) -> str:
     try:
         total = int(seconds)
     except (TypeError, ValueError):
         return "?"
     minutes, seconds = divmod(max(0, total), 60)
     hours, minutes = divmod(minutes, 60)
-    return (
-        f"{hours}:{minutes:02d}:{seconds:02d}"
-        if hours
-        else f"{minutes}:{seconds:02d}"
-    )
+    return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"

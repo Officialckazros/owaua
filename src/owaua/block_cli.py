@@ -11,10 +11,12 @@ Also accepted forms:
     block <user_id>                 shorthand for `block access`
     PYTHONPATH=src python -m owaua.block_cli access <user_id>
 """
+
 from __future__ import annotations
 
 import os
 import sys
+import typing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -36,13 +38,11 @@ Notes:
 """
 
 
-def _fmt_ts(ts) -> str:
+def _fmt_ts(ts: typing.Any) -> str:
     if not ts:
         return "—"
     try:
-        return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime(
-            "%Y-%m-%d %H:%M UTC"
-        )
+        return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     except (TypeError, ValueError, OSError):
         return "—"
 
@@ -115,7 +115,6 @@ def cmd_unblock(args: list[str]) -> int:
         file=sys.stderr,
     )
     return 1
-
 
 
 def cmd_list(_args: list[str]) -> int:

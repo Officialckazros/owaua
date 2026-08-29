@@ -1,8 +1,10 @@
 """Run deterministic AI control-plane regression cases without provider calls."""
+
 from __future__ import annotations
 
 import json
 import os
+import typing
 from pathlib import Path
 
 os.environ.setdefault("DISCORD_TOKEN", "eval-token")
@@ -15,7 +17,7 @@ def main() -> int:
     cases = json.loads((root / "evals" / "ai_core.json").read_text(encoding="utf-8"))
     old_path = config.DB_PATH
     config.DB_PATH = ":memory:"
-    failures: list[dict] = []
+    failures: list[dict[typing.Any, typing.Any]] = []
     try:
         for case in cases:
             kind = case["kind"]
@@ -36,7 +38,12 @@ def main() -> int:
     finally:
         db.close()
         config.DB_PATH = old_path
-    print(json.dumps({"cases": len(cases), "passed": len(cases) - len(failures), "failures": failures}, indent=2))
+    print(
+        json.dumps(
+            {"cases": len(cases), "passed": len(cases) - len(failures), "failures": failures},
+            indent=2,
+        )
+    )
     return 1 if failures else 0
 
 

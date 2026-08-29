@@ -8,6 +8,7 @@ block state without a current moderator approving that exact item.
 import asyncio
 import logging
 import time
+import typing
 from dataclasses import dataclass
 from typing import Optional
 
@@ -32,10 +33,7 @@ _active_checks = 0
 def _enabled_for_guild(guild_id: int) -> bool:
     """Moderation requires an explicit per-guild opt-in, not only an env flag."""
     try:
-        return (
-            db.guild_settings(Scope.guild(guild_id).key).get("moderation_enabled")
-            is True
-        )
+        return db.guild_settings(Scope.guild(guild_id).key).get("moderation_enabled") is True
     except Exception:
         log.exception("could not read moderation settings for guild %s", guild_id)
         return False
@@ -85,7 +83,7 @@ def _mod_log_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
         if not raw_id.isdigit():
             continue
         channel = guild.get_channel(int(raw_id))
-        if _private_staff_channel(channel, guild):
+        if isinstance(channel, discord.TextChannel) and _private_staff_channel(channel, guild):
             return channel
         if channel is not None:
             log.warning("refusing public or unwritable mod-log channel %s", raw_id)
@@ -107,7 +105,12 @@ async def _fresh_private_staff_channel(
         current_bot = await guild.fetch_member(bot_id) if bot_id is not None else None
     except (discord.NotFound, discord.Forbidden, discord.HTTPException):
         return None
-    return current if _private_staff_channel(current, guild, current_bot) else None
+    return (
+        current
+        if isinstance(current, discord.TextChannel)
+        and _private_staff_channel(current, guild, current_bot)
+        else None
+    )
 
 
 async def private_staff_log_channel(
@@ -145,7 +148,7 @@ def _review_permission(member: object, channel: object) -> bool:
     if getattr(member.guild, "owner_id", None) == member.id:
         return True
     try:
-        permissions = channel.permissions_for(member)
+        permissions: typing.Any = typing.cast(typing.Any, channel).permissions_for(member)
     except (AttributeError, TypeError):
         permissions = member.guild_permissions
     return bool(
@@ -197,13 +200,13 @@ class ModerationReviewView(discord.ui.View):
 
     @discord.ui.button(label="Delete message", style=discord.ButtonStyle.danger)
     async def delete_message(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self, interaction: discord.Interaction, button: discord.ui.Button[typing.Any]
     ) -> None:
         await self._finish(interaction, delete=True)
 
     @discord.ui.button(label="Dismiss", style=discord.ButtonStyle.secondary)
     async def dismiss(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self, interaction: discord.Interaction, button: discord.ui.Button[typing.Any]
     ) -> None:
         await self._finish(interaction, delete=False)
 
@@ -232,8 +235,10 @@ class ModerationReviewView(discord.ui.View):
             bot_id = getattr(getattr(interaction.client, "user", None), "id", None)
             try:
                 source = await guild.fetch_channel(self.review.channel_id)
-                current_actor = await guild.fetch_member(actor_id)
-                current_bot = await guild.fetch_member(bot_id) if delete else None
+                current_actor = await guild.fetch_member(typing.cast(typing.Any, actor_id))
+                current_bot = (
+                    await guild.fetch_member(typing.cast(typing.Any, bot_id)) if delete else None
+                )
             except (discord.NotFound, discord.Forbidden, discord.HTTPException, TypeError):
                 await interaction.response.send_message(
                     "the source channel or current permissions could not be revalidated; "
@@ -246,9 +251,7 @@ class ModerationReviewView(discord.ui.View):
                     "your permission changed; nothing was deleted.", ephemeral=True
                 )
                 return
-            if delete and (
-                current_bot is None or not _review_permission(current_bot, source)
-            ):
+            if delete and (current_bot is None or not _review_permission(current_bot, source)):
                 await interaction.response.send_message(
                     "the bot no longer has `manage_messages`; nothing was deleted.",
                     ephemeral=True,
@@ -260,18 +263,19 @@ class ModerationReviewView(discord.ui.View):
             self._done = True
             _pending_reviews.pop(self.review.message_id, None)
             for child in self.children:
-                child.disabled = True
+                typing.cast(typing.Any, child).disabled = True
             self._redact_evidence()
 
             outcome = "dismissed — no action taken"
             success = True
             if delete:
                 try:
-                    message = await source.fetch_message(self.review.message_id)
+                    message: typing.Any = await typing.cast(typing.Any, source).fetch_message(
+                        self.review.message_id
+                    )
                     await message.delete(
                         reason=(
-                            "approved moderation review by "
-                            f"{current_actor} ({current_actor.id})"
+                            f"approved moderation review by {current_actor} ({current_actor.id})"
                         )
                     )
                     outcome = "deleted after staff approval"
@@ -306,7 +310,7 @@ class ModerationReviewView(discord.ui.View):
             self._done = True
             _pending_reviews.pop(self.review.message_id, None)
             for child in self.children:
-                child.disabled = True
+                typing.cast(typing.Any, child).disabled = True
             self._redact_evidence()
             self.embed.color = discord.Color.light_grey()
             self.embed.set_footer(text="expired — no action taken")
@@ -317,16 +321,19 @@ class ModerationReviewView(discord.ui.View):
                     pass
 
 
-async def _queue_review(message: discord.Message, result: dict) -> None:
+async def _queue_review(message: discord.Message, result: dict[typing.Any, typing.Any]) -> None:
     """Queue one bounded staff review without mutating the source message."""
     if message.id in _pending_reviews or len(_pending_reviews) >= _MAX_PENDING_REVIEWS:
         log.warning("moderation review queue full or duplicate; dropping message %s", message.id)
         return
     mod_channel = await _fresh_private_staff_channel(
-        message.guild, _mod_log_channel(message.guild)
+        typing.cast(typing.Any, message.guild),
+        _mod_log_channel(typing.cast(typing.Any, message.guild)),
     )
     if mod_channel is None:
-        log.warning("no private mod-log channel for guild %s", message.guild.id)
+        log.warning(
+            "no private mod-log channel for guild %s", typing.cast(typing.Any, message.guild).id
+        )
         return
 
     category = str(result.get("category") or "unspecified")[:80]
@@ -336,7 +343,7 @@ async def _queue_review(message: discord.Message, result: dict) -> None:
     except (TypeError, ValueError):
         confidence = 0.0
     review = ModerationReview(
-        guild_id=message.guild.id,
+        guild_id=typing.cast(typing.Any, message.guild).id,
         channel_id=message.channel.id,
         message_id=message.id,
         author_id=message.author.id,
@@ -377,13 +384,13 @@ async def _queue_review(message: discord.Message, result: dict) -> None:
         db.log_interaction(
             "moderation_flag_review",
             str(message.author.id),
-            Scope.guild(message.guild.id).key,
+            Scope.guild(typing.cast(typing.Any, message.guild).id).key,
         )
     except Exception:
         log.exception("moderation flag audit write failed")
 
 
-async def _enforce(message: discord.Message, result: dict) -> None:
+async def _enforce(message: discord.Message, result: dict[typing.Any, typing.Any]) -> None:
     """Compatibility name: classifier flags are review-only and never auto-enforced."""
     await _queue_review(message, result)
 
@@ -396,9 +403,7 @@ async def safety_check(message: discord.Message) -> None:
         return
     if message.guild is None or not _enabled_for_guild(message.guild.id):
         return
-    mod_channel = await _fresh_private_staff_channel(
-        message.guild, _mod_log_channel(message.guild)
-    )
+    mod_channel = await _fresh_private_staff_channel(message.guild, _mod_log_channel(message.guild))
     if mod_channel is None:
         # Never send content to a classifier when there is nowhere private for
         # a human to review the result.

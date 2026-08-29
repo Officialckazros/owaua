@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import collections
 import time
+import typing
 import unittest
 from unittest import mock
 
@@ -27,8 +28,9 @@ class AIControlTest(unittest.TestCase):
         ai_control._provider_attempts.clear()
 
     def test_user_budget_cannot_be_bypassed_by_task_or_scope(self) -> None:
-        with mock.patch.object(config, "AI_REQUESTS_PER_MINUTE", 50), mock.patch.object(
-            config, "AI_USER_REQUESTS_PER_MINUTE", 2
+        with (
+            mock.patch.object(config, "AI_REQUESTS_PER_MINUTE", 50),
+            mock.patch.object(config, "AI_USER_REQUESTS_PER_MINUTE", 2),
         ):
             ai_control.check_request_budget("guild:1", "chat", user_id="42")
             ai_control.check_request_budget("dm:42", "workflow", user_id="42")
@@ -37,8 +39,9 @@ class AIControlTest(unittest.TestCase):
 
     def test_scope_budget_is_aggregate_across_users_and_tasks(self) -> None:
         db.guild_settings_set("guild:1", ai_requests_per_minute=2)
-        with mock.patch.object(config, "AI_REQUESTS_PER_MINUTE", 50), mock.patch.object(
-            config, "AI_USER_REQUESTS_PER_MINUTE", 50
+        with (
+            mock.patch.object(config, "AI_REQUESTS_PER_MINUTE", 50),
+            mock.patch.object(config, "AI_USER_REQUESTS_PER_MINUTE", 50),
         ):
             ai_control.check_request_budget("guild:1", "chat", user_id="1")
             ai_control.check_request_budget("guild:1", "workflow", user_id="2")
@@ -46,9 +49,11 @@ class AIControlTest(unittest.TestCase):
                 ai_control.check_request_budget("guild:1", "vision", user_id="3")
 
     def test_provider_attempt_token_reservation_is_atomic(self) -> None:
-        with mock.patch.object(config, "AI_PROVIDER_ATTEMPTS_PER_MINUTE", 10), mock.patch.object(
-            config, "AI_TOKEN_BUDGET_PER_MINUTE", 1_000
-        ), mock.patch.object(config, "AI_USER_TOKEN_BUDGET_PER_MINUTE", 1_000):
+        with (
+            mock.patch.object(config, "AI_PROVIDER_ATTEMPTS_PER_MINUTE", 10),
+            mock.patch.object(config, "AI_TOKEN_BUDGET_PER_MINUTE", 1_000),
+            mock.patch.object(config, "AI_USER_TOKEN_BUDGET_PER_MINUTE", 1_000),
+        ):
             ai_control.reserve_provider_attempt(user_id="42", estimated_tokens=600)
             with self.assertRaises(ai_control.AIBudgetExceeded):
                 ai_control.reserve_provider_attempt(user_id="42", estimated_tokens=600)
@@ -56,16 +61,18 @@ class AIControlTest(unittest.TestCase):
         self.assertEqual(len(ai_control._token_usage[("global", "*")]), 1)
 
     def test_multimodal_estimate_does_not_count_base64_transport_as_text(self) -> None:
-        messages = [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "describe this"},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": "data:image/png;base64," + ("A" * 1_000_000)},
-                },
-            ],
-        }]
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe this"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64," + ("A" * 1_000_000)},
+                    },
+                ],
+            }
+        ]
         self.assertLess(ai_control.estimate_chat_tokens("vision", messages), 3_000)
 
     def test_expired_identity_buckets_are_removed(self) -> None:
@@ -85,8 +92,9 @@ class AIControlTest(unittest.TestCase):
         self.assertEqual(ai_control.route("vision", user_id="42").tier, "vision")
 
     def test_circuit_opens_and_success_recovers(self) -> None:
-        with mock.patch.object(config, "AI_CIRCUIT_FAILURES", 2), mock.patch.object(
-            config, "AI_CIRCUIT_COOLDOWN_SECONDS", 60.0
+        with (
+            mock.patch.object(config, "AI_CIRCUIT_FAILURES", 2),
+            mock.patch.object(config, "AI_CIRCUIT_COOLDOWN_SECONDS", 60.0),
         ):
             ai_control.record_provider_result("model-a", success=False, latency_ms=10)
             self.assertTrue(ai_control.provider_available("model-a"))
@@ -108,10 +116,19 @@ class AIControlTest(unittest.TestCase):
 
     def test_trace_is_metadata_only_and_summarized(self) -> None:
         db.ai_trace_record(
-            trace_id="ai_test", scope_id="guild:1", task="chat", route="smart",
-            requested_model="model-a", served_model="model-b", prompt_version="brain-v5",
-            status="success", latency_ms=123, input_tokens=100, output_tokens=30,
-            attempts=2, fallbacks=1,
+            trace_id="ai_test",
+            scope_id="guild:1",
+            task="chat",
+            route="smart",
+            requested_model="model-a",
+            served_model="model-b",
+            prompt_version="brain-v5",
+            status="success",
+            latency_ms=123,
+            input_tokens=100,
+            output_tokens=30,
+            attempts=2,
+            fallbacks=1,
         )
         recent = db.ai_traces_recent("guild:1")
         self.assertEqual(recent[0]["trace_id"], "ai_test")
@@ -123,18 +140,18 @@ class AIControlTest(unittest.TestCase):
         self.assertEqual(summary["success_rate"], 100.0)
 
     def test_memory_expiry_supersession_and_usage_are_scope_bound(self) -> None:
-        old_id = db.add_memory(
-            "Uses Windows", "42", "guild:1", subject="42", category="identity"
-        )
+        old_id = db.add_memory("Uses Windows", "42", "guild:1", subject="42", category="identity")
         new_id = db.add_memory(
             "Switched to macOS", "42", "guild:1", subject="42", category="identity"
         )
-        other_id = db.add_memory(
-            "Uses Linux", "42", "guild:2", subject="42", category="identity"
-        )
+        other_id = db.add_memory("Uses Linux", "42", "guild:2", subject="42", category="identity")
         expired_id = db.add_memory(
-            "Temporary project", "42", "guild:1", subject="42",
-            category="temporary", expires=time.time() - 1,
+            "Temporary project",
+            "42",
+            "guild:1",
+            subject="42",
+            category="temporary",
+            expires=time.time() - 1,
         )
         self.assertTrue(db.supersede_memory(old_id, new_id, subject="42", scope_id="guild:1"))
         self.assertFalse(db.supersede_memory(other_id, new_id, subject="42", scope_id="guild:1"))
@@ -142,14 +159,19 @@ class AIControlTest(unittest.TestCase):
         self.assertEqual(ids, {new_id})
         self.assertNotIn(expired_id, ids)
         db.mark_memories_used([new_id])
-        self.assertEqual(int(db.get_memory(new_id)["use_count"]), 1)
+        self.assertEqual(
+            int(
+                typing.cast(typing.Any, typing.cast(typing.Any, db.get_memory(new_id))["use_count"])
+            ),
+            1,
+        )
 
     def test_conversation_summary_is_consent_scoped_and_cleared(self) -> None:
         db.privacy_set_opt_in("42", "guild:1", True)
         db.guild_settings_set("guild:1", history_enabled=True)
         db.conversation_summary_set("42", "guild:1", "Ongoing design discussion", 100.0)
         self.assertEqual(
-            db.conversation_summary_get("42", "guild:1")["summary"],
+            typing.cast(typing.Any, db.conversation_summary_get("42", "guild:1"))["summary"],
             "Ongoing design discussion",
         )
         self.assertIsNone(db.conversation_summary_get("42", "guild:2"))
@@ -173,20 +195,22 @@ class StructuredRepairTest(unittest.IsolatedAsyncioTestCase):
         )
         with mock.patch.object(ai, "chat", new=provider):
             result = await ai.structured(
-                "system", [{"role": "user", "content": "hi"}],
-                schema="brain_response", scope_id="guild:1",
+                "system",
+                [{"role": "user", "content": "hi"}],
+                schema="brain_response",
+                scope_id="guild:1",
             )
-        self.assertEqual(result["response"], "repaired")
+        self.assertEqual(typing.cast(typing.Any, result)["response"], "repaired")
         self.assertEqual(provider.await_count, 2)
 
     async def test_repair_still_rejects_unknown_fields(self) -> None:
-        provider = mock.AsyncMock(
-            side_effect=["not json", '{"response":"x","root_access":true}']
-        )
+        provider = mock.AsyncMock(side_effect=["not json", '{"response":"x","root_access":true}'])
         with mock.patch.object(ai, "chat", new=provider):
             result = await ai.structured(
-                "system", [{"role": "user", "content": "hi"}],
-                schema="brain_response", scope_id="guild:1",
+                "system",
+                [{"role": "user", "content": "hi"}],
+                schema="brain_response",
+                scope_id="guild:1",
             )
         self.assertIsNone(result)
 

@@ -3,9 +3,11 @@
 Importing library modules must not require a Discord token; executable entry
 points call :func:`validate_runtime` before connecting instead.
 """
+
 import logging
 import os
 import stat
+import typing
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -23,7 +25,7 @@ def _import_legacy_environment() -> None:
     for name, value in tuple(os.environ.items()):
         if not name.startswith(legacy_prefix):
             continue
-        canonical_name = canonical_prefix + name[len(legacy_prefix):]
+        canonical_name = canonical_prefix + name[len(legacy_prefix) :]
         os.environ.setdefault(canonical_name, value)
 
 
@@ -70,13 +72,11 @@ def _bool(name: str, default: bool = False) -> bool:
 
 DISCORD_TOKEN = (os.getenv("DISCORD_TOKEN") or "").strip()
 
-INCEPTION_API_KEY = (
-    os.getenv("INCEPTION_API_KEY") or os.getenv("MERCURY_API_KEY") or ""
-).strip()
+INCEPTION_API_KEY = (os.getenv("INCEPTION_API_KEY") or os.getenv("MERCURY_API_KEY") or "").strip()
 MERCURY_REASONING_EFFORT = (os.getenv("MERCURY_REASONING_EFFORT") or "instant").strip()
-INCEPTION_BASE_URL = (
-    os.getenv("INCEPTION_BASE_URL") or "https://api.inceptionlabs.ai/v1"
-).rstrip("/")
+INCEPTION_BASE_URL = (os.getenv("INCEPTION_BASE_URL") or "https://api.inceptionlabs.ai/v1").rstrip(
+    "/"
+)
 
 CELERIS_API_KEY = (os.getenv("CELERIS_API_KEY") or "").strip()
 CELERIS_BASE_URL = (
@@ -86,30 +86,26 @@ CELERIS_BASE_URL = (
 GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
 
 _extra_keys = os.getenv("GROQ_API_KEYS", "")
-GROQ_KEYS = []
+GROQ_KEYS: list[typing.Any] = []
 for _k in [GROQ_API_KEY] + _extra_keys.split(","):
     _k = _k.strip()
     if _k and _k not in GROQ_KEYS:
         GROQ_KEYS.append(_k)
 
 DEEPSEEK_API_KEY = (os.getenv("DEEPSEEK_API_KEY") or "").strip()
-DEEPSEEK_BASE_URL = (
-    os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com/v1"
-).rstrip("/")
+DEEPSEEK_BASE_URL = (os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com/v1").rstrip("/")
 
 INFERX_API_KEY = (os.getenv("INFERX_API_KEY") or "").strip()
-INFERX_BASE_URL = (
-    os.getenv("INFERX_BASE_URL") or "https://model.inferx.net/endpoints/v1"
-).rstrip("/")
+INFERX_BASE_URL = (os.getenv("INFERX_BASE_URL") or "https://model.inferx.net/endpoints/v1").rstrip(
+    "/"
+)
 
 # DeepSeek exposes the current 0731 checkpoint through this stable API id.
 # Dated display/version names such as ``deepseek-v4-flash-0731`` are not valid
 # request ids on the official API and are migrated below for compatibility.
 OFFICIAL_DEEPSEEK_MODEL = "deepseek-v4-flash"
 OFFICIAL_DEEPSEEK_MODEL_VERSION = "DeepSeek-V4-Flash-0731"
-_configured_deepseek_model = (
-    os.getenv("DEEPSEEK_MODEL") or OFFICIAL_DEEPSEEK_MODEL
-).strip()
+_configured_deepseek_model = (os.getenv("DEEPSEEK_MODEL") or OFFICIAL_DEEPSEEK_MODEL).strip()
 if _configured_deepseek_model.lower() in {
     "inferx",
     "ix:deepseek-v4-flash",
@@ -125,11 +121,10 @@ DEFAULT_MODEL = OFFICIAL_DEEPSEEK_MODEL
 
 MODEL_SMART = DEFAULT_MODEL
 MODEL_FAST = DEFAULT_MODEL
-MODEL_VISION = os.getenv(
-    "OWAUA_MODEL_VISION", "or:nvidia/nemotron-nano-12b-v2-vl:free"
-)
+MODEL_VISION = os.getenv("OWAUA_MODEL_VISION", "or:nvidia/nemotron-nano-12b-v2-vl:free")
 MODEL_VISION_FALLBACKS = [
-    m.strip() for m in os.getenv(
+    m.strip()
+    for m in os.getenv(
         "OWAUA_MODEL_VISION_FALLBACKS",
         "or:nvidia/nemotron-nano-12b-v2-vl:free,"
         "or:google/gemma-4-26b-a4b-it:free,"
@@ -137,30 +132,33 @@ MODEL_VISION_FALLBACKS = [
         "or:google/gemma-4-31b-it:free,"
         "or:openrouter/free,"
         "qwen/qwen3.6-27b",
-    ).split(",") if m.strip()
+    ).split(",")
+    if m.strip()
 ]
 MODEL_EXPERT = DEFAULT_MODEL
-MODEL_BIG = os.getenv(
-    "OWAUA_MODEL_BIG", "or:nvidia/nemotron-3-ultra-550b-a55b:free"
-)
+MODEL_BIG = os.getenv("OWAUA_MODEL_BIG", "or:nvidia/nemotron-3-ultra-550b-a55b:free")
 MODEL_BIG_FALLBACKS = [
-    m.strip() for m in os.getenv(
+    m.strip()
+    for m in os.getenv(
         "OWAUA_MODEL_BIG_FALLBACKS",
         "or:nvidia/nemotron-3.5-lightning:free,"
         "or:nvidia/nemotron-3-super-120b-a12b:free,"
         "or:google/gemma-4-31b-it:free,"
         "openai/gpt-oss-120b",
-    ).split(",") if m.strip()
+    ).split(",")
+    if m.strip()
 ]
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
 MODEL_EXPERT_FALLBACKS = [
-    m.strip() for m in os.getenv(
+    m.strip()
+    for m in os.getenv(
         "OWAUA_MODEL_EXPERT_FALLBACKS",
         "mercury-2,celeris-1,or:nvidia/nemotron-3-ultra-550b-a55b:free,openai/gpt-oss-120b,"
         "or:nvidia/nemotron-3-super-120b-a12b:free,qwen/qwen3.6-27b,"
         "cb:gpt-oss-120b",
-    ).split(",") if m.strip()
+    ).split(",")
+    if m.strip()
 ]
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
@@ -169,14 +167,15 @@ CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "")
 
 LESSONS_IN_PROMPT = int(os.getenv("OWAUA_LESSONS_IN_PROMPT", "12"))
 
-GEMINI_KEYS = []
+GEMINI_KEYS: list[typing.Any] = []
 for _k in [os.getenv("GEMINI_API_KEY", "")] + os.getenv("GEMINI_API_KEYS", "").split(","):
     _k = _k.strip()
     if _k and _k not in GEMINI_KEYS:
         GEMINI_KEYS.append(_k)
 
 MODEL_FALLBACKS = [
-    m.strip() for m in os.getenv(
+    m.strip()
+    for m in os.getenv(
         "OWAUA_MODEL_FALLBACKS",
         "mercury-2,celeris-1,"
         "or:nvidia/nemotron-3-ultra-550b-a55b:free,"
@@ -185,7 +184,8 @@ MODEL_FALLBACKS = [
         "qwen/qwen3.6-27b,gemini-3.5-flash-lite,"
         "or:nvidia/nemotron-3-super-120b-a12b:free,"
         "or:openrouter/free,cb:gpt-oss-120b",
-    ).split(",") if m.strip()
+    ).split(",")
+    if m.strip()
 ]
 
 # Adult-only Discord channels have a dedicated host-configurable route.  Keep this
@@ -193,15 +193,15 @@ MODEL_FALLBACKS = [
 # model for a channel Discord has already marked age-restricted.
 MODEL_FREAKY = os.getenv("OWAUA_MODEL_FREAKY", DEFAULT_MODEL)
 MODEL_FREAKY_FALLBACKS = [
-    m.strip() for m in os.getenv(
-        "OWAUA_MODEL_FREAKY_FALLBACKS", ",".join(MODEL_FALLBACKS)
-    ).split(",") if m.strip()
+    m.strip()
+    for m in os.getenv("OWAUA_MODEL_FREAKY_FALLBACKS", ",".join(MODEL_FALLBACKS)).split(",")
+    if m.strip()
 ]
 MODEL_NSFW = os.getenv("OWAUA_MODEL_NSFW", MODEL_FREAKY)
 MODEL_NSFW_FALLBACKS = [
-    m.strip() for m in os.getenv(
-        "OWAUA_MODEL_NSFW_FALLBACKS", ",".join(MODEL_FREAKY_FALLBACKS)
-    ).split(",") if m.strip()
+    m.strip()
+    for m in os.getenv("OWAUA_MODEL_NSFW_FALLBACKS", ",".join(MODEL_FREAKY_FALLBACKS)).split(",")
+    if m.strip()
 ]
 
 # Live Groq *chat* models from GET /openai/v1/models. Speech, transcription,
@@ -289,6 +289,7 @@ def model_display(model: str) -> str:
         return f"{label} (`{model}`)"
     return f"`{model}`"
 
+
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
 # Optional credentials for the age-restricted Rule34 image command. The API
@@ -315,27 +316,22 @@ OWNER_ID = (os.getenv("OWAUA_OWNER_ID") or "").strip()
 _BLOCKED_DEFAULT = ("836988339491962881",)
 BLOCKED_USER_IDS = {
     x.strip()
-    for x in (
-        list(_BLOCKED_DEFAULT)
-        + (os.getenv("OWAUA_BLOCKED_USERS") or "").split(",")
-    )
+    for x in (list(_BLOCKED_DEFAULT) + (os.getenv("OWAUA_BLOCKED_USERS") or "").split(","))
     if x.strip()
 }
 
 TARGET_SYNC_GUILD_ID = "1535083112709496903"
 SYNC_GUILDS = [
-    g.strip()
-    for g in os.getenv("OWAUA_SYNC_GUILDS", TARGET_SYNC_GUILD_ID).split(",")
-    if g.strip()
+    g.strip() for g in os.getenv("OWAUA_SYNC_GUILDS", TARGET_SYNC_GUILD_ID).split(",") if g.strip()
 ]
 
 
-def is_bot_owner(user_id) -> bool:
+def is_bot_owner(user_id: typing.Any) -> bool:
     """True if this Discord user id is owaua's owner."""
     return bool(OWNER_ID) and str(user_id or "").strip() == OWNER_ID
 
 
-def is_blocked(user_id) -> bool:
+def is_blocked(user_id: typing.Any) -> bool:
     """True if this user is hard-blocked from using the bot in any way.
 
     Checks static ids from ``OWAUA_BLOCKED_USERS``, transactional SQLite
@@ -348,12 +344,14 @@ def is_blocked(user_id) -> bool:
         return True
     try:
         from owaua.blocked import is_dynamically_blocked
+
         if is_dynamically_blocked(uid):
             return True
     except Exception:
         _LOG.warning("dynamic block lookup failed", exc_info=True)
     try:
         from owaua import tos as _tos
+
         if _tos.is_emergency_blocked(uid):
             return True
     except Exception:
@@ -373,9 +371,7 @@ MEMORY_SOFT_CAP = _int("OWAUA_MEMORY_SOFT_CAP", 200)
 # enabling it changes the guild's privacy and retention contract.
 ARCHIVE_GUILD_IDS = frozenset(
     guild_id.strip()
-    for guild_id in os.getenv(
-        "OWAUA_ARCHIVE_GUILD_IDS", "1535083112709496903"
-    ).split(",")
+    for guild_id in os.getenv("OWAUA_ARCHIVE_GUILD_IDS", "1535083112709496903").split(",")
     if guild_id.strip().isdigit()
 )
 LURK_MIN_SECONDS = _int("OWAUA_LURK_MIN_SECONDS", 900)
@@ -386,24 +382,12 @@ EMBED_COLOR = int(os.getenv("OWAUA_EMBED_COLOR", "0x5865F2"), 0)
 AI_MAX_CONCURRENCY = max(1, min(4, _int("OWAUA_AI_MAX_CONCURRENCY", 4)))
 AI_USER_MAX_CONCURRENCY = max(1, min(2, _int("OWAUA_AI_USER_MAX_CONCURRENCY", 1)))
 # Host hard ceilings. Guild dashboard values may only lower these limits.
-AI_REQUESTS_PER_MINUTE = max(
-    1, min(60, _int("OWAUA_AI_REQUESTS_PER_MINUTE", 60))
-)
-AI_USER_REQUESTS_PER_MINUTE = max(
-    1, min(6, _int("OWAUA_AI_USER_REQUESTS_PER_MINUTE", 6))
-)
-AI_REQUESTS_PER_HOUR = max(
-    10, min(5_000, _int("OWAUA_AI_REQUESTS_PER_HOUR", 1_000))
-)
-AI_USER_REQUESTS_PER_HOUR = max(
-    1, min(200, _int("OWAUA_AI_USER_REQUESTS_PER_HOUR", 40))
-)
-AI_REQUESTS_PER_DAY = max(
-    50, min(50_000, _int("OWAUA_AI_REQUESTS_PER_DAY", 10_000))
-)
-AI_USER_REQUESTS_PER_DAY = max(
-    5, min(1_000, _int("OWAUA_AI_USER_REQUESTS_PER_DAY", 150))
-)
+AI_REQUESTS_PER_MINUTE = max(1, min(60, _int("OWAUA_AI_REQUESTS_PER_MINUTE", 60)))
+AI_USER_REQUESTS_PER_MINUTE = max(1, min(6, _int("OWAUA_AI_USER_REQUESTS_PER_MINUTE", 6)))
+AI_REQUESTS_PER_HOUR = max(10, min(5_000, _int("OWAUA_AI_REQUESTS_PER_HOUR", 1_000)))
+AI_USER_REQUESTS_PER_HOUR = max(1, min(200, _int("OWAUA_AI_USER_REQUESTS_PER_HOUR", 40)))
+AI_REQUESTS_PER_DAY = max(50, min(50_000, _int("OWAUA_AI_REQUESTS_PER_DAY", 10_000)))
+AI_USER_REQUESTS_PER_DAY = max(5, min(1_000, _int("OWAUA_AI_USER_REQUESTS_PER_DAY", 150)))
 AI_PROVIDER_ATTEMPTS_PER_MINUTE = max(
     1, min(120, _int("OWAUA_AI_PROVIDER_ATTEMPTS_PER_MINUTE", 120))
 )
@@ -426,15 +410,9 @@ AI_TOKEN_BUDGET_PER_DAY = max(
 AI_USER_TOKEN_BUDGET_PER_DAY = max(
     25_000, min(2_000_000, _int("OWAUA_AI_USER_TOKEN_BUDGET_PER_DAY", 350_000))
 )
-AI_SEARCH_REQUESTS_PER_WINDOW = max(
-    1, min(20, _int("OWAUA_AI_SEARCH_PER_WINDOW", 4))
-)
-AI_TTS_REQUESTS_PER_WINDOW = max(
-    1, min(15, _int("OWAUA_AI_TTS_PER_WINDOW", 3))
-)
-AI_MAX_PROVIDER_ATTEMPTS = max(
-    1, min(4, _int("OWAUA_AI_MAX_PROVIDER_ATTEMPTS", 4))
-)
+AI_SEARCH_REQUESTS_PER_WINDOW = max(1, min(20, _int("OWAUA_AI_SEARCH_PER_WINDOW", 4)))
+AI_TTS_REQUESTS_PER_WINDOW = max(1, min(15, _int("OWAUA_AI_TTS_PER_WINDOW", 3)))
+AI_MAX_PROVIDER_ATTEMPTS = max(1, min(4, _int("OWAUA_AI_MAX_PROVIDER_ATTEMPTS", 4)))
 AI_CONTEXT_MAX_CHARS = _int("OWAUA_AI_CONTEXT_MAX_CHARS", 32_000)
 AI_CIRCUIT_FAILURES = _int("OWAUA_AI_CIRCUIT_FAILURES", 3)
 AI_CIRCUIT_COOLDOWN_SECONDS = _float("OWAUA_AI_CIRCUIT_COOLDOWN_SECONDS", 60.0)
@@ -442,10 +420,9 @@ AI_STRUCTURED_REPAIR = _bool("OWAUA_AI_STRUCTURED_REPAIR", True)
 CHAT_MIN_INTERVAL = _float("OWAUA_CHAT_MIN_INTERVAL", 2.5)
 
 
-
-
-
-LLM_BASE_URL = (os.getenv("OWAUA_LLM_BASE_URL") or "https://api.example-inference.com/v1").rstrip("/")
+LLM_BASE_URL = (os.getenv("OWAUA_LLM_BASE_URL") or "https://api.example-inference.com/v1").rstrip(
+    "/"
+)
 LLM_API_KEY = (os.getenv("OWAUA_LLM_API_KEY") or "").strip()
 GROQ_BASE_URL = (os.getenv("OWAUA_GROQ_BASE_URL") or "https://api.groq.com/openai/v1").rstrip("/")
 
@@ -454,7 +431,6 @@ FAST_MODEL = os.getenv("OWAUA_FAST_MODEL", "openai/gpt-oss-20b")
 TOOL_MODEL = os.getenv("OWAUA_TOOL_MODEL", "gpt-oss-20b")
 VISION_MODEL = os.getenv("OWAUA_VISION_MODEL", "qwen-3.6-27b")
 SAFETY_MODEL = os.getenv("OWAUA_SAFETY_MODEL", "openai/gpt-oss-20b")
-
 
 
 SAFETY_BASE_URL = (os.getenv("OWAUA_SAFETY_BASE_URL") or "https://openrouter.ai/api/v1").rstrip("/")
@@ -485,9 +461,7 @@ SAFETY_ENABLED = _bool("OWAUA_SAFETY_ENABLED", False)
 SAFETY_MIN_CONFIDENCE = min(1.0, max(0.0, _float("OWAUA_SAFETY_MIN_CONFIDENCE", 0.85)))
 VISION_MAX_IMAGE_BYTES = max(1_000_000, _int("OWAUA_VISION_MAX_IMAGE_BYTES", 8_000_000))
 STT_ENABLED = _bool("OWAUA_STT_ENABLED", False)
-STT_MAX_UTTERANCE_SECONDS = max(
-    1.0, min(60.0, _float("OWAUA_STT_MAX_UTTERANCE_SECONDS", 15.0))
-)
+STT_MAX_UTTERANCE_SECONDS = max(1.0, min(60.0, _float("OWAUA_STT_MAX_UTTERANCE_SECONDS", 15.0)))
 
 
 APPROVAL_CHANNEL = (os.getenv("OWAUA_APPROVAL_CHANNEL") or "").strip()
@@ -517,7 +491,9 @@ def _web_port() -> int:
 WEB_PORT = _web_port()
 PRIVACY_CONTACT = (os.getenv("OWAUA_PRIVACY_CONTACT") or "ckazros@kozzyx.org").strip()
 DASHBOARD_PUBLIC_URL = (os.getenv("OWAUA_DASHBOARD_PUBLIC_URL") or "").strip()
-PUBLIC_WEBSITE_URL = (os.getenv("OWAUA_PUBLIC_WEBSITE_URL") or "https://wearegays.net").strip().rstrip("/")
+PUBLIC_WEBSITE_URL = (
+    (os.getenv("OWAUA_PUBLIC_WEBSITE_URL") or "https://wearegays.net").strip().rstrip("/")
+)
 DASHBOARD_SESSION_SECRET = (os.getenv("OWAUA_DASHBOARD_SESSION_SECRET") or "").strip()
 TOS_ACCEPTANCE_SECRET = (os.getenv("OWAUA_TOS_ACCEPTANCE_SECRET") or "").strip()
 TOS_PROXY_SECRET = (os.getenv("OWAUA_TOS_PROXY_SECRET") or "").strip()
@@ -533,18 +509,10 @@ IMPORT_MAX_BYTES = max(1024, min(8_000_000, _int("OWAUA_IMPORT_MAX_BYTES", 2_000
 MALWARE_SCAN_ENABLED = _bool("OWAUA_MALWARE_SCAN_ENABLED", True)
 MALWARE_CLAMAV_COMMAND = (os.getenv("OWAUA_CLAMAV_COMMAND") or "").strip()
 MALWARE_ALERT_CHANNEL = (os.getenv("OWAUA_MALWARE_ALERT_CHANNEL") or "").strip()
-MALWARE_CLAMAV_ROOT = Path(
-    os.getenv("OWAUA_CLAMAV_ROOT") or ".clamav/clamav-1.5.4"
-)
-MALWARE_DATABASE_DIR = Path(
-    os.getenv("OWAUA_CLAMAV_DATABASE_DIR") or ".clamav/database"
-)
-MALWARE_CLAMD_CONFIG = Path(
-    os.getenv("OWAUA_CLAMD_CONFIG") or ".clamav/clamd.conf"
-)
-MALWARE_FRESHCLAM_CONFIG = Path(
-    os.getenv("OWAUA_FRESHCLAM_CONFIG") or ".clamav/freshclam.conf"
-)
+MALWARE_CLAMAV_ROOT = Path(os.getenv("OWAUA_CLAMAV_ROOT") or ".clamav/clamav-1.5.4")
+MALWARE_DATABASE_DIR = Path(os.getenv("OWAUA_CLAMAV_DATABASE_DIR") or ".clamav/database")
+MALWARE_CLAMD_CONFIG = Path(os.getenv("OWAUA_CLAMD_CONFIG") or ".clamav/clamd.conf")
+MALWARE_FRESHCLAM_CONFIG = Path(os.getenv("OWAUA_FRESHCLAM_CONFIG") or ".clamav/freshclam.conf")
 MALWARE_MAX_FILE_BYTES = max(
     1_048_576,
     min(100 * 1024 * 1024, _int("OWAUA_MALWARE_MAX_FILE_BYTES", 100 * 1024 * 1024)),
@@ -571,16 +539,12 @@ def _valid_endpoint(value: str) -> bool:
         return False
     if parsed.scheme == "https":
         return True
-    return bool(
-        ALLOW_LOCAL_ENDPOINTS
-        and parsed.scheme == "http"
-        and is_local
-    )
+    return bool(ALLOW_LOCAL_ENDPOINTS and parsed.scheme == "http" and is_local)
 
 
 def validate_runtime(*, require_discord: bool = True, require_web_legal: bool = False) -> None:
     """Fail once with all actionable configuration errors."""
-    errors = []
+    errors: list[typing.Any] = []
     if require_discord and not DISCORD_TOKEN:
         errors.append("DISCORD_TOKEN is required to start the Discord bot")
     if OWNER_ID and not OWNER_ID.isdigit():
@@ -588,9 +552,7 @@ def validate_runtime(*, require_discord: bool = True, require_web_legal: bool = 
     if require_web_legal and not PRIVACY_CONTACT:
         errors.append("OWAUA_PRIVACY_CONTACT is required for legal pages")
     if require_web_legal and len(TOS_ACCEPTANCE_SECRET) < 32:
-        errors.append(
-            "OWAUA_TOS_ACCEPTANCE_SECRET must contain at least 32 characters"
-        )
+        errors.append("OWAUA_TOS_ACCEPTANCE_SECRET must contain at least 32 characters")
     if require_web_legal and len(TOS_PROXY_SECRET) < 32:
         errors.append("OWAUA_TOS_PROXY_SECRET must contain at least 32 characters")
     for name, value in (
@@ -618,6 +580,7 @@ def insecure_env_file() -> bool:
         return bool(stat.S_IMODE(path.stat().st_mode) & 0o077)
     except OSError:
         return False
+
 
 DEFAULT_PERSONA = (
     "You are owaua, an unhinged, wildly entertaining, foul-mouthed, and sarcastic Discord bot. "

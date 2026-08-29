@@ -8,6 +8,7 @@ accept the current version there before normal bot use.
 Clear ToS violations warn first; after TOS_STRIKE_LIMIT strikes the user is
 hard-blocked via blocked.py.
 """
+
 from __future__ import annotations
 
 import collections
@@ -18,6 +19,7 @@ import re
 import secrets
 import threading
 import time
+import typing
 from typing import Optional, Tuple
 from urllib.parse import quote
 
@@ -45,12 +47,21 @@ _hammer_buckets: dict[str, collections.deque[float]] = {}
 _quarantine_until: dict[str, float] = {}
 _rate_lock = threading.Lock()
 
-TOS_ALLOWED_COMMANDS = frozenset({
-    "tos", "terms", "termsofservice",
-    "privacy", "privacypolicy", "pp",
-    "help", "about",
-    "dmblock", "dmunblock", "mydm",
-})
+TOS_ALLOWED_COMMANDS = frozenset(
+    {
+        "tos",
+        "terms",
+        "termsofservice",
+        "privacy",
+        "privacypolicy",
+        "pp",
+        "help",
+        "about",
+        "dmblock",
+        "dmunblock",
+        "mydm",
+    }
+)
 
 
 _MINOR_SEX_RE = re.compile(
@@ -99,11 +110,12 @@ _MALWARE_RE = re.compile(
     r")"
 )
 
-def _uid(user_id) -> str:
+
+def _uid(user_id: typing.Any) -> str:
     return str(user_id or "").strip()
 
 
-def issue_acceptance_url(user_id) -> str:
+def issue_acceptance_url(user_id: typing.Any) -> str:
     """Issue one opaque, single-use, short-lived web acceptance capability."""
     uid = _uid(user_id)
     if not uid.isdigit() or len(uid) > 24:
@@ -179,9 +191,7 @@ def record_web_acceptance(user_id: str, client_address: str) -> str:
             fingerprint,
             since=network_cutoff,
         )
-        blocked_match = any(
-            other != uid and config.is_blocked(other) for other in recent_users
-        )
+        blocked_match = any(other != uid and config.is_blocked(other) for other in recent_users)
     needs_review = blocked_match
     status = "review" if needs_review else "accepted"
     db.tos_acceptance_set(
@@ -201,7 +211,7 @@ def record_web_acceptance(user_id: str, client_address: str) -> str:
     return status
 
 
-def has_accepted(user_id) -> bool:
+def has_accepted(user_id: typing.Any) -> bool:
     """True if user accepted the current ToS version."""
     uid = _uid(user_id)
     if not uid:
@@ -217,7 +227,7 @@ def has_accepted(user_id) -> bool:
     )
 
 
-def accept(user_id) -> None:
+def accept(user_id: typing.Any) -> None:
     uid = _uid(user_id)
     db.tos_acceptance_set(uid, TOS_VERSION, status="accepted")
     db.user_flag_set(uid, "tos_accepted", TOS_VERSION)
@@ -225,7 +235,7 @@ def accept(user_id) -> None:
     db.user_flag_set(uid, "tos_review_pending", "")
 
 
-def reject(user_id) -> None:
+def reject(user_id: typing.Any) -> None:
     uid = _uid(user_id)
     db.tos_acceptance_set(uid, TOS_VERSION, status="rejected")
     db.user_flag_set(uid, "tos_accepted", "")
@@ -233,7 +243,7 @@ def reject(user_id) -> None:
     db.user_flag_set(uid, "tos_review_pending", "")
 
 
-def allow_review(user_id) -> bool:
+def allow_review(user_id: typing.Any) -> bool:
     uid = _uid(user_id)
     if not uid.isdigit() or not db.tos_acceptance_allow(uid, TOS_VERSION):
         return False
@@ -243,7 +253,7 @@ def allow_review(user_id) -> bool:
     return True
 
 
-def status_line(user_id) -> str:
+def status_line(user_id: typing.Any) -> str:
     if has_accepted(user_id):
         when = db.user_flag_get(_uid(user_id), "tos_accepted_at") or ""
         try:
@@ -284,9 +294,9 @@ class AcceptanceView(discord.ui.View):
         self.acceptance_url = issue_acceptance_url(self.user_id)
         for child in self.children:
             if getattr(child, "custom_id", "") == "tos:read-placeholder":
-                child.custom_id = f"tos:read:{self.user_id}"
+                typing.cast(typing.Any, child).custom_id = f"tos:read:{self.user_id}"
             elif getattr(child, "label", "") == "I've accepted — check":
-                child.custom_id = f"tos:check:{self.user_id}"
+                typing.cast(typing.Any, child).custom_id = f"tos:check:{self.user_id}"
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
@@ -310,7 +320,7 @@ class AcceptanceView(discord.ui.View):
         custom_id="tos:read-placeholder",
     )
     async def read_terms(
-        self, interaction: discord.Interaction, _button: discord.ui.Button
+        self, interaction: discord.Interaction, _button: discord.ui.Button[typing.Any]
     ) -> None:
         # The explicit owner check also keeps direct callback invocation from
         # bypassing the view guard.
@@ -327,17 +337,15 @@ class AcceptanceView(discord.ui.View):
         style=discord.ButtonStyle.success,
     )
     async def check_acceptance(
-        self, interaction: discord.Interaction, _button: discord.ui.Button
+        self, interaction: discord.Interaction, _button: discord.ui.Button[typing.Any]
     ) -> None:
         if has_accepted(self.user_id):
             for child in self.children:
-                child.disabled = True
+                typing.cast(typing.Any, child).disabled = True
             await interaction.response.edit_message(
                 embed=discord.Embed(
                     title="terms accepted",
-                    description=(
-                        f"ToS **v{TOS_VERSION}** is accepted. You can use owaua now."
-                    ),
+                    description=(f"ToS **v{TOS_VERSION}** is accepted. You can use owaua now."),
                     color=0x2B2D31,
                 ),
                 view=self,
@@ -387,7 +395,7 @@ def _strike(user_id: str, key: str) -> int:
     return n
 
 
-def note_leak_attempt(user_id) -> Tuple[bool, int]:
+def note_leak_attempt(user_id: typing.Any) -> Tuple[bool, int]:
     """Count a prompt-leak attempt. Returns (should_block, strike_count)."""
     uid = _uid(user_id)
     if config.is_bot_owner(uid):
@@ -396,7 +404,7 @@ def note_leak_attempt(user_id) -> Tuple[bool, int]:
     return n >= _LEAK_STRIKE_LIMIT, n
 
 
-def rate_limit_retry_after(user_id) -> float:
+def rate_limit_retry_after(user_id: typing.Any) -> float:
     """Return a retry delay or quarantine duration without creating manual block friction."""
     uid = _uid(user_id)
     if not uid or config.is_bot_owner(uid):
@@ -433,11 +441,14 @@ def rate_limit_retry_after(user_id) -> float:
 
         bucket.append(now)
         if len(_rate_buckets) > 10_000:
-            stale = [key for key, values in _rate_buckets.items() if not values or now - values[-1] >= _RATE_WINDOW_SEC]
+            stale = [
+                key
+                for key, values in _rate_buckets.items()
+                if not values or now - values[-1] >= _RATE_WINDOW_SEC
+            ]
             for key in stale:
                 _rate_buckets.pop(key, None)
         return 0.0
-
 
 
 def _infer_category(reason: str, explicit_category: str = "") -> str:
@@ -462,7 +473,7 @@ def _infer_category(reason: str, explicit_category: str = "") -> str:
 
 
 def hard_block(
-    user_id,
+    user_id: typing.Any,
     reason: str,
     *,
     category: str = "",
@@ -491,6 +502,7 @@ def hard_block(
 
     try:
         from owaua import blocked
+
         return blocked.block_user(
             uid,
             reason=tos_reason[:250],
@@ -508,11 +520,11 @@ def hard_block(
         return True
 
 
-def is_emergency_blocked(user_id) -> bool:
+def is_emergency_blocked(user_id: typing.Any) -> bool:
     return db.user_flag_get(_uid(user_id), "tos_emergency_block") == "1"
 
 
-def clear_block_state(user_id) -> None:
+def clear_block_state(user_id: typing.Any) -> None:
     """Clear only ToS-created flags; manual/static blocks are untouched."""
     uid = _uid(user_id)
     with _rate_lock:
@@ -530,8 +542,7 @@ def clear_block_state(user_id) -> None:
         db.user_flag_set(uid, key, value)
 
 
-
-def check_message(user_id, text: str):
+def check_message(user_id: typing.Any, text: str):
     """
     Run ToS detectors on a user message.
 
@@ -554,7 +565,7 @@ def check_message(user_id, text: str):
     return None
 
 
-def handle_model_tos_flag(user_id, flag) -> Optional[str]:
+def handle_model_tos_flag(user_id: typing.Any, flag: typing.Any) -> Optional[str]:
     """
     Model may emit tos_violation: {\"reason\": \"...\"} or a plain string.
     Returns block reason if actionable.
@@ -564,8 +575,13 @@ def handle_model_tos_flag(user_id, flag) -> Optional[str]:
     if config.is_bot_owner(user_id):
         return None
     if isinstance(flag, dict):
-        reason = str(flag.get("reason") or flag.get("type") or flag.get("violation") or "").strip()
-        severity = str(flag.get("severity") or "high").lower()
+        reason = str(
+            typing.cast(typing.Any, flag).get("reason")
+            or typing.cast(typing.Any, flag).get("type")
+            or typing.cast(typing.Any, flag).get("violation")
+            or ""
+        ).strip()
+        severity = str(typing.cast(typing.Any, flag).get("severity") or "high").lower()
     else:
         reason = str(flag).strip()
         severity = "high"

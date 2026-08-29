@@ -1,3 +1,5 @@
+# pyright: reportUnknownLambdaType=false
+import typing
 import unittest
 from io import BytesIO
 from types import SimpleNamespace
@@ -28,13 +30,13 @@ class _Guild:
             guild_permissions=SimpleNamespace(view_audit_log=True, administrator=False)
         )
 
-    def get_channel(self, channel_id):
+    def get_channel(self, channel_id: typing.Any):
         return {
             self.log_channel.id: self.log_channel,
             self.source_channel.id: self.source_channel,
         }.get(channel_id)
 
-    def get_channel_or_thread(self, channel_id):
+    def get_channel_or_thread(self, channel_id: typing.Any):
         return self.get_channel(channel_id)
 
 
@@ -71,7 +73,7 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
         target = SimpleNamespace(id=99, name="old-role", mention="<@&99>")
 
         await community.event_log(
-            self.guild,
+            typing.cast(typing.Any, self.guild),
             "role",
             "Role updated",
             "A role was updated.",
@@ -83,7 +85,7 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.guild.log_channel.send.assert_awaited_once()
-        embed = self.guild.log_channel.send.await_args.kwargs["embed"]
+        embed = typing.cast(typing.Any, self.guild.log_channel.send.await_args).kwargs["embed"]
         self.assertEqual(embed.title, "Role updated")
         fields = {field.name: field.value for field in embed.fields}
         self.assertIn("<@42>", fields["Actor"])
@@ -96,12 +98,15 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
     async def test_category_toggle_suppresses_only_that_event_family(self):
         self.settings["reaction_events"] = False
         db.module_config_set(
-            str(self.guild.id), "action_log", enabled=True,
-            settings=self.settings, actor_id="test",
+            str(self.guild.id),
+            "action_log",
+            enabled=True,
+            settings=self.settings,
+            actor_id="test",
         )
 
         await community.event_log(
-            self.guild, "reaction", "Reaction added", "A reaction changed."
+            typing.cast(typing.Any, self.guild), "reaction", "Reaction added", "A reaction changed."
         )
 
         self.guild.log_channel.send.assert_not_awaited()
@@ -109,12 +114,18 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
     async def test_ignored_target_user_is_suppressed(self):
         self.settings["ignored_user_ids"] = ["99"]
         db.module_config_set(
-            str(self.guild.id), "action_log", enabled=True,
-            settings=self.settings, actor_id="test",
+            str(self.guild.id),
+            "action_log",
+            enabled=True,
+            settings=self.settings,
+            actor_id="test",
         )
 
         await community.event_log(
-            self.guild, "member", "Member updated", "A member changed.",
+            typing.cast(typing.Any, self.guild),
+            "member",
+            "Member updated",
+            "A member changed.",
             target=SimpleNamespace(id=99, roles=[]),
         )
 
@@ -122,8 +133,13 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_audit_entry_formats_authoritative_actor_and_changes(self):
         actor = SimpleNamespace(
-            id=42, name="Moderator", display_name="Moderator", mention="<@42>",
-            roles=[], bot=False, display_avatar=None,
+            id=42,
+            name="Moderator",
+            display_name="Moderator",
+            mention="<@42>",
+            roles=[],
+            bot=False,
+            display_avatar=None,
         )
         target = SimpleNamespace(id=77, name="rules", mention="<#77>")
         entry = SimpleNamespace(
@@ -138,9 +154,9 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
             id=9876,
         )
 
-        await community.audit_entry_log(entry)
+        await community.audit_entry_log(typing.cast(typing.Any, entry))
 
-        embed = self.guild.log_channel.send.await_args.kwargs["embed"]
+        embed = typing.cast(typing.Any, self.guild.log_channel.send.await_args).kwargs["embed"]
         self.assertEqual(embed.title, "Channel Update")
         self.assertIn("<@42>", embed.description)
         fields = {field.name: field.value for field in embed.fields}
@@ -150,12 +166,21 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_bulk_delete_logs_actor_count_authors_and_bounded_sample(self):
         actor = SimpleNamespace(
-            id=42, name="Moderator", display_name="Moderator", mention="<@42>",
-            roles=[], bot=False, display_avatar=None,
+            id=42,
+            name="Moderator",
+            display_name="Moderator",
+            mention="<@42>",
+            roles=[],
+            bot=False,
+            display_avatar=None,
         )
         author = SimpleNamespace(
-            id=55, name="Member", display_name="Member", mention="<@55>",
-            roles=[], bot=False,
+            id=55,
+            name="Member",
+            display_name="Member",
+            mention="<@55>",
+            roles=[],
+            bot=False,
         )
         messages = [
             SimpleNamespace(
@@ -174,9 +199,9 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
             "owaua.community.recent_audit_entry",
             new=mock.AsyncMock(return_value=entry),
         ):
-            await community.bulk_message_delete(messages)
+            await community.bulk_message_delete(typing.cast(typing.Any, messages))
 
-        embed = self.guild.log_channel.send.await_args.kwargs["embed"]
+        embed = typing.cast(typing.Any, self.guild.log_channel.send.await_args).kwargs["embed"]
         self.assertIn("Deleted **3** messages", embed.description)
         self.assertIn("<@55>: 3", embed.description)
         self.assertIn("message 0", embed.description)
@@ -191,38 +216,61 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
             message_ids={100, 101, 102},
             cached_messages=[],
         )
-        client = SimpleNamespace(get_guild=lambda guild_id: self.guild)
+        client = SimpleNamespace(
+            get_guild=typing.cast(
+                typing.Callable[..., typing.Any],
+                typing.cast(typing.Callable[[typing.Any], typing.Any], lambda guild_id: self.guild),
+            )
+        )
 
         with mock.patch(
             "owaua.community.recent_audit_entry",
             new=mock.AsyncMock(return_value=None),
         ):
-            await community.raw_bulk_message_delete(client, payload)
+            await community.raw_bulk_message_delete(
+                typing.cast(typing.Any, client), typing.cast(typing.Any, payload)
+            )
 
-        embed = self.guild.log_channel.send.await_args.kwargs["embed"]
+        embed = typing.cast(typing.Any, self.guild.log_channel.send.await_args).kwargs["embed"]
         self.assertIn("Deleted **3** messages", embed.description)
         self.assertIn("**3** message(s) were not cached", embed.description)
 
     async def test_raw_delete_recovers_uncached_content_from_scoped_history(self):
         scope = f"guild:{self.guild.id}"
         db.record_server_message(
-            "100", scope, self.guild.name, str(self.guild.source_channel.id),
-            self.guild.source_channel.name, "55", "Member", "Member",
-            "content retained outside Discord cache", force=True,
+            "100",
+            scope,
+            self.guild.name,
+            str(self.guild.source_channel.id),
+            self.guild.source_channel.name,
+            "55",
+            "Member",
+            "Member",
+            "content retained outside Discord cache",
+            force=True,
         )
         payload = SimpleNamespace(
-            guild_id=self.guild.id, channel_id=self.guild.source_channel.id,
-            message_id=100, cached_message=None,
+            guild_id=self.guild.id,
+            channel_id=self.guild.source_channel.id,
+            message_id=100,
+            cached_message=None,
         )
-        client = SimpleNamespace(get_guild=lambda guild_id: self.guild)
+        client = SimpleNamespace(
+            get_guild=typing.cast(
+                typing.Callable[..., typing.Any],
+                typing.cast(typing.Callable[[typing.Any], typing.Any], lambda guild_id: self.guild),
+            )
+        )
 
         with mock.patch(
             "owaua.community.recent_audit_entry",
             new=mock.AsyncMock(return_value=None),
         ):
-            await community.raw_message_delete(client, payload)
+            await community.raw_message_delete(
+                typing.cast(typing.Any, client), typing.cast(typing.Any, payload)
+            )
 
-        embed = self.guild.log_channel.send.await_args.kwargs["embed"]
+        embed = typing.cast(typing.Any, self.guild.log_channel.send.await_args).kwargs["embed"]
         self.assertEqual("Recovered uncached message deletion", embed.title)
         self.assertIn("content retained outside Discord cache", embed.description)
         self.assertIn("Consent-scoped message history", embed.description)
@@ -230,123 +278,188 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
     async def test_raw_delete_recovery_honors_content_privacy_setting(self):
         self.settings["include_message_content"] = False
         db.module_config_set(
-            str(self.guild.id), "action_log", enabled=True,
-            settings=self.settings, actor_id="test",
+            str(self.guild.id),
+            "action_log",
+            enabled=True,
+            settings=self.settings,
+            actor_id="test",
         )
         db.record_server_message(
-            "101", f"guild:{self.guild.id}", self.guild.name,
-            str(self.guild.source_channel.id), self.guild.source_channel.name,
-            "55", "Member", "Member", "hidden recovered content", force=True,
+            "101",
+            f"guild:{self.guild.id}",
+            self.guild.name,
+            str(self.guild.source_channel.id),
+            self.guild.source_channel.name,
+            "55",
+            "Member",
+            "Member",
+            "hidden recovered content",
+            force=True,
         )
         payload = SimpleNamespace(
-            guild_id=self.guild.id, channel_id=self.guild.source_channel.id,
-            message_id=101, cached_message=None,
+            guild_id=self.guild.id,
+            channel_id=self.guild.source_channel.id,
+            message_id=101,
+            cached_message=None,
         )
-        client = SimpleNamespace(get_guild=lambda guild_id: self.guild)
+        client = SimpleNamespace(
+            get_guild=typing.cast(
+                typing.Callable[..., typing.Any],
+                typing.cast(typing.Callable[[typing.Any], typing.Any], lambda guild_id: self.guild),
+            )
+        )
 
         with mock.patch(
             "owaua.community.recent_audit_entry",
             new=mock.AsyncMock(return_value=None),
         ):
-            await community.raw_message_delete(client, payload)
+            await community.raw_message_delete(
+                typing.cast(typing.Any, client), typing.cast(typing.Any, payload)
+            )
 
-        embed = self.guild.log_channel.send.await_args.kwargs["embed"]
+        embed = typing.cast(typing.Any, self.guild.log_channel.send.await_args).kwargs["embed"]
         self.assertNotIn("hidden recovered content", embed.description)
 
     async def test_message_content_can_be_disabled_without_losing_metadata(self):
         self.settings["include_message_content"] = False
         db.module_config_set(
-            str(self.guild.id), "action_log", enabled=True,
-            settings=self.settings, actor_id="test",
+            str(self.guild.id),
+            "action_log",
+            enabled=True,
+            settings=self.settings,
+            actor_id="test",
         )
         author = SimpleNamespace(
-            id=55, name="Member", display_name="Member", mention="<@55>",
-            roles=[], bot=False,
+            id=55,
+            name="Member",
+            display_name="Member",
+            mention="<@55>",
+            roles=[],
+            bot=False,
         )
         message = SimpleNamespace(
-            id=100, guild=self.guild, channel=self.guild.source_channel,
-            author=author, content="private message body", attachments=[],
+            id=100,
+            guild=self.guild,
+            channel=self.guild.source_channel,
+            author=author,
+            content="private message body",
+            attachments=[],
         )
 
         with mock.patch(
             "owaua.community.recent_audit_entry",
             new=mock.AsyncMock(return_value=None),
         ):
-            await community.message_delete(message)
+            await community.message_delete(typing.cast(typing.Any, message))
 
-        embed = self.guild.log_channel.send.await_args.kwargs["embed"]
+        embed = typing.cast(typing.Any, self.guild.log_channel.send.await_args).kwargs["embed"]
         self.assertNotIn("private message body", embed.description)
         self.assertIn("**Author:**", embed.description)
         self.assertIn("**Channel:**", embed.description)
 
     async def test_deleted_previewable_media_is_relayed_for_discord_preview(self):
         author = SimpleNamespace(
-            id=55, name="Member", display_name="Member", mention="<@55>",
-            roles=[], bot=False,
+            id=55,
+            name="Member",
+            display_name="Member",
+            mention="<@55>",
+            roles=[],
+            bot=False,
         )
         attachment = SimpleNamespace(
-            filename="clip.mp4", content_type="video/mp4",
+            filename="clip.mp4",
+            content_type="video/mp4",
             url="https://cdn.discordapp.com/attachments/1/2/clip.mp4",
-            to_file=mock.AsyncMock(return_value=discord.File(BytesIO(b"video"), filename="clip.mp4")),
+            to_file=mock.AsyncMock(
+                return_value=discord.File(BytesIO(b"video"), filename="clip.mp4")
+            ),
         )
         message = SimpleNamespace(
-            id=100, guild=self.guild, channel=self.guild.source_channel,
-            author=author, content="watch this", attachments=[attachment],
+            id=100,
+            guild=self.guild,
+            channel=self.guild.source_channel,
+            author=author,
+            content="watch this",
+            attachments=[attachment],
         )
 
         with mock.patch(
             "owaua.community.recent_audit_entry",
             new=mock.AsyncMock(return_value=None),
         ):
-            await community.message_delete(message)
+            await community.message_delete(typing.cast(typing.Any, message))
 
         attachment.to_file.assert_awaited_once_with(use_cached=True)
-        kwargs = self.guild.log_channel.send.await_args.kwargs
+        kwargs = typing.cast(typing.Any, self.guild.log_channel.send.await_args).kwargs
         self.assertEqual(kwargs["files"][0].filename, "clip.mp4")
         self.assertIn(attachment.url, kwargs["embed"].description)
 
     async def test_non_media_deleted_attachment_remains_a_link_only(self):
         author = SimpleNamespace(
-            id=55, name="Member", display_name="Member", mention="<@55>",
-            roles=[], bot=False,
+            id=55,
+            name="Member",
+            display_name="Member",
+            mention="<@55>",
+            roles=[],
+            bot=False,
         )
         attachment = SimpleNamespace(
-            filename="report.pdf", content_type="application/pdf",
+            filename="report.pdf",
+            content_type="application/pdf",
             url="https://cdn.discordapp.com/attachments/1/2/report.pdf",
             to_file=mock.AsyncMock(),
         )
         message = SimpleNamespace(
-            id=100, guild=self.guild, channel=self.guild.source_channel,
-            author=author, content="report", attachments=[attachment],
+            id=100,
+            guild=self.guild,
+            channel=self.guild.source_channel,
+            author=author,
+            content="report",
+            attachments=[attachment],
         )
 
         with mock.patch(
             "owaua.community.recent_audit_entry",
             new=mock.AsyncMock(return_value=None),
         ):
-            await community.message_delete(message)
+            await community.message_delete(typing.cast(typing.Any, message))
 
         attachment.to_file.assert_not_awaited()
-        kwargs = self.guild.log_channel.send.await_args.kwargs
+        kwargs = typing.cast(typing.Any, self.guild.log_channel.send.await_args).kwargs
         self.assertIsNone(kwargs["files"])
         self.assertIn(attachment.url, kwargs["embed"].description)
 
     def test_catalog_exposes_complete_typed_logging_controls(self):
         settings = MODULES["action_log"]["settings"]
         self.assertEqual(settings["channel_id"], "")
-        self.assertFalse(any(
-            key.endswith("_channel_id") for key in settings if key != "channel_id"
-        ))
+        self.assertFalse(
+            any(key.endswith("_channel_id") for key in settings if key != "channel_id")
+        )
         for key in (
-            "audit_events", "message_events", "member_events", "moderation_events",
-            "voice_events", "role_events", "channel_events", "thread_events",
-            "server_events", "reaction_events", "command_events", "include_message_content",
-            "include_attachments", "include_audit_changes", "include_reasons",
-            "include_bot_events", "bulk_delete_sample_size", "ignored_user_ids",
+            "audit_events",
+            "message_events",
+            "member_events",
+            "moderation_events",
+            "voice_events",
+            "role_events",
+            "channel_events",
+            "thread_events",
+            "server_events",
+            "reaction_events",
+            "command_events",
+            "include_message_content",
+            "include_attachments",
+            "include_audit_changes",
+            "include_reasons",
+            "include_bot_events",
+            "bulk_delete_sample_size",
+            "ignored_user_ids",
         ):
             self.assertIn(key, settings)
         self.assertGreaterEqual(len(discord.AuditLogAction), 67)
-        self.assertTrue(all(community._audit_kind(action.name) for action in discord.AuditLogAction))
+        self.assertTrue(
+            all(community._audit_kind(action.name) for action in discord.AuditLogAction)
+        )
         self.assertIn("U+2B50", community._reaction_label("⭐"))
         safe = community._log_content("@everyone **fake audit field**")
         self.assertNotIn("@everyone", safe)

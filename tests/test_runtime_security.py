@@ -1,8 +1,10 @@
+# pyright: reportUnknownLambdaType=false
 """Security regression tests for actions, moderation, rules, and voice."""
 
 import datetime
 import os
 import types
+import typing
 import unittest
 from unittest import mock
 
@@ -39,9 +41,7 @@ class ModelOutputLinkSafetyTest(unittest.TestCase):
         self.assertNotIn("https://", safe)
 
     def test_markdown_uppercase_and_www_links_are_defanged(self):
-        safe = brain.scrub_ai_output(
-            "[open](HTTPS://example.invalid/path) or www.example.invalid"
-        )
+        safe = brain.scrub_ai_output("[open](HTTPS://example.invalid/path) or www.example.invalid")
 
         self.assertIn("[open](HTTPS[:]//example.invalid/path)", safe)
         self.assertIn("www[.]example.invalid", safe)
@@ -61,7 +61,7 @@ class ModelOutputLinkSafetyTest(unittest.TestCase):
             [{"title": "Python docs", "url": "https://docs.python.org/3/"}],
         )
 
-        self.assertIn("https://docs.python.org/3/", embed.fields[0].value)
+        self.assertIn("https://docs.python.org/3/", typing.cast(typing.Any, embed.fields[0].value))
 
 
 class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
@@ -80,14 +80,14 @@ class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], actions.assistant_proposals([{"type": "shell"}]))
 
     def test_role_created_earlier_in_batch_is_an_explicit_dependency(self):
-        proposals = actions.assistant_proposals([
-            {"type": "create_role", "name": "promo allowed"},
-            {"type": "assign_role", "target_user": "42", "role": "promo allowed"},
-        ])
-        self.assertEqual(2, len(proposals))
-        self.assertEqual(
-            "promo allowed", proposals[1]["_assistant_depends_on_role_name"]
+        proposals = actions.assistant_proposals(
+            [
+                {"type": "create_role", "name": "promo allowed"},
+                {"type": "assign_role", "target_user": "42", "role": "promo allowed"},
+            ]
         )
+        self.assertEqual(2, len(proposals))
+        self.assertEqual("promo allowed", proposals[1]["_assistant_depends_on_role_name"])
 
     def test_assistant_proposal_accepts_common_safe_aliases(self):
         proposal = {"type": "remove_slowmode"}
@@ -137,9 +137,7 @@ class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             {"type": "set_slowmode", "seconds": 600, "channel": "123456789012345678"},
-            actions.infer_assistant_proposal(
-                "set slowmode to 10 minutes in <#123456789012345678>"
-            ),
+            actions.infer_assistant_proposal("set slowmode to 10 minutes in <#123456789012345678>"),
         )
 
     def test_clear_action_requests_recover_without_model_action_shape(self):
@@ -228,16 +226,24 @@ class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
     async def test_nickname_inverse_captures_exact_previous_value(self):
         target = types.SimpleNamespace(id=42, nick="Before")
         with mock.patch.object(
-            actions, "_resolve_member", new_callable=mock.AsyncMock,
+            actions,
+            "_resolve_member",
+            new_callable=mock.AsyncMock,
             return_value=target,
         ):
             inverse = await actions.prepare_inverse(
                 {"type": "set_nickname", "target_user": "42", "nickname": "Raven"},
-                object(), object(), object(),
+                object(),
+                object(),
+                object(),
             )
         self.assertEqual(
-            {"type": "set_nickname", "target_user": "42", "nickname": "Before",
-             "reason": "revert previous assistant action"},
+            {
+                "type": "set_nickname",
+                "target_user": "42",
+                "nickname": "Before",
+                "reason": "revert previous assistant action",
+            },
             inverse,
         )
 
@@ -251,14 +257,18 @@ class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
         expiry = actions.discord.utils.utcnow() + datetime.timedelta(minutes=17)
         target = types.SimpleNamespace(id=42, timed_out_until=expiry)
         with mock.patch.object(
-            actions, "_resolve_member", new_callable=mock.AsyncMock,
+            actions,
+            "_resolve_member",
+            new_callable=mock.AsyncMock,
             return_value=target,
         ):
             inverse = await actions.prepare_inverse(
                 {"type": "remove_timeout", "target_user": "42"},
-                object(), object(), object(),
+                object(),
+                object(),
+                object(),
             )
-        self.assertEqual(expiry.isoformat(), inverse["until"])
+        self.assertEqual(expiry.isoformat(), typing.cast(typing.Any, inverse)["until"])
 
     async def test_confirmed_slowmode_supports_threads_with_manage_threads(self):
         class FakeMember:
@@ -271,7 +281,7 @@ class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
             def __init__(self):
                 self.edit = mock.AsyncMock()
 
-            def permissions_for(self, _member):
+            def permissions_for(self, _member: typing.Any):
                 return types.SimpleNamespace(
                     administrator=False,
                     manage_channels=False,
@@ -280,12 +290,14 @@ class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
 
         guild = types.SimpleNamespace(owner_id=999)
         requester = FakeMember()
-        requester.id = 7
-        requester.guild = guild
-        requester.guild_permissions = types.SimpleNamespace(administrator=False)
+        typing.cast(typing.Any, requester).id = 7
+        typing.cast(typing.Any, requester).guild = guild
+        typing.cast(typing.Any, requester).guild_permissions = types.SimpleNamespace(
+            administrator=False
+        )
         bot_member = FakeMember()
-        bot_member.id = 8
-        bot_member.guild = guild
+        typing.cast(typing.Any, bot_member).id = 8
+        typing.cast(typing.Any, bot_member).guild = guild
         thread = FakeThread()
         guild.fetch_channel = mock.AsyncMock(return_value=thread)
 
@@ -303,46 +315,58 @@ class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
                 guild,
                 object(),
                 channel=thread,
-                bot_member=bot_member,
+                bot_member=typing.cast(typing.Any, bot_member),
             )
 
         self.assertEqual("slowmode in #support-thread set to 0s", result)
         thread.edit.assert_awaited_once()
-        self.assertEqual(0, thread.edit.await_args.kwargs["slowmode_delay"])
+        self.assertEqual(
+            0, typing.cast(typing.Any, thread.edit.await_args).kwargs["slowmode_delay"]
+        )
 
     async def test_assistant_confirmation_records_inverse_and_consumes_undo(self):
         proposal = {"type": "set_nickname", "target_user": "42", "nickname": "Before"}
         interaction = types.SimpleNamespace(
-            user=types.SimpleNamespace(id=7), guild_id=1, channel_id=2,
+            user=types.SimpleNamespace(id=7),
+            guild_id=1,
+            channel_id=2,
         )
         confirmation = types.SimpleNamespace(
             user=types.SimpleNamespace(id=7),
-            guild=object(), guild_id=1,
-            channel=object(), channel_id=2,
+            guild=object(),
+            guild_id=1,
+            channel=object(),
+            channel_id=2,
             client=object(),
             followup=types.SimpleNamespace(send=mock.AsyncMock()),
         )
         inverse = {"type": "set_nickname", "target_user": "42", "nickname": "Raven"}
         with (
             mock.patch.object(
-                actions, "prepare_inverse", new_callable=mock.AsyncMock,
+                actions,
+                "prepare_inverse",
+                new_callable=mock.AsyncMock,
                 return_value=inverse,
             ),
             mock.patch.object(
-                actions, "execute_all", new_callable=mock.AsyncMock,
+                actions,
+                "execute_all",
+                new_callable=mock.AsyncMock,
                 return_value=["set user's nickname to Before"],
             ),
             mock.patch.object(
-                actions, "finalize_inverse", new_callable=mock.AsyncMock,
+                actions,
+                "finalize_inverse",
+                new_callable=mock.AsyncMock,
                 return_value=inverse,
             ),
             mock.patch.object(slash.db, "record_assistant_action") as record_history,
             mock.patch.object(slash.db, "record_action_audit"),
         ):
             view = slash._assistant_action_confirmation(
-                interaction, proposal, undo_record_id=99
+                typing.cast(typing.Any, interaction), proposal, undo_record_id=99
             )
-            await view.on_confirm(confirmation)
+            await view.on_confirm(typing.cast(typing.Any, confirmation))
         self.assertEqual(99, record_history.call_args.kwargs["consumed_action_id"])
         self.assertEqual(inverse, record_history.call_args.kwargs["inverse"])
         confirmation.followup.send.assert_awaited_once()
@@ -366,9 +390,7 @@ class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("exactly one", result[0])
 
     def test_preview_canonicalizes_alias_and_suppresses_mentions(self):
-        preview = actions.preview_action(
-            {"type": "ban", "target": "@everyone", "reason": "@here"}
-        )
+        preview = actions.preview_action({"type": "ban", "target": "@everyone", "reason": "@here"})
         self.assertTrue(preview.startswith("ban_user"))
         self.assertNotIn("@everyone", preview)
         self.assertNotIn("@here", preview)
@@ -376,10 +398,16 @@ class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
     def test_role_hierarchy_blocks_equal_rank_even_for_administrator(self):
         guild = types.SimpleNamespace(owner_id=99)
         requester = types.SimpleNamespace(id=1, guild=guild, top_role=5)
-        target = types.SimpleNamespace(
-            id=2, guild=guild, top_role=5, display_name="peer"
+        target = types.SimpleNamespace(id=2, guild=guild, top_role=5, display_name="peer")
+        self.assertIn(
+            "not above",
+            typing.cast(
+                typing.Any,
+                actions._requester_can_act_on(
+                    typing.cast(typing.Any, requester), typing.cast(typing.Any, target)
+                ),
+            ),
         )
-        self.assertIn("not above", actions._requester_can_act_on(requester, target))
 
     def test_chart_url_accepts_only_bounded_data_schema(self):
         url = actions.chart_url(
@@ -390,8 +418,8 @@ class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
                 "plugins": {"arbitrary_callback": "ignored"},
             }
         )
-        self.assertTrue(url.startswith("https://quickchart.io/chart?"))
-        self.assertNotIn("arbitrary_callback", url)
+        self.assertTrue(typing.cast(typing.Any, url).startswith("https://quickchart.io/chart?"))
+        self.assertNotIn("arbitrary_callback", typing.cast(typing.Any, url))
         self.assertIsNone(actions.chart_url({"type": "javascript", "labels": []}))
 
     async def test_confirmed_action_reloads_requester_and_bot(self):
@@ -400,8 +428,12 @@ class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
         fresh_bot = types.SimpleNamespace(id=100)
         guild = types.SimpleNamespace(
             fetch_member=mock.AsyncMock(
-                side_effect=lambda user_id: (
-                    fresh_requester if user_id == 4 else fresh_bot
+                side_effect=typing.cast(
+                    typing.Callable[..., typing.Any],
+                    typing.cast(
+                        typing.Callable[[typing.Any], typing.Any],
+                        lambda user_id: fresh_requester if user_id == 4 else fresh_bot,
+                    ),
                 )
             ),
             me=fresh_bot,
@@ -421,8 +453,8 @@ class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
                 confirmed=True,
             )
         self.assertEqual(["done"], result)
-        self.assertIs(execute.await_args.args[1], fresh_requester)
-        self.assertIs(execute.await_args.kwargs["bot_member"], fresh_bot)
+        self.assertIs(typing.cast(typing.Any, execute.await_args).args[1], fresh_requester)
+        self.assertIs(typing.cast(typing.Any, execute.await_args).kwargs["bot_member"], fresh_bot)
 
     async def test_fresh_member_resolution_never_uses_stale_cache(self):
         stale = object()
@@ -444,10 +476,10 @@ class ToolRegistryConfirmationTest(unittest.IsolatedAsyncioTestCase):
             {"ban_user": mock.AsyncMock(return_value="banned")},
             clear=False,
         ):
-            result = await function_registry.execute_tool(
-                "ban_user", {"user_id": "42"}, ctx
-            )
-            function_registry._EXECUTORS["ban_user"].assert_not_awaited()
+            result = await function_registry.execute_tool("ban_user", {"user_id": "42"}, ctx)
+            typing.cast(
+                mock.AsyncMock, function_registry._EXECUTORS["ban_user"]
+            ).assert_not_awaited()
         self.assertIn("confirmation required", result)
 
     async def test_confirmed_tool_reloads_actor_before_permission_check(self):
@@ -456,37 +488,35 @@ class ToolRegistryConfirmationTest(unittest.IsolatedAsyncioTestCase):
 
         guild = types.SimpleNamespace(id=1, owner_id=99)
         stale_actor = FakeMember()
-        stale_actor.id = 4
+        typing.cast(typing.Any, stale_actor).id = 4
         fresh_actor = FakeMember()
-        fresh_actor.id = stale_actor.id
-        fresh_actor.guild = guild
-        fresh_actor.guild_permissions = types.SimpleNamespace(
+        typing.cast(typing.Any, fresh_actor).id = typing.cast(typing.Any, stale_actor).id
+        typing.cast(typing.Any, fresh_actor).guild = guild
+        typing.cast(typing.Any, fresh_actor).guild_permissions = types.SimpleNamespace(
             administrator=False, ban_members=True
         )
         bot_member = FakeMember()
-        bot_member.guild = guild
-        bot_member.guild_permissions = types.SimpleNamespace(
+        typing.cast(typing.Any, bot_member).guild = guild
+        typing.cast(typing.Any, bot_member).guild_permissions = types.SimpleNamespace(
             administrator=False, ban_members=True
         )
         guild.me = bot_member
         guild.fetch_member = mock.AsyncMock(return_value=fresh_actor)
         ctx = function_registry.ActionContext(
-            guild=guild,
-            actor=stale_actor,
-            bot=types.SimpleNamespace(user=types.SimpleNamespace(id=100)),
+            guild=typing.cast(typing.Any, guild),
+            actor=typing.cast(typing.Any, stale_actor),
+            bot=typing.cast(typing.Any, types.SimpleNamespace(user=types.SimpleNamespace(id=100))),
         )
         executor = mock.AsyncMock(return_value="done")
         with (
             mock.patch.object(function_registry.discord, "Member", FakeMember),
-            mock.patch.dict(
-                function_registry._EXECUTORS, {"ban_user": executor}, clear=False
-            ),
+            mock.patch.dict(function_registry._EXECUTORS, {"ban_user": executor}, clear=False),
         ):
             result = await function_registry.execute_tool(
                 "ban_user", {"user_id": "5"}, ctx, confirmed=True
             )
         self.assertEqual("done", result)
-        self.assertIs(executor.await_args.args[0].actor, fresh_actor)
+        self.assertIs(typing.cast(typing.Any, executor.await_args).args[0].actor, fresh_actor)
 
     def test_administrator_does_not_bypass_role_hierarchy(self):
         class FakeMember:
@@ -494,18 +524,22 @@ class ToolRegistryConfirmationTest(unittest.IsolatedAsyncioTestCase):
 
         guild = types.SimpleNamespace(owner_id=1, me=None)
         actor = FakeMember()
-        actor.id = 2
-        actor.top_role = 5
-        actor.guild_permissions = types.SimpleNamespace(administrator=True)
+        typing.cast(typing.Any, actor).id = 2
+        typing.cast(typing.Any, actor).top_role = 5
+        typing.cast(typing.Any, actor).guild_permissions = types.SimpleNamespace(administrator=True)
         target = FakeMember()
-        target.id = 3
-        target.top_role = 5
-        target.display_name = "peer"
+        typing.cast(typing.Any, target).id = 3
+        typing.cast(typing.Any, target).top_role = 5
+        typing.cast(typing.Any, target).display_name = "peer"
         bot = types.SimpleNamespace(user=types.SimpleNamespace(id=99))
-        ctx = function_registry.ActionContext(guild=guild, actor=actor, bot=bot)
+        ctx = function_registry.ActionContext(
+            guild=typing.cast(typing.Any, guild),
+            actor=typing.cast(typing.Any, actor),
+            bot=typing.cast(typing.Any, bot),
+        )
         with mock.patch.object(function_registry.discord, "Member", FakeMember):
-            result = function_registry._hierarchy_ok(ctx, target)
-        self.assertIn("not high enough", result)
+            result = function_registry._hierarchy_ok(ctx, typing.cast(typing.Any, target))
+        self.assertIn("not high enough", typing.cast(typing.Any, result))
 
     def test_model_can_propose_only_one_tool_call(self):
         parsed = function_registry.tool_calls_from_arguments(
@@ -539,7 +573,7 @@ class ToolRegistryConfirmationTest(unittest.IsolatedAsyncioTestCase):
             function_registry._EXECUTORS, {"get_server_info": executor}, clear=False
         ):
             result = await function_registry.execute_tool(
-                "get_server_info", ["not", "an", "object"], mock.Mock()
+                "get_server_info", typing.cast(typing.Any, ["not", "an", "object"]), mock.Mock()
             )
         self.assertIn("must be an object", result)
         executor.assert_not_awaited()
@@ -550,29 +584,30 @@ class ToolRegistryConfirmationTest(unittest.IsolatedAsyncioTestCase):
 
         guild = types.SimpleNamespace(id=1, owner_id=99)
         actor = FakeMember()
-        actor.id = 4
-        actor.guild = guild
-        actor.guild_permissions = types.SimpleNamespace(
+        typing.cast(typing.Any, actor).id = 4
+        typing.cast(typing.Any, actor).guild = guild
+        typing.cast(typing.Any, actor).guild_permissions = types.SimpleNamespace(
             administrator=False, view_audit_log=False
         )
         guild.fetch_member = mock.AsyncMock(return_value=actor)
         ctx = function_registry.ActionContext(
-            guild=guild,
-            actor=actor,
-            bot=types.SimpleNamespace(user=types.SimpleNamespace(id=100)),
+            guild=typing.cast(typing.Any, guild),
+            actor=typing.cast(typing.Any, actor),
+            bot=typing.cast(typing.Any, types.SimpleNamespace(user=types.SimpleNamespace(id=100))),
         )
         with mock.patch.object(function_registry.discord, "Member", FakeMember):
-            result = await function_registry.execute_tool(
-                "get_server_info", {}, ctx
-            )
+            result = await function_registry.execute_tool("get_server_info", {}, ctx)
         self.assertIn("view_audit_log", result)
 
 
 class ReviewFirstModerationTest(unittest.IsolatedAsyncioTestCase):
     def test_moderation_requires_exact_boolean_guild_opt_in(self):
         for stored, expected in ((True, True), (False, False), ("true", False), (None, False)):
-            with self.subTest(stored=stored), mock.patch.object(
-                moderation.db, "guild_settings", return_value={"moderation_enabled": stored}
+            with (
+                self.subTest(stored=stored),
+                mock.patch.object(
+                    moderation.db, "guild_settings", return_value={"moderation_enabled": stored}
+                ),
             ):
                 self.assertIs(moderation._enabled_for_guild(1), expected)
 
@@ -587,10 +622,8 @@ class ReviewFirstModerationTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_legacy_enforce_name_only_queues_review(self):
         message = types.SimpleNamespace(delete=mock.AsyncMock())
-        with mock.patch.object(
-            moderation, "_queue_review", new_callable=mock.AsyncMock
-        ) as queue:
-            await moderation._enforce(message, {"flagged": True})
+        with mock.patch.object(moderation, "_queue_review", new_callable=mock.AsyncMock) as queue:
+            await moderation._enforce(typing.cast(typing.Any, message), {"flagged": True})
         queue.assert_awaited_once()
         message.delete.assert_not_awaited()
 
@@ -607,7 +640,7 @@ class ReviewFirstModerationTest(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(moderation, "_enabled_for_guild", return_value=False),
             mock.patch.object(moderation.llm, "moderate", new_callable=mock.AsyncMock) as classify,
         ):
-            await moderation.safety_check(message)
+            await moderation.safety_check(typing.cast(typing.Any, message))
         classify.assert_not_awaited()
 
     async def test_review_delete_reloads_current_channel_permission(self):
@@ -616,27 +649,44 @@ class ReviewFirstModerationTest(unittest.IsolatedAsyncioTestCase):
 
         guild = types.SimpleNamespace(id=1, owner_id=99)
         actor = FakeMember()
-        actor.id = 4
-        actor.guild = guild
-        actor.guild_permissions = types.SimpleNamespace(
+        typing.cast(typing.Any, actor).id = 4
+        typing.cast(typing.Any, actor).guild = guild
+        typing.cast(typing.Any, actor).guild_permissions = types.SimpleNamespace(
             administrator=False, manage_messages=True
         )
-        actor.current_manage_messages = False
+        typing.cast(typing.Any, actor).current_manage_messages = False
         bot_member = FakeMember()
-        bot_member.id = 100
-        bot_member.guild = guild
-        bot_member.current_manage_messages = True
+        typing.cast(typing.Any, bot_member).id = 100
+        typing.cast(typing.Any, bot_member).guild = guild
+        typing.cast(typing.Any, bot_member).current_manage_messages = True
         source = types.SimpleNamespace(
-            permissions_for=lambda member: types.SimpleNamespace(
-                administrator=False,
-                manage_messages=member.current_manage_messages,
+            permissions_for=typing.cast(
+                typing.Callable[..., typing.Any],
+                typing.cast(
+                    typing.Callable[[typing.Any], typing.Any],
+                    lambda member: types.SimpleNamespace(
+                        administrator=False,
+                        manage_messages=typing.cast(typing.Any, member).current_manage_messages,
+                    ),
+                ),
             ),
             fetch_message=mock.AsyncMock(),
         )
-        guild.get_channel = lambda channel_id: source
+        guild.get_channel = typing.cast(
+            typing.Callable[..., typing.Any],
+            typing.cast(typing.Callable[[typing.Any], typing.Any], lambda channel_id: source),
+        )
         guild.fetch_channel = mock.AsyncMock(return_value=source)
         guild.fetch_member = mock.AsyncMock(
-            side_effect=lambda user_id: actor if user_id == actor.id else bot_member
+            side_effect=typing.cast(
+                typing.Callable[..., typing.Any],
+                typing.cast(
+                    typing.Callable[[typing.Any], typing.Any],
+                    lambda user_id: (
+                        actor if user_id == typing.cast(typing.Any, actor).id else bot_member
+                    ),
+                ),
+            )
         )
         interaction = types.SimpleNamespace(
             guild=guild,
@@ -660,7 +710,7 @@ class ReviewFirstModerationTest(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(moderation, "_enabled_for_guild", return_value=True),
         ):
             view = moderation.ModerationReviewView(review, moderation.discord.Embed())
-            await view._finish(interaction, delete=True)
+            await view._finish(typing.cast(typing.Any, interaction), delete=True)
         source.fetch_message.assert_not_awaited()
         interaction.response.send_message.assert_awaited_once()
         self.assertFalse(view._done)
@@ -679,20 +729,33 @@ class RulePermissionTest(unittest.TestCase):
             pass
 
         source = types.SimpleNamespace(
-            permissions_for=lambda current: types.SimpleNamespace(
-                administrator=False,
-                view_channel=True,
-                read_message_history=True,
-                manage_messages=current.guild_permissions.manage_messages,
+            permissions_for=typing.cast(
+                typing.Callable[..., typing.Any],
+                typing.cast(
+                    typing.Callable[[typing.Any], typing.Any],
+                    lambda current: types.SimpleNamespace(
+                        administrator=False,
+                        view_channel=True,
+                        read_message_history=True,
+                        manage_messages=typing.cast(
+                            typing.Any, typing.cast(typing.Any, current).guild_permissions
+                        ).manage_messages,
+                    ),
+                ),
             )
         )
         guild = types.SimpleNamespace(
-            id=1, owner_id=99, get_channel=lambda channel_id: source
+            id=1,
+            owner_id=99,
+            get_channel=typing.cast(
+                typing.Callable[..., typing.Any],
+                typing.cast(typing.Callable[[typing.Any], typing.Any], lambda channel_id: source),
+            ),
         )
         member = FakeMember()
-        member.id = 4
-        member.guild = guild
-        member.guild_permissions = types.SimpleNamespace(
+        typing.cast(typing.Any, member).id = 4
+        typing.cast(typing.Any, member).guild = guild
+        typing.cast(typing.Any, member).guild_permissions = types.SimpleNamespace(
             administrator=False,
             manage_messages=True,
             ban_members=False,
@@ -716,16 +779,24 @@ class RulePermissionTest(unittest.TestCase):
             timeout_minutes=0,
         )
         with mock.patch.object(rules.discord, "Member", FakeMember):
-            self.assertFalse(rules._can_approve(guild, member, pending))
-            member.guild_permissions.ban_members = True
-            self.assertTrue(rules._can_approve(guild, member, pending))
-            source.permissions_for = lambda current: types.SimpleNamespace(
-                administrator=False,
-                view_channel=False,
-                read_message_history=False,
-                manage_messages=current.guild_permissions.manage_messages,
+            self.assertFalse(rules._can_approve(typing.cast(typing.Any, guild), member, pending))
+            typing.cast(typing.Any, member).guild_permissions.ban_members = True
+            self.assertTrue(rules._can_approve(typing.cast(typing.Any, guild), member, pending))
+            source.permissions_for = typing.cast(
+                typing.Callable[..., typing.Any],
+                typing.cast(
+                    typing.Callable[[typing.Any], typing.Any],
+                    lambda current: types.SimpleNamespace(
+                        administrator=False,
+                        view_channel=False,
+                        read_message_history=False,
+                        manage_messages=typing.cast(
+                            typing.Any, typing.cast(typing.Any, current).guild_permissions
+                        ).manage_messages,
+                    ),
+                ),
             )
-            self.assertFalse(rules._can_approve(guild, member, pending))
+            self.assertFalse(rules._can_approve(typing.cast(typing.Any, guild), member, pending))
 
 
 class RuleExecutionRevalidationTest(unittest.IsolatedAsyncioTestCase):
@@ -735,32 +806,50 @@ class RuleExecutionRevalidationTest(unittest.IsolatedAsyncioTestCase):
 
         guild = types.SimpleNamespace(id=1, owner_id=99)
         approver = FakeMember()
-        approver.id = 4
-        approver.guild = guild
-        approver.guild_permissions = types.SimpleNamespace(
+        typing.cast(typing.Any, approver).id = 4
+        typing.cast(typing.Any, approver).guild = guild
+        typing.cast(typing.Any, approver).guild_permissions = types.SimpleNamespace(
             administrator=False,
             ban_members=False,
         )
         target = FakeMember()
-        target.id = 5
-        target.guild = guild
-        target.ban = mock.AsyncMock()
+        typing.cast(typing.Any, target).id = 5
+        typing.cast(typing.Any, target).guild = guild
+        typing.cast(typing.Any, target).ban = mock.AsyncMock()
         source = types.SimpleNamespace(
-            permissions_for=lambda _: types.SimpleNamespace(
-                administrator=False,
-                view_channel=True,
-                read_message_history=True,
+            permissions_for=typing.cast(
+                typing.Callable[..., typing.Any],
+                typing.cast(
+                    typing.Callable[[typing.Any], typing.Any],
+                    lambda _: types.SimpleNamespace(
+                        administrator=False,
+                        view_channel=True,
+                        read_message_history=True,
+                    ),
+                ),
             )
         )
-        guild.get_member = lambda user_id: approver if user_id == approver.id else None
-        async def fetch_member(user_id):
-            return approver if user_id == approver.id else target
+        guild.get_member = typing.cast(
+            typing.Callable[..., typing.Any],
+            typing.cast(
+                typing.Callable[[typing.Any], typing.Any],
+                lambda user_id: (
+                    approver if user_id == typing.cast(typing.Any, approver).id else None
+                ),
+            ),
+        )
+
+        async def fetch_member(user_id: typing.Any):
+            return approver if user_id == typing.cast(typing.Any, approver).id else target
 
         guild.fetch_member = mock.AsyncMock(side_effect=fetch_member)
         guild.fetch_channel = mock.AsyncMock(return_value=source)
         guild.me = None
         client = types.SimpleNamespace(
-            get_guild=lambda guild_id: guild,
+            get_guild=typing.cast(
+                typing.Callable[..., typing.Any],
+                typing.cast(typing.Callable[[typing.Any], typing.Any], lambda guild_id: guild),
+            ),
             user=types.SimpleNamespace(id=100),
         )
         pending = rules.PendingAction(
@@ -770,7 +859,7 @@ class RuleExecutionRevalidationTest(unittest.IsolatedAsyncioTestCase):
             rule_detail="test",
             category="ban",
             action_label="ban",
-            offender_id=target.id,
+            offender_id=typing.cast(typing.Any, target).id,
             offender_tag="target",
             evidence="evidence",
             channel_id=10,
@@ -785,7 +874,7 @@ class RuleExecutionRevalidationTest(unittest.IsolatedAsyncioTestCase):
         ):
             result = await rules.execute_pending(client, pending, approver)
         self.assertIn("currently needs `ban_members`", result)
-        target.ban.assert_not_awaited()
+        typing.cast(typing.Any, target).ban.assert_not_awaited()
 
     async def test_bot_permission_is_reloaded_before_pending_ban(self):
         class FakeMember:
@@ -793,45 +882,52 @@ class RuleExecutionRevalidationTest(unittest.IsolatedAsyncioTestCase):
 
         guild = types.SimpleNamespace(id=1, owner_id=99)
         approver = FakeMember()
-        approver.id = 4
-        approver.guild = guild
-        approver.top_role = 10
-        approver.guild_permissions = types.SimpleNamespace(
+        typing.cast(typing.Any, approver).id = 4
+        typing.cast(typing.Any, approver).guild = guild
+        typing.cast(typing.Any, approver).top_role = 10
+        typing.cast(typing.Any, approver).guild_permissions = types.SimpleNamespace(
             administrator=False, ban_members=True
         )
         target = FakeMember()
-        target.id = 5
-        target.guild = guild
-        target.top_role = 1
-        target.ban = mock.AsyncMock()
+        typing.cast(typing.Any, target).id = 5
+        typing.cast(typing.Any, target).guild = guild
+        typing.cast(typing.Any, target).top_role = 1
+        typing.cast(typing.Any, target).ban = mock.AsyncMock()
         current_bot = FakeMember()
-        current_bot.id = 100
-        current_bot.guild = guild
-        current_bot.top_role = 10
-        current_bot.guild_permissions = types.SimpleNamespace(
+        typing.cast(typing.Any, current_bot).id = 100
+        typing.cast(typing.Any, current_bot).guild = guild
+        typing.cast(typing.Any, current_bot).top_role = 10
+        typing.cast(typing.Any, current_bot).guild_permissions = types.SimpleNamespace(
             administrator=False, ban_members=False
         )
         guild.me = types.SimpleNamespace(
             top_role=10,
-            guild_permissions=types.SimpleNamespace(
-                administrator=True, ban_members=True
-            ),
+            guild_permissions=types.SimpleNamespace(administrator=True, ban_members=True),
         )
         source = types.SimpleNamespace(
-            permissions_for=lambda _: types.SimpleNamespace(
-                administrator=False,
-                view_channel=True,
-                read_message_history=True,
+            permissions_for=typing.cast(
+                typing.Callable[..., typing.Any],
+                typing.cast(
+                    typing.Callable[[typing.Any], typing.Any],
+                    lambda _: types.SimpleNamespace(
+                        administrator=False,
+                        view_channel=True,
+                        read_message_history=True,
+                    ),
+                ),
             )
         )
 
-        async def fetch_member(user_id):
+        async def fetch_member(user_id: typing.Any):
             return {4: approver, 5: target, 100: current_bot}[user_id]
 
         guild.fetch_member = mock.AsyncMock(side_effect=fetch_member)
         guild.fetch_channel = mock.AsyncMock(return_value=source)
         client = types.SimpleNamespace(
-            get_guild=lambda guild_id: guild,
+            get_guild=typing.cast(
+                typing.Callable[..., typing.Any],
+                typing.cast(typing.Callable[[typing.Any], typing.Any], lambda guild_id: guild),
+            ),
             user=types.SimpleNamespace(id=100),
         )
         pending = rules.PendingAction(
@@ -841,7 +937,7 @@ class RuleExecutionRevalidationTest(unittest.IsolatedAsyncioTestCase):
             rule_detail="test",
             category="ban",
             action_label="ban",
-            offender_id=target.id,
+            offender_id=typing.cast(typing.Any, target).id,
             offender_tag="target",
             evidence="evidence",
             channel_id=10,
@@ -856,7 +952,7 @@ class RuleExecutionRevalidationTest(unittest.IsolatedAsyncioTestCase):
         ):
             result = await rules.execute_pending(client, pending, approver)
         self.assertIn("bot needs `ban_members`", result)
-        target.ban.assert_not_awaited()
+        typing.cast(typing.Any, target).ban.assert_not_awaited()
 
 
 class VoiceConsentTest(unittest.TestCase):
@@ -875,17 +971,29 @@ class VoiceConsentTest(unittest.TestCase):
 
         guild = types.SimpleNamespace(owner_id=99)
         member = FakeMember()
-        member.id = 1
-        member.guild = guild
+        typing.cast(typing.Any, member).id = 1
+        typing.cast(typing.Any, member).guild = guild
         channel = types.SimpleNamespace(
-            permissions_for=lambda _: types.SimpleNamespace(
-                administrator=False, manage_channels=False, manage_guild=True
+            permissions_for=typing.cast(
+                typing.Callable[..., typing.Any],
+                typing.cast(
+                    typing.Callable[[typing.Any], typing.Any],
+                    lambda _: types.SimpleNamespace(
+                        administrator=False, manage_channels=False, manage_guild=True
+                    ),
+                ),
             )
         )
         with mock.patch.object(voice.discord, "Member", FakeMember):
             self.assertFalse(voice._can_start_stt(member, channel))
-            channel.permissions_for = lambda _: types.SimpleNamespace(
-                administrator=False, manage_channels=True, manage_guild=False
+            channel.permissions_for = typing.cast(
+                typing.Callable[..., typing.Any],
+                typing.cast(
+                    typing.Callable[[typing.Any], typing.Any],
+                    lambda _: types.SimpleNamespace(
+                        administrator=False, manage_channels=True, manage_guild=False
+                    ),
+                ),
             )
             self.assertTrue(voice._can_start_stt(member, channel))
 
@@ -894,22 +1002,28 @@ class VoiceConsentTest(unittest.TestCase):
             pass
 
         controller = FakeMember()
-        controller.id = 1
-        controller.bot = False
+        typing.cast(typing.Any, controller).id = 1
+        typing.cast(typing.Any, controller).bot = False
         voice_channel = types.SimpleNamespace(id=7, members=[])
         vc = types.SimpleNamespace(
             channel=voice_channel,
             is_connected=lambda: True,
         )
         destination = types.SimpleNamespace(
-            permissions_for=lambda _: types.SimpleNamespace(view_channel=True)
+            permissions_for=typing.cast(
+                typing.Callable[..., typing.Any],
+                typing.cast(
+                    typing.Callable[[typing.Any], typing.Any],
+                    lambda _: types.SimpleNamespace(view_channel=True),
+                ),
+            )
         )
         session = voice.SttSession(
             10,
             destination,
-            controller_id=controller.id,
+            controller_id=typing.cast(typing.Any, controller).id,
             voice_channel_id=voice_channel.id,
-            consenting_user_ids={controller.id},
+            consenting_user_ids={typing.cast(typing.Any, controller).id},
         )
         with (
             mock.patch.object(voice.discord, "Member", FakeMember),
@@ -923,20 +1037,23 @@ class VoiceConsentTest(unittest.TestCase):
         task = types.SimpleNamespace(
             done=lambda: False,
             get_loop=lambda: types.SimpleNamespace(
-                call_soon_threadsafe=lambda callback: callback()
+                call_soon_threadsafe=typing.cast(
+                    typing.Callable[..., typing.Any],
+                    typing.cast(
+                        typing.Callable[[typing.Any], typing.Any], lambda callback: callback()
+                    ),
+                )
             ),
             cancel=mock.Mock(),
         )
-        session.task = task
+        typing.cast(typing.Any, session).task = task
         session.voice_client = types.SimpleNamespace(stop_listening=mock.Mock())
         session.sink = types.SimpleNamespace(disarm=mock.Mock())
         voice._stt_sessions[7] = session
         try:
             with mock.patch.object(voice.db, "user_flag_set") as persist:
                 voice.set_stt_consent(42, 7, False)
-            persist.assert_called_once_with(
-                "42", "voice_transcription_consent:guild:7", "0"
-            )
+            persist.assert_called_once_with("42", "voice_transcription_consent:guild:7", "0")
             self.assertTrue(session.stop_event.is_set())
             task.cancel.assert_called_once_with()
             session.voice_client.stop_listening.assert_called_once_with()
@@ -958,7 +1075,7 @@ class VoiceWorkerRevocationTest(unittest.IsolatedAsyncioTestCase):
         session.enqueue(42, b"wav", 500)
         vc = types.SimpleNamespace(stop_listening=mock.Mock())
 
-        async def transcribe(*args, **kwargs):
+        async def transcribe(*args: typing.Any, **kwargs: typing.Any):
             session.stop_event.set()
             return "must not be posted"
 
@@ -966,7 +1083,17 @@ class VoiceWorkerRevocationTest(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(
                 voice,
                 "_session_is_authorized",
-                side_effect=lambda current, current_vc: not current.stop_event.is_set(),
+                side_effect=typing.cast(
+                    typing.Callable[..., typing.Any],
+                    typing.cast(
+                        typing.Callable[[typing.Any, typing.Any], typing.Any],
+                        lambda current, current_vc: (
+                            not typing.cast(
+                                typing.Any, typing.cast(typing.Any, current).stop_event
+                            ).is_set()
+                        ),
+                    ),
+                ),
             ),
             mock.patch.object(voice.llm, "transcribe", side_effect=transcribe) as provider,
         ):
@@ -976,65 +1103,80 @@ class VoiceWorkerRevocationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, session.queue.qsize())
 
     async def test_recording_notice_precedes_listening(self):
-        if voice.voice_recv is None:
+        if typing.cast(typing.Any, voice).voice_recv is None:
             self.skipTest("discord-ext-voice-recv is unavailable")
-        events = []
+        events: list[typing.Any] = []
 
         class FakeMember:
             pass
 
         class FakeRecvClient:
-            def __init__(self, channel):
+            def __init__(self, channel: typing.Any):
                 self.channel = channel
                 self.guild = None
 
             def is_connected(self):
                 return True
 
-            def listen(self, sink):
+            def listen(self, sink: typing.Any):
                 events.append("listen")
 
             def stop_listening(self):
                 events.append("stop")
 
         class FakeSink:
-            def __init__(self, enqueue):
+            def __init__(self, enqueue: typing.Any):
                 self.enqueue = enqueue
 
             def disarm(self):
                 return None
 
         controller = FakeMember()
-        controller.id = 4
-        controller.bot = False
-        controller.display_name = "controller"
+        typing.cast(typing.Any, controller).id = 4
+        typing.cast(typing.Any, controller).bot = False
+        typing.cast(typing.Any, controller).display_name = "controller"
         bot_member = FakeMember()
-        bot_member.id = 100
-        bot_member.bot = True
+        typing.cast(typing.Any, bot_member).id = 100
+        typing.cast(typing.Any, bot_member).bot = True
         voice_channel = types.SimpleNamespace(id=9, name="voice", members=[controller])
-        voice_channel.permissions_for = lambda member: types.SimpleNamespace(
-            administrator=False, manage_channels=member.id == controller.id
+        voice_channel.permissions_for = typing.cast(
+            typing.Callable[..., typing.Any],
+            typing.cast(
+                typing.Callable[[typing.Any], typing.Any],
+                lambda member: types.SimpleNamespace(
+                    administrator=False,
+                    manage_channels=typing.cast(typing.Any, member).id
+                    == typing.cast(typing.Any, controller).id,
+                ),
+            ),
         )
-        controller.voice = types.SimpleNamespace(channel=voice_channel)
+        typing.cast(typing.Any, controller).voice = types.SimpleNamespace(channel=voice_channel)
 
         notice = types.SimpleNamespace()
 
-        async def edit_notice(**kwargs):
+        async def edit_notice(**kwargs: typing.Any):
             events.append("notice-edit")
 
         notice.edit = mock.AsyncMock(side_effect=edit_notice)
         destination = types.SimpleNamespace(id=10, name="transcripts")
 
-        async def send_notice(*args, **kwargs):
+        async def send_notice(*args: typing.Any, **kwargs: typing.Any):
             events.append("notice")
             return notice
 
         destination.send = mock.AsyncMock(side_effect=send_notice)
-        destination.permissions_for = lambda member: types.SimpleNamespace(
-            administrator=False,
-            view_channel=True,
-            send_messages=member.id == bot_member.id,
-            send_messages_in_threads=False,
+        destination.permissions_for = typing.cast(
+            typing.Callable[..., typing.Any],
+            typing.cast(
+                typing.Callable[[typing.Any], typing.Any],
+                lambda member: types.SimpleNamespace(
+                    administrator=False,
+                    view_channel=True,
+                    send_messages=typing.cast(typing.Any, member).id
+                    == typing.cast(typing.Any, bot_member).id,
+                    send_messages_in_threads=False,
+                ),
+            ),
         )
         guild = types.SimpleNamespace(
             id=1,
@@ -1042,16 +1184,24 @@ class VoiceWorkerRevocationTest(unittest.IsolatedAsyncioTestCase):
             me=bot_member,
             fetch_channel=mock.AsyncMock(return_value=destination),
             fetch_member=mock.AsyncMock(
-                side_effect=lambda user_id: (
-                    controller if user_id == controller.id else bot_member
+                side_effect=typing.cast(
+                    typing.Callable[..., typing.Any],
+                    typing.cast(
+                        typing.Callable[[typing.Any], typing.Any],
+                        lambda user_id: (
+                            controller
+                            if user_id == typing.cast(typing.Any, controller).id
+                            else bot_member
+                        ),
+                    ),
                 )
             ),
         )
         destination.guild = guild
-        controller.guild = guild
-        bot_member.guild = guild
+        typing.cast(typing.Any, controller).guild = guild
+        typing.cast(typing.Any, bot_member).guild = guild
         vc = FakeRecvClient(voice_channel)
-        vc.guild = guild
+        typing.cast(typing.Any, vc).guild = guild
         guild.voice_client = vc
         interaction = types.SimpleNamespace(
             guild=guild,
@@ -1062,14 +1212,14 @@ class VoiceWorkerRevocationTest(unittest.IsolatedAsyncioTestCase):
         with (
             mock.patch.object(voice.discord, "Member", FakeMember),
             mock.patch.object(
-                voice.voice_recv, "VoiceRecvClient", FakeRecvClient
+                typing.cast(typing.Any, voice).voice_recv, "VoiceRecvClient", FakeRecvClient
             ),
             mock.patch.object(voice, "UtteranceSink", FakeSink),
             mock.patch.object(voice.config, "STT_ENABLED", True),
             mock.patch.object(voice.config, "GROQ_API_KEY", "configured"),
             mock.patch.object(voice, "_guild_stt_enabled", return_value=True),
         ):
-            ok, _message = await voice._toggle_stt_locked(interaction)
+            ok, _message = await voice._toggle_stt_locked(typing.cast(typing.Any, interaction))
             self.assertTrue(ok)
             self.assertLess(events.index("notice"), events.index("listen"))
             await voice._stop_stt_session(guild.id, vc)

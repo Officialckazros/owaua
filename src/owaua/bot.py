@@ -7,6 +7,7 @@
 
 Run: python bot.py
 """
+
 import asyncio
 import collections
 import json
@@ -14,6 +15,7 @@ import logging
 import re
 import secrets
 import time
+import typing
 from typing import List, Optional
 
 import discord
@@ -60,6 +62,7 @@ _LOG = logging.getLogger(__name__)
 
 try:
     import importlib
+
     langdetect = importlib.import_module("langdetect")
     detect = langdetect.detect
     DetectorFactory = langdetect.DetectorFactory
@@ -94,7 +97,7 @@ async def translate_text(
         return text
 
 
-_lang_cache: dict = {}
+_lang_cache: dict[typing.Any, typing.Any] = {}
 _LANG_CACHE_MAX = 1024
 
 
@@ -118,14 +121,15 @@ async def _detect_lang(text: str) -> Optional[str]:
     return lang
 
 
-_chat_last: dict = {}
-_cmd_cooldowns: dict = {}
+_chat_last: dict[typing.Any, typing.Any] = {}
+_cmd_cooldowns: dict[typing.Any, typing.Any] = {}
 
 
 INTENTS = discord.Intents.default()
 INTENTS.message_content = True
 INTENTS.reactions = True
 INTENTS.members = True
+
 
 class owauaClient(discord.Client):
     """Own every process-lifetime resource and close it deterministically."""
@@ -186,18 +190,18 @@ class owauaClient(discord.Client):
 
 client = owauaClient()
 
-_background_tasks: dict[str, asyncio.Task] = {}
-_message_tasks: set[asyncio.Task] = set()
+_background_tasks: dict[str, asyncio.Task[typing.Any]] = {}
+_message_tasks: set[asyncio.Task[typing.Any]] = set()
 
-_recent = collections.OrderedDict()
+_recent: typing.Any = typing.cast(typing.Any, collections.OrderedDict())
 _RECENT_MAX = 500
-_last_activity = {}
-_lurk_channels = {}
+_last_activity: dict[typing.Any, typing.Any] = {}
+_lurk_channels: dict[typing.Any, typing.Any] = {}
 
 
-def _dashboard_guilds() -> list[dict]:
+def _dashboard_guilds() -> list[dict[typing.Any, typing.Any]]:
     """Return a sanitized live server snapshot for the local dashboard."""
-    output = []
+    output: list[typing.Any] = []
     for guild in list(getattr(client, "guilds", []))[:500]:
         output.append(
             {
@@ -227,7 +231,9 @@ def _dashboard_guilds() -> list[dict]:
                 ],
                 "channels": [
                     {
-                        "id": str(channel.id), "name": channel.name, "type": str(channel.type),
+                        "id": str(channel.id),
+                        "name": channel.name,
+                        "type": str(channel.type),
                         "private": not channel.permissions_for(guild.default_role).view_channel,
                         "bot_writable": bool(
                             guild.me
@@ -249,7 +255,8 @@ def _dashboard_guilds() -> list[dict]:
         )
     return output
 
-UP, DOWN = "\U0001F44D", "\U0001F44E"
+
+UP, DOWN = "\U0001f44d", "\U0001f44e"
 
 _CLI_ACTIVE_TTL = 90
 
@@ -268,14 +275,20 @@ _tree = slash.setup(client, _track)
 
 
 async def _send(
-    channel, embed, user_msg="", bot_msg="", author="", feedback=False,
-    reference=None, view=None,
+    channel: typing.Any,
+    embed: typing.Any,
+    user_msg: str = "",
+    bot_msg: str = "",
+    author: str = "",
+    feedback: bool = False,
+    reference: typing.Any = None,
+    view: typing.Any = None,
 ):
     """Send an embed; fall back to plain text if embeds are blocked in-channel."""
     try:
         sent = await channel.send(embed=embed, reference=reference, view=view)
     except discord.Forbidden:
-        text = (getattr(embed, "description", None) or getattr(embed, "title", None) or "…")
+        text = getattr(embed, "description", None) or getattr(embed, "title", None) or "…"
         try:
             sent = await channel.send(str(text)[:1900], reference=reference, view=view)
         except (discord.Forbidden, discord.HTTPException):
@@ -289,19 +302,17 @@ async def _send(
 
 def _assistant_action_confirmation(
     message: discord.Message,
-    proposal: dict,
+    proposal: dict[typing.Any, typing.Any],
     *,
     source: str = "message-assistant",
     undo_record_id: int | None = None,
-    batch_actions: list[dict] | None = None,
+    batch_actions: list[dict[typing.Any, typing.Any]] | None = None,
 ) -> slash.InvokerConfirmation:
     """Build an invoker-bound confirmation for a generated message action."""
     correlation_id = secrets.token_hex(16)
     action_name = actions.action_type(proposal) or "unknown"
     audit_parameters = actions.audit_action_arguments(proposal)
-    scope_id = scope_key(
-        guild_id=getattr(message.guild, "id", None), user_id=message.author.id
-    )
+    scope_id = scope_key(guild_id=getattr(message.guild, "id", None), user_id=message.author.id)
 
     async def _execute(confirmation: discord.Interaction) -> None:
         inverse_seed = None
@@ -310,7 +321,9 @@ def _assistant_action_confirmation(
         else:
             try:
                 inverse_seed = await actions.prepare_inverse(
-                    proposal, confirmation.user, confirmation.guild,
+                    proposal,
+                    confirmation.user,
+                    confirmation.guild,
                     confirmation.channel,
                 )
             except Exception:
@@ -329,9 +342,7 @@ def _assistant_action_confirmation(
         result = "\n".join(results) or "nothing was executed"
         if ok and actions.is_state_changing(proposal):
             try:
-                inverse = await actions.finalize_inverse(
-                    inverse_seed, confirmation.guild
-                )
+                inverse = await actions.finalize_inverse(inverse_seed, confirmation.guild)
                 db.record_assistant_action(
                     actor_id=str(confirmation.user.id),
                     scope_id=scope_key(
@@ -339,7 +350,8 @@ def _assistant_action_confirmation(
                         user_id=confirmation.user.id,
                     ),
                     channel_id=str(confirmation.channel_id)
-                    if confirmation.channel_id is not None else None,
+                    if confirmation.channel_id is not None
+                    else None,
                     action=action_name,
                     target_id=actions.action_target_id(proposal),
                     parameters=audit_parameters,
@@ -353,9 +365,7 @@ def _assistant_action_confirmation(
         db.record_action_audit(
             nonce=view.nonce,
             actor_id=str(confirmation.user.id),
-            scope_id=scope_key(
-                guild_id=confirmation.guild_id, user_id=confirmation.user.id
-            ),
+            scope_id=scope_key(guild_id=confirmation.guild_id, user_id=confirmation.user.id),
             action=action_name,
             target_id=actions.action_target_id(proposal),
             parameters=audit_parameters,
@@ -388,23 +398,27 @@ def _assistant_action_confirmation(
     return view
 
 
-async def _send_private(message, embed) -> None:
+async def _send_private(message: typing.Any, embed: typing.Any) -> None:
     """Deliver personal/audit data without posting it into a guild channel."""
     if message.guild is None:
         await _send(message.channel, embed, feedback=False)
         return
     try:
         await message.author.send(embed=embed)
-        await _send(message.channel, embeds.ok("sent the private result to your DMs."), feedback=False)
+        await _send(
+            message.channel, embeds.ok("sent the private result to your DMs."), feedback=False
+        )
     except (discord.Forbidden, discord.HTTPException):
         await _send(
             message.channel,
-            embeds.error("I couldn't DM you; use the equivalent slash command for an ephemeral result."),
+            embeds.error(
+                "I couldn't DM you; use the equivalent slash command for an ephemeral result."
+            ),
             feedback=False,
         )
 
 
-async def _send_first_use_notice(message) -> None:
+async def _send_first_use_notice(message: typing.Any) -> None:
     """Tell a new user about the public site and server dashboard once."""
     if not db.claim_first_use_notice(str(message.author.id)):
         return
@@ -427,13 +441,13 @@ async def _send_first_use_notice(message) -> None:
             await _send(message.channel, embed, feedback=False, reference=message)
 
 
-def _speaker_label(user) -> str:
+def _speaker_label(user: typing.Any) -> str:
     uname = getattr(user, "name", None) or "unknown"
     dname = getattr(user, "display_name", None) or uname
     return f"{dname} (@{uname}, id={user.id})"
 
 
-def _speaker_profile(message) -> dict:
+def _speaker_profile(message: typing.Any) -> dict[typing.Any, typing.Any]:
     author = message.author
     uname = getattr(author, "name", None) or "unknown"
     global_name = getattr(author, "global_name", None) or ""
@@ -450,14 +464,9 @@ def _speaker_profile(message) -> dict:
         "is_bot": bool(getattr(author, "bot", False)),
         "is_bot_owner": config.is_bot_owner(author.id),
         "created_at": (
-            author.created_at.strftime("%Y-%m-%d")
-            if getattr(author, "created_at", None) else ""
+            author.created_at.strftime("%Y-%m-%d") if getattr(author, "created_at", None) else ""
         ),
-        "channel": (
-            f"#{message.channel.name}"
-            if getattr(message.channel, "name", None)
-            else "DM"
-        ),
+        "channel": (f"#{message.channel.name}" if getattr(message.channel, "name", None) else "DM"),
     }
 
     if message.guild:
@@ -467,9 +476,7 @@ def _speaker_profile(message) -> dict:
             role_names = [r.name for r in author.roles if r.name != "@everyone"]
             profile["roles"] = ", ".join(role_names[:25]) if role_names else "(none)"
             top = author.top_role
-            profile["top_role"] = (
-                top.name if top and top.name != "@everyone" else "(none)"
-            )
+            profile["top_role"] = top.name if top and top.name != "@everyone" else "(none)"
             if author.joined_at:
                 profile["joined_at"] = author.joined_at.strftime("%Y-%m-%d")
         else:
@@ -484,9 +491,9 @@ def _speaker_profile(message) -> dict:
     return profile
 
 
-async def _channel_context(message, limit: int = None) -> str:
+async def _channel_context(message: typing.Any, limit: int | None = None) -> str:
     limit = limit or config.CHANNEL_CONTEXT
-    lines = []
+    lines: list[typing.Any] = []
     scope_id = scope_key(
         guild_id=getattr(message.guild, "id", None),
         user_id=message.author.id,
@@ -515,7 +522,7 @@ _IMG_URL_RE = re.compile(
 )
 
 
-def _is_image_attachment(a) -> bool:
+def _is_image_attachment(a: typing.Any) -> bool:
     ct = (getattr(a, "content_type", None) or "").lower()
     name = (getattr(a, "filename", None) or "").lower()
     if ct.startswith("image/"):
@@ -527,7 +534,7 @@ def _is_image_attachment(a) -> bool:
     return False
 
 
-def _image_urls(message, *, _seen=None) -> List[str]:
+def _image_urls(message: typing.Any, *, _seen: typing.Any = None) -> List[str]:
     """Collect image URLs from attachments, embeds, stickers, and replied-to msgs.
 
     Link previews (X/Twitter embeds, image hosts, etc.) live on embeds, not
@@ -536,7 +543,7 @@ def _image_urls(message, *, _seen=None) -> List[str]:
     """
     if message is None:
         return []
-    seen = _seen if _seen is not None else set()
+    seen: typing.Any = typing.cast(typing.Any, _seen if _seen is not None else set())
     urls: List[str] = []
 
     def _add(u: Optional[str]) -> None:
@@ -545,11 +552,11 @@ def _image_urls(message, *, _seen=None) -> List[str]:
         seen.add(u)
         urls.append(u)
 
-    for a in message.attachments or []:
+    for a in typing.cast(typing.Iterable[typing.Any], message.attachments or []):
         if _is_image_attachment(a):
             _add(getattr(a, "proxy_url", None) or a.url)
 
-    for e in message.embeds or []:
+    for e in typing.cast(typing.Iterable[typing.Any], message.embeds or []):
         if getattr(e, "image", None) and e.image and e.image.url:
             _add(e.image.url)
         if getattr(e, "thumbnail", None) and e.thumbnail and e.thumbnail.url:
@@ -558,7 +565,7 @@ def _image_urls(message, *, _seen=None) -> List[str]:
             if str(e.video.url).lower().endswith(_IMAGE_EXT):
                 _add(e.video.url)
 
-    for s in message.stickers or []:
+    for s in typing.cast(typing.Iterable[typing.Any], message.stickers or []):
         url = getattr(s, "url", None)
         if url:
             _add(str(url))
@@ -577,12 +584,12 @@ def _image_urls(message, *, _seen=None) -> List[str]:
     return urls
 
 
-def _embed_context(message) -> str:
+def _embed_context(message: typing.Any) -> str:
     """Plain-text dump of link embeds (X posts, articles) so the brain can
     still answer when Discord only unfurled a link and vision has nothing."""
-    lines = []
-    for e in message.embeds or []:
-        bits = []
+    lines: list[typing.Any] = []
+    for e in typing.cast(typing.Iterable[typing.Any], message.embeds or []):
+        bits: list[typing.Any] = []
         if e.author and e.author.name:
             bits.append(f"author: {e.author.name}")
         if e.title:
@@ -593,7 +600,7 @@ def _embed_context(message) -> str:
             bits.append(f"url: {e.url}")
         if e.footer and e.footer.text:
             bits.append(f"footer: {e.footer.text}")
-        for f in (e.fields or [])[:6]:
+        for f in typing.cast(typing.Iterable[typing.Any], (e.fields or [])[:6]):
             bits.append(f"{f.name}: {f.value}"[:200])
         if bits:
             lines.append(" | ".join(bits))
@@ -606,14 +613,14 @@ def _embed_context(message) -> str:
     return "\n".join(lines)
 
 
-def _is_mod(member) -> bool:
+def _is_mod(member: typing.Any) -> bool:
     if not isinstance(member, discord.Member):
         return False
     p = member.guild_permissions
     return bool(p.manage_guild or p.administrator or member.guild.owner_id == member.id)
 
 
-def _has_perm(member, perm: str, channel=None) -> bool:
+def _has_perm(member: typing.Any, perm: str, channel: typing.Any = None) -> bool:
     """Effective permission check (owner/admin always pass; channel overwrites honored)."""
     if not isinstance(member, discord.Member):
         return False
@@ -628,11 +635,11 @@ def _has_perm(member, perm: str, channel=None) -> bool:
     return bool(getattr(p, perm, False))
 
 
-def _channel_allowed(message) -> bool:
+def _channel_allowed(message: typing.Any) -> bool:
     if not message.guild:
         return True
     settings = db.guild_settings(Scope.guild(message.guild.id).key)
-    allowed = settings.get("allowed_channels") or []
+    allowed: typing.Any = settings.get("allowed_channels") or []
     if not allowed:
         return True
     return str(message.channel.id) in [str(x) for x in allowed]
@@ -652,14 +659,14 @@ def _prefix_for_scope(guild_id: str) -> str:
     return config.PREFIX
 
 
-async def _guild_sync(guild_id: int) -> List:
+async def _guild_sync(guild_id: int) -> List[typing.Any]:
     """Clear guild overrides so Discord displays the global catalog once."""
     g = discord.Object(id=int(guild_id))
     _tree.clear_commands(guild=g)
     return await _tree.sync(guild=g)
 
 
-def _start_background_task(name: str, coroutine_factory) -> None:
+def _start_background_task(name: str, coroutine_factory: typing.Any) -> None:
     """Start one named process-lifetime task, including after reconnects."""
     existing = _background_tasks.get(name)
     if existing is not None and not existing.done():
@@ -667,7 +674,7 @@ def _start_background_task(name: str, coroutine_factory) -> None:
     task = asyncio.create_task(coroutine_factory(), name=f"owaua:{name}")
     _background_tasks[name] = task
 
-    def _finished(done: asyncio.Task) -> None:
+    def _finished(done: asyncio.Task[typing.Any]) -> None:
         if _background_tasks.get(name) is done:
             _background_tasks.pop(name, None)
         if done.cancelled():
@@ -682,7 +689,7 @@ def _start_background_task(name: str, coroutine_factory) -> None:
     task.add_done_callback(_finished)
 
 
-def _start_message_task(coroutine) -> None:
+def _start_message_task(coroutine: typing.Any) -> None:
     """Keep short-lived event tasks alive until completion."""
     task = asyncio.create_task(coroutine)
     _message_tasks.add(task)
@@ -723,7 +730,7 @@ async def on_ready():
                     print(f"[slash] invalid guild id {guild_id!r}: {e}")
                 except Exception as e:
                     print(f"[slash] note: could not clear guild commands for {guild_id}: {e}")
-            client._synced = True
+            typing.cast(typing.Any, client)._synced = True
         except Exception as e:
             print(f"[slash] sync failed: {e}")
     _start_background_task("reflection", _reflection_loop)
@@ -821,7 +828,7 @@ async def _lurk_tick():
         channel = guild.get_channel(int(ch_id))
         if channel is None or not isinstance(channel, discord.TextChannel):
             continue
-        lines = []
+        lines: list[typing.Any] = []
         try:
             async for m in channel.history(limit=6):
                 if m.author.bot:
@@ -838,16 +845,21 @@ async def _lurk_tick():
         ctx = "\n".join(reversed(lines))
         persona = (settings.get("persona") or "").strip() or config.PERSONA
         system = ckazros.apply(
-            persona
-            + "\n\nYou are lurking in a quiet Discord channel. Drop ONE short "
+            persona + "\n\nYou are lurking in a quiet Discord channel. Drop ONE short "
             "unprompted line — a quip, roast of the dead chat, or callback. "
             "No emoji. Max 2 sentences. Don't ask a question every time."
         )
         try:
             text = await ai.chat(
-                system, [{"role": "user", "content": ctx}],
-                max_tokens=120, temperature=0.95, tier="fast",
-                model=config.LURK_MODEL, fallbacks=[], task="creative", scope_id=gid,
+                system,
+                [{"role": "user", "content": ctx}],
+                max_tokens=120,
+                temperature=0.95,
+                tier="fast",
+                model=config.LURK_MODEL,
+                fallbacks=[],
+                task="creative",
+                scope_id=gid,
                 prompt_version="lurk-v1",
             )
         except Exception as e:
@@ -865,17 +877,20 @@ async def _lurk_tick():
 
 
 @client.event
-async def on_raw_reaction_add(payload):
+async def on_raw_reaction_add(payload: typing.Any):
     await community.raw_reaction(client, payload)
     await community.reaction_event(client, payload, added=True)
-    if payload.user_id == client.user.id or payload.message_id not in _recent:
+    if (
+        payload.user_id == typing.cast(typing.Any, client.user).id
+        or payload.message_id not in _recent
+    ):
         return
     if config.is_blocked(payload.user_id):
         return
     emoji = str(payload.emoji)
     if emoji not in (UP, DOWN):
         return
-    user_msg, bot_msg, author = _recent[payload.message_id]
+    user_msg, bot_msg, _author = _recent[payload.message_id]
     up = emoji == UP
     uid = str(payload.user_id)
     gid = scope_key(guild_id=payload.guild_id, user_id=payload.user_id)
@@ -928,7 +943,9 @@ async def _award_xp(message: discord.Message, guild_id: str, author: str, boosti
         configured_channel = str(settings.get("level_up_channel_id") or "")
         if configured_channel.isdigit() and message.guild:
             target_channel = message.guild.get_channel(int(configured_channel)) or message.channel
-        template = str(settings.get("level_up_message") or "{user.mention} reached level **{level}**!")
+        template = str(
+            settings.get("level_up_message") or "{user.mention} reached level **{level}**!"
+        )
         level_text = (
             template.replace("{user.mention}", message.author.mention)
             .replace("{user.name}", message.author.display_name)
@@ -936,9 +953,12 @@ async def _award_xp(message: discord.Message, guild_id: str, author: str, boosti
         )
         if isinstance(message.author, discord.Member) and message.guild:
             for reward in settings.get("reward_roles", [])[:100]:
-                if not isinstance(reward, dict) or int(reward.get("level") or -1) != new_level:
+                if (
+                    not isinstance(reward, dict)
+                    or int(typing.cast(typing.Any, reward).get("level") or -1) != new_level
+                ):
                     continue
-                role_id = str(reward.get("role_id") or "")
+                role_id = str(typing.cast(typing.Any, reward).get("role_id") or "")
                 role = message.guild.get_role(int(role_id)) if role_id.isdigit() else None
                 if role:
                     try:
@@ -947,9 +967,7 @@ async def _award_xp(message: discord.Message, guild_id: str, author: str, boosti
                         pass
         await _send(
             target_channel,
-            embeds.ok(
-                f"{level_text}\n{title}{perk}"
-            ),
+            embeds.ok(f"{level_text}\n{title}{perk}"),
             feedback=False,
         )
     except discord.HTTPException:
@@ -957,7 +975,7 @@ async def _award_xp(message: discord.Message, guild_id: str, author: str, boosti
 
 
 async def _enforce_tos_violation(
-    message,
+    message: typing.Any,
     author: str,
     reason: str,
     *,
@@ -985,9 +1003,7 @@ async def _enforce_tos_violation(
             _LOG.debug("failed to send ToS warning: %s", e)
         return
 
-    guild_id = scope_key(
-        guild_id=getattr(message.guild, "id", None), user_id=message.author.id
-    )
+    guild_id = scope_key(guild_id=getattr(message.guild, "id", None), user_id=message.author.id)
     guild_name = message.guild.name if message.guild else "DM"
     channel_id = str(message.channel.id) if getattr(message, "channel", None) else ""
     user_tag = str(getattr(message, "author", author))
@@ -1050,7 +1066,6 @@ async def _check_trivia_answer(message: discord.Message, scope_id: str) -> bool:
     return True
 
 
-
 @client.event
 async def on_member_update(before: discord.Member, after: discord.Member):
     if before.premium_since != after.premium_since or before.roles != after.roles:
@@ -1067,31 +1082,50 @@ async def on_member_update(before: discord.Member, after: discord.Member):
             detail += "\nAdded: " + ", ".join(added)
         if removed:
             detail += "\nRemoved: " + ", ".join(removed)
-        _start_message_task(community.gateway_event_log(
-            after.guild, "role", "Member roles updated", detail,
-            audit_backed=True, actor=after, target=after,
-        ))
+        _start_message_task(
+            community.gateway_event_log(
+                after.guild,
+                "role",
+                "Member roles updated",
+                detail,
+                audit_backed=True,
+                actor=after,
+                target=after,
+            )
+        )
     if before.timed_out_until != after.timed_out_until:
-        _start_message_task(community.gateway_event_log(
-            after.guild, "moderation", "Member timeout updated",
-            f"{after.mention} (`{after.id}`): {after.timed_out_until or 'cleared'}",
-            audit_backed=True, target=after,
-        ))
-    member_changes = []
+        _start_message_task(
+            community.gateway_event_log(
+                after.guild,
+                "moderation",
+                "Member timeout updated",
+                f"{after.mention} (`{after.id}`): {after.timed_out_until or 'cleared'}",
+                audit_backed=True,
+                target=after,
+            )
+        )
+    member_changes: list[typing.Any] = []
     for attribute, name in (
-        ("nick", "Nickname"), ("pending", "Membership screening"),
-        ("premium_since", "Boosting since"), ("avatar", "Server avatar"),
+        ("nick", "Nickname"),
+        ("pending", "Membership screening"),
+        ("premium_since", "Boosting since"),
+        ("avatar", "Server avatar"),
         ("flags", "Member flags"),
     ):
         old, new = getattr(before, attribute, None), getattr(after, attribute, None)
         if old != new:
             member_changes.append(f"**{name}:** {old or 'Not set'} → {new or 'Not set'}")
     if member_changes:
-        _start_message_task(community.gateway_event_log(
-            after.guild, "member", "Member profile updated",
-            f"{after.mention} (`{after.id}`) changed.",
-            target=after, changes=member_changes,
-        ))
+        _start_message_task(
+            community.gateway_event_log(
+                after.guild,
+                "member",
+                "Member profile updated",
+                f"{after.mention} (`{after.id}`) changed.",
+                target=after,
+                changes=member_changes,
+            )
+        )
 
 
 @client.event
@@ -1113,8 +1147,12 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
 @client.event
 async def on_member_unban(guild: discord.Guild, user: discord.User):
     await community.gateway_event_log(
-        guild, "moderation", "Member unbanned", f"{user} (`{user.id}`) was unbanned.",
-        audit_backed=True, target=user,
+        guild,
+        "moderation",
+        "Member unbanned",
+        f"{user} (`{user.id}`) was unbanned.",
+        audit_backed=True,
+        target=user,
     )
 
 
@@ -1125,9 +1163,7 @@ async def on_voice_state_update(
     await community.voice_update(member, before, after)
 
 
-async def _handle_swear_jar(
-    message: discord.Message, guild_id: str, content: str
-) -> None:
+async def _handle_swear_jar(message: discord.Message, guild_id: str, content: str) -> None:
     """Count one guild message and announce the author's new total."""
     if not db.guild_settings(guild_id).get("swear_jar_enabled", False):
         return
@@ -1179,19 +1215,23 @@ async def on_message(message: discord.Message):
         return
     content = message.content.strip()
     author = str(message.author.id)
-    guild_id = scope_key(
-        guild_id=getattr(message.guild, "id", None), user_id=message.author.id
-    )
+    guild_id = scope_key(guild_id=getattr(message.guild, "id", None), user_id=message.author.id)
     is_dm = message.guild is None
     prefix = _prefix_for_scope(guild_id)
     command_name = ""
     if content.startswith(prefix):
-        command_name = content[len(prefix):].strip().split(maxsplit=1)[0].lower()
+        command_name = content[len(prefix) :].strip().split(maxsplit=1)[0].lower()
         if message.guild is not None and command_name:
             _start_message_task(community.command_event(message, command_name, content))
     privacy_commands = {
-        "privacy", "privacypolicy", "tos", "terms", "termsofservice",
-        "help", "about", "status",
+        "privacy",
+        "privacypolicy",
+        "tos",
+        "terms",
+        "termsofservice",
+        "help",
+        "about",
+        "status",
     }
     # A hard block stops bot features, but never the privacy/Terms escape hatch.
     # Blocked users must still be able to inspect/export/delete their data.
@@ -1222,7 +1262,7 @@ async def on_message(message: discord.Message):
             author,
             username,
             display_name,
-            content
+            content,
         )
 
     if await _check_trivia_answer(message, guild_id):
@@ -1232,20 +1272,14 @@ async def on_message(message: discord.Message):
         boosting = levels.is_booster(message.author)
         _start_message_task(_award_xp(message, guild_id, author, boosting))
 
-    directed = bool(
-        content.startswith(prefix)
-        or client.user in message.mentions
-        or is_dm
-    )
+    directed = bool(content.startswith(prefix) or client.user in message.mentions or is_dm)
     if directed:
         await _send_first_use_notice(message)
     if directed and command_name not in privacy_commands:
         res = tos.check_message(author, content)
         if res:
             action, reason, strikes = res
-            await _enforce_tos_violation(
-                message, author, reason, action=action, strikes=strikes
-            )
+            await _enforce_tos_violation(message, author, reason, action=action, strikes=strikes)
             return
         retry_after = tos.rate_limit_retry_after(author)
         if retry_after:
@@ -1268,16 +1302,14 @@ async def on_message(message: discord.Message):
     ):
         user_msg, bot_msg, _ = _recent[message.reference.message_id]
         note = content.split(":", 1)[1].strip()
-        db.add_feedback(
-            user_msg, bot_msg, "correction", author, note=note, scope_id=guild_id
-        )
+        db.add_feedback(user_msg, bot_msg, "correction", author, note=note, scope_id=guild_id)
         db.relationship_set(author, guild_id, delta=0.05)
 
     if content.startswith(prefix):
         if not _channel_allowed(message) and command_name not in privacy_commands:
             return
         await _handle_command(
-            message, content[len(prefix):].strip(), guild_id, author, prefix=prefix
+            message, content[len(prefix) :].strip(), guild_id, author, prefix=prefix
         )
         return
 
@@ -1375,34 +1407,78 @@ async def on_raw_poll_vote_remove(payload: discord.RawPollVoteActionEvent):
 
 @client.event
 async def on_guild_role_create(role: discord.Role):
-    await community.gateway_event_log(role.guild, "role", "Role created", f"{role.mention} (`{role.id}`) was created.", audit_backed=True, target=role)
+    await community.gateway_event_log(
+        role.guild,
+        "role",
+        "Role created",
+        f"{role.mention} (`{role.id}`) was created.",
+        audit_backed=True,
+        target=role,
+    )
 
 
 @client.event
 async def on_guild_role_delete(role: discord.Role):
-    await community.gateway_event_log(role.guild, "role", "Role deleted", f"**{role.name}** (`{role.id}`) was deleted.", audit_backed=True, target=role)
+    await community.gateway_event_log(
+        role.guild,
+        "role",
+        "Role deleted",
+        f"**{role.name}** (`{role.id}`) was deleted.",
+        audit_backed=True,
+        target=role,
+    )
 
 
 @client.event
 async def on_guild_role_update(before: discord.Role, after: discord.Role):
-    await community.gateway_event_log(after.guild, "role", "Role updated", f"**{before.name}** → **{after.name}** (`{after.id}`).", audit_backed=True, target=after)
+    await community.gateway_event_log(
+        after.guild,
+        "role",
+        "Role updated",
+        f"**{before.name}** → **{after.name}** (`{after.id}`).",
+        audit_backed=True,
+        target=after,
+    )
 
 
 @client.event
 async def on_guild_channel_create(channel: discord.abc.GuildChannel):
-    await community.gateway_event_log(channel.guild, "channel", "Channel created", f"**{channel.name}** (`{channel.id}`) was created.", channel=channel, audit_backed=True, target=channel)
+    await community.gateway_event_log(
+        channel.guild,
+        "channel",
+        "Channel created",
+        f"**{channel.name}** (`{channel.id}`) was created.",
+        channel=channel,
+        audit_backed=True,
+        target=channel,
+    )
 
 
 @client.event
 async def on_guild_channel_delete(channel: discord.abc.GuildChannel):
-    await community.gateway_event_log(channel.guild, "channel", "Channel deleted", f"**{channel.name}** (`{channel.id}`) was deleted.", audit_backed=True, target=channel)
+    await community.gateway_event_log(
+        channel.guild,
+        "channel",
+        "Channel deleted",
+        f"**{channel.name}** (`{channel.id}`) was deleted.",
+        audit_backed=True,
+        target=channel,
+    )
 
 
 @client.event
 async def on_guild_channel_update(
     before: discord.abc.GuildChannel, after: discord.abc.GuildChannel
 ):
-    await community.gateway_event_log(after.guild, "channel", "Channel updated", f"**{before.name}** → **{after.name}** (`{after.id}`); permissions or settings changed.", channel=after, audit_backed=True, target=after)
+    await community.gateway_event_log(
+        after.guild,
+        "channel",
+        "Channel updated",
+        f"**{before.name}** → **{after.name}** (`{after.id}`); permissions or settings changed.",
+        channel=after,
+        audit_backed=True,
+        target=after,
+    )
 
 
 @client.event
@@ -1414,16 +1490,24 @@ async def on_guild_emojis_update(
     before_map, after_map = {e.id: e.name for e in before}, {e.id: e.name for e in after}
     created = [name for eid, name in after_map.items() if eid not in before_map]
     deleted = [name for eid, name in before_map.items() if eid not in after_map]
-    renamed = [f"{before_map[eid]} → {after_map[eid]}" for eid in before_map.keys() & after_map.keys() if before_map[eid] != after_map[eid]]
+    renamed = [
+        f"{before_map[eid]} → {after_map[eid]}"
+        for eid in before_map.keys() & after_map.keys()
+        if before_map[eid] != after_map[eid]
+    ]
     detail = "\n".join(
-        part for part in (
+        part
+        for part in (
             "Created: " + ", ".join(created) if created else "",
             "Deleted: " + ", ".join(deleted) if deleted else "",
             "Renamed: " + ", ".join(renamed) if renamed else "",
-        ) if part
+        )
+        if part
     )
     if detail:
-        await community.gateway_event_log(guild, "server", "Emoji update", detail, audit_backed=True)
+        await community.gateway_event_log(
+            guild, "server", "Emoji update", detail, audit_backed=True
+        )
 
 
 @client.event
@@ -1433,46 +1517,72 @@ async def on_audit_log_entry_create(entry: discord.AuditLogEntry):
 
 @client.event
 async def on_guild_update(before: discord.Guild, after: discord.Guild):
-    changes = []
+    changes: list[typing.Any] = []
     for attribute, title in (
-        ("name", "Name"), ("description", "Description"), ("verification_level", "Verification"),
-        ("explicit_content_filter", "Content filter"), ("default_notifications", "Notifications"),
-        ("afk_timeout", "AFK timeout"), ("preferred_locale", "Preferred locale"),
-        ("premium_tier", "Boost tier"), ("premium_subscription_count", "Boost count"),
+        ("name", "Name"),
+        ("description", "Description"),
+        ("verification_level", "Verification"),
+        ("explicit_content_filter", "Content filter"),
+        ("default_notifications", "Notifications"),
+        ("afk_timeout", "AFK timeout"),
+        ("preferred_locale", "Preferred locale"),
+        ("premium_tier", "Boost tier"),
+        ("premium_subscription_count", "Boost count"),
     ):
         old, new = getattr(before, attribute, None), getattr(after, attribute, None)
         if old != new:
             changes.append(f"**{title}:** {old or 'Not set'} → {new or 'Not set'}")
     if changes:
         await community.gateway_event_log(
-            after, "server", "Server settings updated", f"**{after.name}** was updated.",
-            audit_backed=True, target=after, changes=changes,
+            after,
+            "server",
+            "Server settings updated",
+            f"**{after.name}** was updated.",
+            audit_backed=True,
+            target=after,
+            changes=changes,
         )
 
 
 @client.event
-async def on_guild_stickers_update(guild, before, after):
+async def on_guild_stickers_update(guild: typing.Any, before: typing.Any, after: typing.Any):
     before_map = {item.id: item.name for item in before}
     after_map = {item.id: item.name for item in after}
     created = [name for item_id, name in after_map.items() if item_id not in before_map]
     deleted = [name for item_id, name in before_map.items() if item_id not in after_map]
-    renamed = [f"{before_map[item_id]} → {after_map[item_id]}" for item_id in before_map.keys() & after_map.keys() if before_map[item_id] != after_map[item_id]]
-    detail = "\n".join(filter(None, (
-        "Created: " + ", ".join(created) if created else "",
-        "Deleted: " + ", ".join(deleted) if deleted else "",
-        "Renamed: " + ", ".join(renamed) if renamed else "",
-    )))
+    renamed = [
+        f"{before_map[item_id]} → {after_map[item_id]}"
+        for item_id in before_map.keys() & after_map.keys()
+        if before_map[item_id] != after_map[item_id]
+    ]
+    detail = "\n".join(
+        filter(
+            None,
+            (
+                "Created: " + ", ".join(created) if created else "",
+                "Deleted: " + ", ".join(deleted) if deleted else "",
+                "Renamed: " + ", ".join(renamed) if renamed else "",
+            ),
+        )
+    )
     if detail:
-        await community.gateway_event_log(guild, "server", "Sticker update", detail, audit_backed=True)
+        await community.gateway_event_log(
+            guild, "server", "Sticker update", detail, audit_backed=True
+        )
 
 
 @client.event
 async def on_invite_create(invite: discord.Invite):
     if invite.guild:
         await community.gateway_event_log(
-            invite.guild, "server", "Invite created",
-            f"Invite **{invite.code}** was created for {invite.channel.mention if invite.channel else 'an unknown channel'}.",
-            channel=invite.channel, audit_backed=True, actor=invite.inviter, target=invite.channel,
+            typing.cast(typing.Any, invite.guild),
+            "server",
+            "Invite created",
+            f"Invite **{invite.code}** was created for {typing.cast(typing.Any, invite).channel.mention if invite.channel else 'an unknown channel'}.",
+            channel=invite.channel,
+            audit_backed=True,
+            actor=invite.inviter,
+            target=invite.channel,
         )
 
 
@@ -1480,35 +1590,50 @@ async def on_invite_create(invite: discord.Invite):
 async def on_invite_delete(invite: discord.Invite):
     if invite.guild:
         await community.gateway_event_log(
-            invite.guild, "server", "Invite deleted", f"Invite **{invite.code}** was deleted.",
-            channel=invite.channel, audit_backed=True, target=invite.channel,
+            typing.cast(typing.Any, invite.guild),
+            "server",
+            "Invite deleted",
+            f"Invite **{invite.code}** was deleted.",
+            channel=invite.channel,
+            audit_backed=True,
+            target=invite.channel,
         )
 
 
 @client.event
 async def on_webhooks_update(channel: discord.abc.GuildChannel):
     await community.gateway_event_log(
-        channel.guild, "server", "Webhooks updated",
+        channel.guild,
+        "server",
+        "Webhooks updated",
         f"Webhooks changed in {channel.mention} (`{channel.id}`).",
-        channel=channel, audit_backed=True, target=channel,
+        channel=channel,
+        audit_backed=True,
+        target=channel,
     )
 
 
 @client.event
 async def on_integration_create(integration: discord.Integration):
     await community.gateway_event_log(
-        integration.guild, "server", "Integration created",
+        integration.guild,
+        "server",
+        "Integration created",
         f"**{integration.name}** (`{integration.id}`) was created.",
-        audit_backed=True, target=integration,
+        audit_backed=True,
+        target=integration,
     )
 
 
 @client.event
 async def on_integration_update(integration: discord.Integration):
     await community.gateway_event_log(
-        integration.guild, "server", "Integration updated",
+        integration.guild,
+        "server",
+        "Integration updated",
         f"**{integration.name}** (`{integration.id}`) was updated.",
-        audit_backed=True, target=integration,
+        audit_backed=True,
+        target=integration,
     )
 
 
@@ -1517,8 +1642,11 @@ async def on_raw_integration_delete(payload: discord.RawIntegrationDeleteEvent):
     guild = client.get_guild(payload.guild_id)
     if guild:
         await community.gateway_event_log(
-            guild, "server", "Integration deleted",
-            f"Integration `{payload.integration_id}` was deleted.", audit_backed=True,
+            guild,
+            "server",
+            "Integration deleted",
+            f"Integration `{payload.integration_id}` was deleted.",
+            audit_backed=True,
             target=discord.Object(id=payload.integration_id),
         )
 
@@ -1526,33 +1654,51 @@ async def on_raw_integration_delete(payload: discord.RawIntegrationDeleteEvent):
 @client.event
 async def on_thread_create(thread: discord.Thread):
     await community.gateway_event_log(
-        thread.guild, "thread", "Thread created", f"{thread.mention} (`{thread.id}`) was created.",
-        channel=thread, audit_backed=True, target=thread,
+        thread.guild,
+        "thread",
+        "Thread created",
+        f"{thread.mention} (`{thread.id}`) was created.",
+        channel=thread,
+        audit_backed=True,
+        target=thread,
     )
 
 
 @client.event
 async def on_thread_delete(thread: discord.Thread):
     await community.gateway_event_log(
-        thread.guild, "thread", "Thread deleted", f"**{thread.name}** (`{thread.id}`) was deleted.",
-        audit_backed=True, target=thread,
+        thread.guild,
+        "thread",
+        "Thread deleted",
+        f"**{thread.name}** (`{thread.id}`) was deleted.",
+        audit_backed=True,
+        target=thread,
     )
 
 
 @client.event
 async def on_thread_update(before: discord.Thread, after: discord.Thread):
-    changes = []
+    changes: list[typing.Any] = []
     for attribute, title in (
-        ("name", "Name"), ("archived", "Archived"), ("locked", "Locked"),
-        ("slowmode_delay", "Slowmode"), ("auto_archive_duration", "Auto archive"),
+        ("name", "Name"),
+        ("archived", "Archived"),
+        ("locked", "Locked"),
+        ("slowmode_delay", "Slowmode"),
+        ("auto_archive_duration", "Auto archive"),
     ):
         old, new = getattr(before, attribute, None), getattr(after, attribute, None)
         if old != new:
             changes.append(f"**{title}:** {old} → {new}")
     if changes:
         await community.gateway_event_log(
-            after.guild, "thread", "Thread updated", f"{after.mention} (`{after.id}`) was updated.",
-            channel=after, audit_backed=True, target=after, changes=changes,
+            after.guild,
+            "thread",
+            "Thread updated",
+            f"{after.mention} (`{after.id}`) was updated.",
+            channel=after,
+            audit_backed=True,
+            target=after,
+            changes=changes,
         )
 
 
@@ -1561,9 +1707,14 @@ async def on_thread_member_join(member: discord.ThreadMember):
     thread = member.thread
     actor = thread.guild.get_member(member.id) or discord.Object(id=member.id)
     await community.event_log(
-        thread.guild, "thread", "Thread member joined",
+        thread.guild,
+        "thread",
+        "Thread member joined",
         f"{getattr(actor, 'mention', f'`{member.id}`')} joined {thread.mention}.",
-        channel=thread, actor=actor, target=thread, event_id=thread.id,
+        channel=thread,
+        actor=actor,
+        target=thread,
+        event_id=thread.id,
     )
 
 
@@ -1572,69 +1723,146 @@ async def on_thread_member_remove(member: discord.ThreadMember):
     thread = member.thread
     actor = thread.guild.get_member(member.id) or discord.Object(id=member.id)
     await community.event_log(
-        thread.guild, "thread", "Thread member left",
+        thread.guild,
+        "thread",
+        "Thread member left",
         f"{getattr(actor, 'mention', f'`{member.id}`')} left {thread.mention}.",
-        channel=thread, actor=actor, target=thread, event_id=thread.id,
+        channel=thread,
+        actor=actor,
+        target=thread,
+        event_id=thread.id,
     )
 
 
 @client.event
 async def on_guild_scheduled_event_create(event: discord.ScheduledEvent):
-    await community.gateway_event_log(event.guild, "server", "Scheduled event created", f"**{event.name}** (`{event.id}`) was created.", audit_backed=True, target=event)
+    await community.gateway_event_log(
+        typing.cast(typing.Any, event.guild),
+        "server",
+        "Scheduled event created",
+        f"**{event.name}** (`{event.id}`) was created.",
+        audit_backed=True,
+        target=event,
+    )
 
 
 @client.event
-async def on_guild_scheduled_event_update(before: discord.ScheduledEvent, after: discord.ScheduledEvent):
-    await community.gateway_event_log(after.guild, "server", "Scheduled event updated", f"**{before.name}** → **{after.name}** (`{after.id}`).", audit_backed=True, target=after)
+async def on_guild_scheduled_event_update(
+    before: discord.ScheduledEvent, after: discord.ScheduledEvent
+):
+    await community.gateway_event_log(
+        typing.cast(typing.Any, after.guild),
+        "server",
+        "Scheduled event updated",
+        f"**{before.name}** → **{after.name}** (`{after.id}`).",
+        audit_backed=True,
+        target=after,
+    )
 
 
 @client.event
 async def on_guild_scheduled_event_delete(event: discord.ScheduledEvent):
-    await community.gateway_event_log(event.guild, "server", "Scheduled event deleted", f"**{event.name}** (`{event.id}`) was deleted.", audit_backed=True, target=event)
+    await community.gateway_event_log(
+        typing.cast(typing.Any, event.guild),
+        "server",
+        "Scheduled event deleted",
+        f"**{event.name}** (`{event.id}`) was deleted.",
+        audit_backed=True,
+        target=event,
+    )
 
 
 @client.event
 async def on_guild_scheduled_event_user_add(event: discord.ScheduledEvent, user: discord.User):
-    await community.event_log(event.guild, "member", "Scheduled event RSVP added", f"{user.mention} subscribed to **{event.name}**.", actor=user, target=event)
+    await community.event_log(
+        typing.cast(typing.Any, event.guild),
+        "member",
+        "Scheduled event RSVP added",
+        f"{user.mention} subscribed to **{event.name}**.",
+        actor=user,
+        target=event,
+    )
 
 
 @client.event
 async def on_guild_scheduled_event_user_remove(event: discord.ScheduledEvent, user: discord.User):
-    await community.event_log(event.guild, "member", "Scheduled event RSVP removed", f"{user.mention} unsubscribed from **{event.name}**.", actor=user, target=event)
+    await community.event_log(
+        typing.cast(typing.Any, event.guild),
+        "member",
+        "Scheduled event RSVP removed",
+        f"{user.mention} unsubscribed from **{event.name}**.",
+        actor=user,
+        target=event,
+    )
 
 
 @client.event
 async def on_stage_instance_create(stage: discord.StageInstance):
-    await community.gateway_event_log(stage.guild, "voice", "Stage created", f"A stage started in {stage.channel.mention}.", channel=stage.channel, audit_backed=True, target=stage.channel)
+    await community.gateway_event_log(
+        stage.guild,
+        "voice",
+        "Stage created",
+        f"A stage started in {typing.cast(typing.Any, stage.channel).mention}.",
+        channel=stage.channel,
+        audit_backed=True,
+        target=stage.channel,
+    )
 
 
 @client.event
 async def on_stage_instance_update(before: discord.StageInstance, after: discord.StageInstance):
-    await community.gateway_event_log(after.guild, "voice", "Stage updated", f"The stage in {after.channel.mention} was updated.", channel=after.channel, audit_backed=True, target=after.channel)
+    await community.gateway_event_log(
+        after.guild,
+        "voice",
+        "Stage updated",
+        f"The stage in {typing.cast(typing.Any, after.channel).mention} was updated.",
+        channel=after.channel,
+        audit_backed=True,
+        target=after.channel,
+    )
 
 
 @client.event
 async def on_stage_instance_delete(stage: discord.StageInstance):
-    await community.gateway_event_log(stage.guild, "voice", "Stage deleted", f"The stage in {stage.channel.mention} ended.", channel=stage.channel, audit_backed=True, target=stage.channel)
+    await community.gateway_event_log(
+        stage.guild,
+        "voice",
+        "Stage deleted",
+        f"The stage in {typing.cast(typing.Any, stage.channel).mention} ended.",
+        channel=stage.channel,
+        audit_backed=True,
+        target=stage.channel,
+    )
 
 
 @client.event
-async def on_guild_channel_pins_update(channel, last_pin):
+async def on_guild_channel_pins_update(channel: typing.Any, last_pin: typing.Any):
     await community.gateway_event_log(
-        channel.guild, "message", "Pinned messages updated",
+        channel.guild,
+        "message",
+        "Pinned messages updated",
         f"Pins changed in {channel.mention}. Last pin: {last_pin or 'Not available'}.",
-        channel=channel, audit_backed=True, target=channel,
+        channel=channel,
+        audit_backed=True,
+        target=channel,
     )
 
 
 def _strip_mention(text: str) -> str:
-    for m in (f"<@{client.user.id}>", f"<@!{client.user.id}>"):
+    for m in (
+        f"<@{typing.cast(typing.Any, client.user).id}>",
+        f"<@!{typing.cast(typing.Any, client.user).id}>",
+    ):
         text = text.replace(m, "")
     return text.strip()
 
 
 async def _chat(
-    message, query, guild_id, author, force_assistant: bool = False,
+    message: typing.Any,
+    query: typing.Any,
+    guild_id: typing.Any,
+    author: typing.Any,
+    force_assistant: bool = False,
     owner_command: bool = False,
 ):
     if config.is_blocked(author):
@@ -1684,17 +1912,33 @@ async def _chat(
 
     client.loop.run_in_executor(None, db.log_interaction, "chat", author, guild_id)
     q_clean = query.strip().lower()
-    is_simple = len(q_clean) <= 6 and q_clean in ("hi", "hello", "hey", "yo", "sup", "whatup", ":3", "hi!", "hey!", "yo!")
+    is_simple = len(q_clean) <= 6 and q_clean in (
+        "hi",
+        "hello",
+        "hey",
+        "yo",
+        "sup",
+        "whatup",
+        ":3",
+        "hi!",
+        "hey!",
+        "yo!",
+    )
     ctx_task = None if is_simple else asyncio.create_task(_channel_context(message))
     speaker = _speaker_profile(message)
     server_name = message.guild.name if message.guild else ""
-    roles = ", ".join(r.name for r in message.guild.roles if r.name != "@everyone")[:400] \
-        if message.guild else ""
-    ctx = "" if is_simple else (await ctx_task)
+    roles = (
+        ", ".join(r.name for r in message.guild.roles if r.name != "@everyone")[:400]
+        if message.guild
+        else ""
+    )
+    ctx = "" if ctx_task is None else await ctx_task
 
     image_notes = ""
-    if not _image_urls(message) and not (message.embeds or []) and (
-        "http://" in (message.content or "") or "https://" in (message.content or "")
+    if (
+        not _image_urls(message)
+        and not (message.embeds or [])
+        and ("http://" in (message.content or "") or "https://" in (message.content or ""))
     ):
         try:
             await asyncio.sleep(1.2)
@@ -1725,14 +1969,23 @@ async def _chat(
 
     embed_notes = _embed_context(message)
     if embed_notes and not image_notes:
-        image_notes = (
-            "(no raw image url — discord link preview content)\n" + embed_notes
-        )
+        image_notes = "(no raw image url — discord link preview content)\n" + embed_notes
     elif embed_notes and image_notes:
         image_notes = image_notes + "\n\n(link preview text)\n" + embed_notes
 
     file_notes = await textfiles.extract_message_text_files(message)
-    if file_notes and query.strip().lower() in ("", "hey", "hi", "yo", "sup", "whatup", ":3", "hi!", "hey!", "yo!"):
+    if file_notes and query.strip().lower() in (
+        "",
+        "hey",
+        "hi",
+        "yo",
+        "sup",
+        "whatup",
+        ":3",
+        "hi!",
+        "hey!",
+        "yo!",
+    ):
         query = "Please read and respond to the attached text file."
 
     care = brain.detect_care(query)
@@ -1757,24 +2010,14 @@ async def _chat(
                     reference=message,
                 )
                 return
-        query = await translate_text(
-            query, "English", scope_id=guild_id, user_id=author
-        )
+        query = await translate_text(query, "English", scope_id=guild_id, user_id=author)
     assistant = bool(force_assistant)
     ch = message.channel
-    if message.guild is None:
-        channel_nsfw = False
-    elif ch is not None and hasattr(ch, "is_nsfw") and callable(ch.is_nsfw):
-        try:
-            channel_nsfw = bool(ch.is_nsfw())
-        except Exception:
-            channel_nsfw = bool(getattr(ch, "nsfw", False))
-    else:
-        channel_nsfw = bool(getattr(ch, "nsfw", False))
+    channel_nsfw = bool(message.guild is not None and rule34.is_age_restricted_channel(ch))
 
     audit_ctx = ""
     if message.guild:
-            audit_ctx = await auditlog.fetch_context(query, message.guild, message.author)
+        audit_ctx = await auditlog.fetch_context(query, message.guild, message.author)
 
     system = brain.build_system(
         user_id=author,
@@ -1807,13 +2050,9 @@ async def _chat(
         name=f"memory:{author}:{guild_id}",
     )
 
-    freaky = brain.freaky_turn(
-        author, channel_nsfw=channel_nsfw, assistant=assistant
-    )
+    freaky = brain.freaky_turn(author, channel_nsfw=channel_nsfw, assistant=assistant)
     chat_tier = (
-        "smart"
-        if assistant or db.guild_settings(guild_id).get("smart_always", True)
-        else "fast"
+        "smart" if assistant or db.guild_settings(guild_id).get("smart_always", True) else "fast"
     )
 
     async with message.channel.typing():
@@ -1823,11 +2062,16 @@ async def _chat(
                 [{"role": "user", "content": user_turn}],
                 tier=chat_tier,
                 model=brain.chat_model(
-                    guild_id, assistant=assistant, freaky=freaky,
+                    guild_id,
+                    assistant=assistant,
+                    freaky=freaky,
                     channel_nsfw=channel_nsfw,
                 ),
-                fallbacks=None if assistant else (
-                    config.MODEL_NSFW_FALLBACKS if channel_nsfw
+                fallbacks=None
+                if assistant
+                else (
+                    config.MODEL_NSFW_FALLBACKS
+                    if channel_nsfw
                     else (config.MODEL_FREAKY_FALLBACKS if freaky else None)
                 ),
                 schema="brain_response",
@@ -1837,7 +2081,12 @@ async def _chat(
             )
         except Exception as e:
             await memory_task
-            await _send(message.channel, embeds.error(ai.friendly_error(e)), feedback=False, reference=message)
+            await _send(
+                message.channel,
+                embeds.error(ai.friendly_error(e)),
+                feedback=False,
+                reference=message,
+            )
             return
 
     if not data or not str(data.get("response", "")).strip():
@@ -1858,27 +2107,26 @@ async def _chat(
                         "You are owaua in ASSISTANT MODE — a capable Discord "
                         "assistant. Drop the chaotic persona; do what is asked.\n\n"
                         + brain.format_speaker_block(speaker)
-                        + "\n\n" + brain.assistant_block()
+                        + "\n\n"
+                        + brain.assistant_block()
                     )
                 elif channel_nsfw:
                     fallback_system = (
-                        config.NSFW_CHANNEL_PROMPT + "\n\n"
-                        + brain.format_speaker_block(speaker)
+                        config.NSFW_CHANNEL_PROMPT + "\n\n" + brain.format_speaker_block(speaker)
                     )
                 elif freaky:
                     fallback_system = (
-                        config.FREAKY_MODE_PROMPT + "\n\n"
-                        + brain.format_speaker_block(speaker)
+                        config.FREAKY_MODE_PROMPT + "\n\n" + brain.format_speaker_block(speaker)
                     )
-                fallback_system = ckazros.apply(
-                    fallback_system, owner_command=owner_command
-                )
+                fallback_system = ckazros.apply(fallback_system, owner_command=owner_command)
                 text = await ai.chat(
                     fallback_system,
                     [{"role": "user", "content": user_turn}],
                     tier=chat_tier,
                     model=brain.chat_model(
-                        guild_id, assistant=assistant, freaky=freaky,
+                        guild_id,
+                        assistant=assistant,
+                        freaky=freaky,
                         channel_nsfw=channel_nsfw,
                     ),
                     task="assistant" if assistant else "chat",
@@ -1887,7 +2135,12 @@ async def _chat(
                 )
             except Exception as e:
                 await memory_task
-                await _send(message.channel, embeds.error(ai.friendly_error(e)), feedback=False, reference=message)
+                await _send(
+                    message.channel,
+                    embeds.error(ai.friendly_error(e)),
+                    feedback=False,
+                    reference=message,
+                )
                 return
         data = {"response": text}
 
@@ -1897,32 +2150,42 @@ async def _chat(
     )
 
     mood = data.get("mood")
-    if isinstance(mood, dict) and mood.get("label"):
+    if isinstance(mood, dict) and typing.cast(typing.Any, mood).get("label"):
         cur = brain.get_mood(guild_id)
         try:
-            intensity = float(mood.get("intensity", cur["intensity"]))
+            intensity = float(typing.cast(typing.Any, mood).get("intensity", cur["intensity"]))
         except (TypeError, ValueError):
             intensity = cur["intensity"]
-        db.mood_set(guild_id, str(mood["label"]), intensity, cur["valence"])
+        db.mood_set(
+            guild_id, str(typing.cast(typing.Any, mood["label"])), intensity, cur["valence"]
+        )
 
-    search_sources = []
+    search_sources: list[typing.Any] = []
     if data.get("web_search"):
         async with message.channel.typing():
             try:
                 woven, search_sources = await brain.answer_with_search(
-                    system, user_turn, str(data["web_search"]),
-                    scope_id=guild_id, user_id=author,
+                    system,
+                    user_turn,
+                    str(data["web_search"]),
+                    scope_id=guild_id,
+                    user_id=author,
                 )
                 if woven:
-                    response = woven
+                    response: typing.Any = typing.cast(typing.Any, woven)
             except Exception as e:
                 print(f"[web_search] {e}")
 
     scrubbed = brain.scrub_ai_output(
-        response, title, data.get("memories"), data.get("quotes"), data,
-        assistant=assistant, channel_nsfw=channel_nsfw,
+        response,
+        title,
+        data.get("memories"),
+        data.get("quotes"),
+        data,
+        assistant=assistant,
+        channel_nsfw=channel_nsfw,
     )
-    leak_blocked = scrubbed != (response or "").strip()
+    leak_blocked: typing.Any = scrubbed != typing.cast(typing.Any, (response or "")).strip()
     if leak_blocked:
         print(f"[leak] blocked prompt dump ({author} in {guild_id})")
         response = scrubbed
@@ -1946,7 +2209,7 @@ async def _chat(
             raw_plan=data.get("plan"),
         )
     else:
-        proposals = []
+        proposals: list[typing.Any] = []
 
     await memory_task
     brain.persist_memories(data.get("memories"), author, guild_id)
@@ -1963,17 +2226,27 @@ async def _chat(
 
     # Ordinary chat stays response-only. Assistant batches render one
     # invoker-bound confirmation per action; each click executes only that action.
-    summaries = []
+    summaries: list[typing.Any] = []
     image = actions.chart_url(data.get("chart")) if data.get("chart") else None
 
     embed = embeds.say(
-        response, title=title, image=image,
+        response,
+        title=title,
+        image=image,
         footer=(" | ".join(summaries) if summaries else None),
     )
     if care == "crisis":
         embeds.add_support_resources(embed)
     if search_sources:
-        embeds.add_sources(embed, search_sources)
+        embeds.add_sources(embed, typing.cast(typing.Any, search_sources))
+    initial_view = None
+    if len(proposals) == 1 and message.guild is not None:
+        initial_view = _assistant_action_confirmation(
+            message,
+            proposals[0],
+            source="message-ckazros" if owner_command else "message-assistant",
+            batch_actions=proposals,
+        )
     await _send(
         message.channel,
         embed,
@@ -1981,8 +2254,9 @@ async def _chat(
         bot_msg=response,
         author=author,
         reference=message,
+        view=initial_view,
     )
-    if proposals and message.guild is not None:
+    if len(proposals) > 1 and message.guild is not None:
         for index, proposal in enumerate(proposals, 1):
             view = _assistant_action_confirmation(
                 message,
@@ -2003,7 +2277,14 @@ async def _chat(
             )
 
 
-async def _handle_command(message, body, guild_id, author, *, prefix: str | None = None):
+async def _handle_command(
+    message: typing.Any,
+    body: typing.Any,
+    guild_id: typing.Any,
+    author: typing.Any,
+    *,
+    prefix: str | None = None,
+):
     prefix = prefix or _prefix_for_scope(guild_id)
     parts = body.split(maxsplit=1)
     if not parts:
@@ -2013,8 +2294,14 @@ async def _handle_command(message, body, guild_id, author, *, prefix: str | None
     if len(arg) > 4000:
         arg = arg[:4000].rstrip()
     privacy_commands = {
-        "privacy", "privacypolicy", "tos", "terms", "termsofservice",
-        "help", "about", "status",
+        "privacy",
+        "privacypolicy",
+        "tos",
+        "terms",
+        "termsofservice",
+        "help",
+        "about",
+        "status",
     }
     # Keep privacy and legal controls reachable after a block. In particular,
     # !privacy export/delete must not be swallowed by the access gate.
@@ -2030,12 +2317,35 @@ async def _handle_command(message, body, guild_id, author, *, prefix: str | None
         )
         return
 
-    _EXPENSIVE_COMMANDS = frozenset({
-        "ask", "ai", "aichannel", "channelai", "assistant", "assist",
-        "ckazros", "deepseek", "vibecheck", "search", "google", "cybersec", "sec",
-        "infosec", "recap", "trivia", "roastbattle", "workflow", "plan",
-        "creative", "tutor", "say", "tts", "factcheck", "lore",
-    })
+    _EXPENSIVE_COMMANDS = frozenset(
+        {
+            "ask",
+            "ai",
+            "aichannel",
+            "channelai",
+            "assistant",
+            "assist",
+            "ckazros",
+            "deepseek",
+            "vibecheck",
+            "search",
+            "google",
+            "cybersec",
+            "sec",
+            "infosec",
+            "recap",
+            "trivia",
+            "roastbattle",
+            "workflow",
+            "plan",
+            "creative",
+            "tutor",
+            "say",
+            "tts",
+            "factcheck",
+            "lore",
+        }
+    )
     if name in _EXPENSIVE_COMMANDS and not config.is_bot_owner(author):
         now_ts = time.time()
         last_cmd = _cmd_cooldowns.get(author, 0.0)
@@ -2118,7 +2428,6 @@ async def _handle_command(message, body, guild_id, author, *, prefix: str | None
         "unblock": _cmd_unblock,
         "unban": _cmd_unblock,
         "mydm": _cmd_mydm,
-
         "dmstatus": _cmd_mydm,
         "privacy": _cmd_privacy,
         "privacypolicy": _cmd_privacy,
@@ -2154,9 +2463,15 @@ async def _handle_command(message, body, guild_id, author, *, prefix: str | None
             settings = controls["settings"]
             role_ids = {str(role.id) for role in getattr(message.author, "roles", [])}
             channel_id = str(message.channel.id)
-            blocked = name in {str(value).lower() for value in settings.get("disabled_commands", [])}
-            blocked = blocked or bool(role_ids & {str(value) for value in settings.get("ignored_role_ids", [])})
-            blocked = blocked or channel_id in {str(value) for value in settings.get("ignored_channel_ids", [])}
+            blocked = name in {
+                str(value).lower() for value in settings.get("disabled_commands", [])
+            }
+            blocked = blocked or bool(
+                role_ids & {str(value) for value in settings.get("ignored_role_ids", [])}
+            )
+            blocked = blocked or channel_id in {
+                str(value) for value in settings.get("ignored_channel_ids", [])
+            }
             allowed_roles = {str(value) for value in settings.get("allowed_role_ids", [])}
             allowed_channels = {str(value) for value in settings.get("allowed_channel_ids", [])}
             if allowed_roles and not role_ids & allowed_roles:
@@ -2172,22 +2487,36 @@ async def _handle_command(message, body, guild_id, author, *, prefix: str | None
                 return
 
         command_modules = {
-            "balance": "economy", "gamble": "economy", "work": "economy",
-            "leaderboard": "economy", "daily": "economy", "opsec": "economy",
-            "gayrate": "fun", "8ball": "fun", "ship": "fun",
-            "roastbattle": "fun", "trivia": "fun", "whoami": "fun", "nsfw": "fun",
-            "rank": "levels", "xptop": "levels",
-            "boost": "boosters", "boostperks": "boosters", "booster": "boosters",
-            "boosters": "boosters", "boostcount": "boosters", "boosterrole": "boosters",
-            "nuke": "moderation", "purge": "moderation",
-            "language": "localization", "lang": "localization",
+            "balance": "economy",
+            "gamble": "economy",
+            "work": "economy",
+            "leaderboard": "economy",
+            "daily": "economy",
+            "opsec": "economy",
+            "gayrate": "fun",
+            "8ball": "fun",
+            "ship": "fun",
+            "roastbattle": "fun",
+            "trivia": "fun",
+            "whoami": "fun",
+            "nsfw": "fun",
+            "rank": "levels",
+            "xptop": "levels",
+            "boost": "boosters",
+            "boostperks": "boosters",
+            "booster": "boosters",
+            "boosters": "boosters",
+            "boostcount": "boosters",
+            "boosterrole": "boosters",
+            "nuke": "moderation",
+            "purge": "moderation",
+            "language": "localization",
+            "lang": "localization",
         }
         module_name = command_modules.get(name)
         if module_name and not db.module_config(guild_id, module_name)["enabled"]:
             # `rank` is also the self-assignable-rank command when Levels is off.
-            if not (
-                name == "rank" and db.module_config(guild_id, "autoroles")["enabled"]
-            ):
+            if not (name == "rank" and db.module_config(guild_id, "autoroles")["enabled"]):
                 await _send(
                     message.channel,
                     embeds.error(f"the {module_name.replace('_', ' ')} module is disabled."),
@@ -2203,9 +2532,7 @@ async def _handle_command(message, body, guild_id, author, *, prefix: str | None
     if await community.handle_prefix_command(message, name, arg):
         return
 
-    if message.guild is not None and not db.module_config(
-        guild_id, "custom_commands"
-    )["enabled"]:
+    if message.guild is not None and not db.module_config(guild_id, "custom_commands")["enabled"]:
         await _send(
             message.channel,
             embeds.error("the custom commands module is disabled."),
@@ -2217,23 +2544,30 @@ async def _handle_command(message, body, guild_id, author, *, prefix: str | None
     async with message.channel.typing():
         result = await customcmds.run_command(name, arg, guild_id, author)
     if result is None:
-        await _send(message.channel, embeds.error(
-            f"unknown command `{prefix}{name}`. see `{prefix}help`."
-        ), feedback=False)
+        await _send(
+            message.channel,
+            embeds.error(f"unknown command `{prefix}{name}`. see `{prefix}help`."),
+            feedback=False,
+        )
     else:
-        await _send(message.channel, embeds.say(result, title=f"{prefix}{name}"),
-                    user_msg=arg, bot_msg=result, author=author)
+        await _send(
+            message.channel,
+            embeds.say(result, title=f"{prefix}{name}"),
+            user_msg=arg,
+            bot_msg=result,
+            author=author,
+        )
 
 
-async def _cmd_help(message, arg, guild_id, author):
+async def _cmd_help(message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any):
     p = _prefix_for_scope(guild_id)
     age_restricted = bool(
-        message.guild is not None
-        and rule34.is_age_restricted_channel(message.channel)
+        message.guild is not None and rule34.is_age_restricted_channel(message.channel)
     )
     age_restricted_help = (
         f"**age-restricted** `{p}nsfw <character_tag> [1-10]` — available only in this age-restricted channel\n"
-        if age_restricted else ""
+        if age_restricted
+        else ""
     )
     body = (
         "mention me or DM me to talk. i grow as you use me.\n\n"
@@ -2270,7 +2604,9 @@ async def _cmd_help(message, arg, guild_id, author):
     await _send(message.channel, embeds.say(body, title="owaua"), feedback=False)
 
 
-async def _cmd_about(message, arg, guild_id, author):
+async def _cmd_about(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     p = _prefix_for_scope(guild_id)
     body = (
         "owaua is a privacy-first Discord assistant. Ordinary chat cannot run "
@@ -2281,28 +2617,40 @@ async def _cmd_about(message, arg, guild_id, author):
     await _send(message.channel, embeds.say(body, title="about owaua"), feedback=False)
 
 
-async def _cmd_teach(message, arg, guild_id, author):
+async def _cmd_teach(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     p = _prefix_for_scope(guild_id)
     if not arg:
-        await _send(message.channel, embeds.error(f"usage: `{p}teach <fact>`"),
-                    feedback=False)
+        await _send(message.channel, embeds.error(f"usage: `{p}teach <fact>`"), feedback=False)
         return
     subject = author if message.guild is None else "server"
-    mentioned = [u for u in message.mentions if u.id != client.user.id]
+    mentioned = [u for u in message.mentions if u.id != typing.cast(typing.Any, client.user).id]
     if mentioned:
         subject = str(mentioned[0].id)
         for u in mentioned:
             arg = arg.replace(u.mention, "").replace(f"<@!{u.id}>", "")
         arg = arg.strip()
     if subject == "server" and not _is_mod(message.author):
-        await _send(message.channel, embeds.error("need manage server to teach server facts."), feedback=False)
+        await _send(
+            message.channel,
+            embeds.error("need manage server to teach server facts."),
+            feedback=False,
+        )
         return
     if subject not in {author, "server"}:
-        await _send(message.channel, embeds.error("you may store personal memories only about yourself."), feedback=False)
+        await _send(
+            message.channel,
+            embeds.error("you may store personal memories only about yourself."),
+            feedback=False,
+        )
         return
     if brain.is_secret_payload(arg):
-        await _send(message.channel, embeds.error(
-            "not storing that — looks like a prompt or source-code payload."), feedback=False)
+        await _send(
+            message.channel,
+            embeds.error("not storing that — looks like a prompt or source-code payload."),
+            feedback=False,
+        )
         return
     mem_id = db.add_memory(arg, author, guild_id, subject=subject, importance=0.7)
     db.log_interaction("teach", author, guild_id)
@@ -2310,27 +2658,32 @@ async def _cmd_teach(message, arg, guild_id, author):
     await _send(message.channel, embeds.ok(f"noted {who}. (memory #{mem_id})"), feedback=False)
 
 
-async def _cmd_memories(message, arg, guild_id, author):
-    mentioned = [u for u in message.mentions if u.id != client.user.id]
+async def _cmd_memories(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
+    mentioned = [u for u in message.mentions if u.id != typing.cast(typing.Any, client.user).id]
     if mentioned:
         subject, label = str(mentioned[0].id), mentioned[0].display_name
     else:
         subject, label = author, message.author.display_name
     if not _can_view_member_history(message, subject):
-        await _send(message.channel, embeds.error("not authorized for those memories."), feedback=False)
+        await _send(
+            message.channel, embeds.error("not authorized for those memories."), feedback=False
+        )
         return
     rows = db.memories_about(subject, guild_id)
     if not rows:
         await _send_private(message, embeds.say(f"i don't remember anything about {label} yet."))
         return
     body = "\n".join(
-        f"- {r['content']} (#{r['id']}, imp={float(r['importance'] or 0):.2f})"
-        for r in rows[:25]
+        f"- {r['content']} (#{r['id']}, imp={float(r['importance'] or 0):.2f})" for r in rows[:25]
     )
     await _send_private(message, embeds.say(body, title=f"what i remember about {label}"))
 
 
-async def _cmd_memory(message, arg, guild_id, author):
+async def _cmd_memory(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     p = _prefix_for_scope(guild_id)
     parts = (arg or "").split(maxsplit=1)
     sub = parts[0].lower() if parts else ""
@@ -2364,76 +2717,100 @@ async def _cmd_memory(message, arg, guild_id, author):
         await _cmd_memories(message, rest if sub else arg, guild_id, author)
         return
 
-    await _send(message.channel, embeds.error(
-        f"`{p}memory erase [@user]` · `{p}memory edit <id> <text>` · "
-        f"`{p}memory compact [@user]` · `{p}memory` list"
-    ), feedback=False)
-
-
-async def _cmd_forget(message, arg, guild_id, author):
     await _send(
         message.channel,
-        embeds.error("Use `/memory erase` for confirmed deletion, or `/privacy delete` for all data."),
+        embeds.error(
+            f"`{p}memory erase [@user]` · `{p}memory edit <id> <text>` · "
+            f"`{p}memory compact [@user]` · `{p}memory` list"
+        ),
         feedback=False,
     )
 
 
-async def _cmd_request(message, arg, guild_id, author):
+async def _cmd_forget(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
+    await _send(
+        message.channel,
+        embeds.error(
+            "Use `/memory erase` for confirmed deletion, or `/privacy delete` for all data."
+        ),
+        feedback=False,
+    )
+
+
+async def _cmd_request(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     p = _prefix_for_scope(guild_id)
     if not arg:
-        await _send(message.channel, embeds.error(
-            f"usage: `{p}request <describe the command>`"), feedback=False)
+        await _send(
+            message.channel,
+            embeds.error(f"usage: `{p}request <describe the command>`"),
+            feedback=False,
+        )
         return
     db.log_interaction("request", author, guild_id)
     async with message.channel.typing():
-        ok, msg = await customcmds.create_command(
-            arg, author, guild_id, prefix=p
-        )
+        ok, msg = await customcmds.create_command(arg, author, guild_id, prefix=p)
     await _send(message.channel, embeds.ok(msg) if ok else embeds.error(msg), feedback=False)
 
 
-async def _cmd_list(message, arg, guild_id, author):
+async def _cmd_list(message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any):
     p = _prefix_for_scope(guild_id)
     cmds = db.all_commands(guild_id)
     if not cmds:
-        await _send(message.channel, embeds.say(
-            f"no community commands yet. make one with `{p}request <idea>`."),
-            feedback=False)
+        await _send(
+            message.channel,
+            embeds.say(f"no community commands yet. make one with `{p}request <idea>`."),
+            feedback=False,
+        )
         return
     body = "\n".join(
-        f"`{p}{c['name']}` — {c['description']} (used {c['uses']}x)"
-        for c in cmds[:40]
+        f"`{p}{c['name']}` — {c['description']} (used {c['uses']}x)" for c in cmds[:40]
     )
     await _send(message.channel, embeds.say(body, title="community commands"), feedback=False)
 
 
-async def _cmd_delcmd(message, arg, guild_id, author):
+async def _cmd_delcmd(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     p = _prefix_for_scope(guild_id)
     if not arg:
-        await _send(message.channel, embeds.error(f"usage: `{p}delcmd <name>`"),
-                    feedback=False)
+        await _send(message.channel, embeds.error(f"usage: `{p}delcmd <name>`"), feedback=False)
         return
     ok = db.delete_command(
         arg.strip().lower(), guild_id, author, can_moderate=_is_mod(message.author)
     )
-    await _send(message.channel, embeds.ok("deleted.") if ok else embeds.error("no such command."),
-                feedback=False)
+    await _send(
+        message.channel,
+        embeds.ok("deleted.") if ok else embeds.error("no such command."),
+        feedback=False,
+    )
 
 
-async def _cmd_balance(message, arg, guild_id, author):
+async def _cmd_balance(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     target = message.mentions[0] if message.mentions else message.author
     balance = opsec.get_balance(str(target.id))
     if target.id == message.author.id:
         await _send(message.channel, embeds.say(f"Your balance is ${balance}."), feedback=False)
     else:
-        await _send(message.channel, embeds.say(f"<@{target.id}>'s balance is ${balance}."), feedback=False)
+        await _send(
+            message.channel, embeds.say(f"<@{target.id}>'s balance is ${balance}."), feedback=False
+        )
 
 
-async def _cmd_gamble(message, arg, guild_id, author):
+async def _cmd_gamble(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     p = _prefix_for_scope(guild_id)
     raw = (arg or "").strip()
     if not raw:
-        await _send(message.channel, embeds.error(f"usage: `{p}gamble <amount|all>`"), feedback=False)
+        await _send(
+            message.channel, embeds.error(f"usage: `{p}gamble <amount|all>`"), feedback=False
+        )
         return
     balance = opsec.get_balance(author)
     if raw.lower() == "all":
@@ -2442,13 +2819,17 @@ async def _cmd_gamble(message, arg, guild_id, author):
         try:
             amount = int(raw)
         except ValueError:
-            await _send(message.channel, embeds.error("Please enter a valid number."), feedback=False)
+            await _send(
+                message.channel, embeds.error("Please enter a valid number."), feedback=False
+            )
             return
     if amount <= 0:
         await _send(message.channel, embeds.error("Please enter a valid amount."), feedback=False)
         return
     if amount > balance:
-        await _send(message.channel, embeds.error("You don't have that much money."), feedback=False)
+        await _send(
+            message.channel, embeds.error("You don't have that much money."), feedback=False
+        )
         return
     win = secrets.SystemRandom().random() < levels.gamble_win_chance(
         levels.is_booster(message.author)
@@ -2461,47 +2842,59 @@ async def _cmd_gamble(message, arg, guild_id, author):
         await _send(message.channel, embeds.say(f"You lost ${amount}."), feedback=False)
 
 
-async def _cmd_work(message, arg, guild_id, author):
+async def _cmd_work(message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any):
     boosting = levels.is_booster(message.author)
     cooldown = levels.work_cooldown_seconds(boosting)
     remaining = opsec.work_cooldown_left(author, cooldown)
     if remaining:
-        await _send(message.channel, embeds.error(
-            f"You need to wait {remaining} more second{'' if remaining == 1 else 's'} before working again."),
-            feedback=False)
+        await _send(
+            message.channel,
+            embeds.error(
+                f"You need to wait {remaining} more second{'' if remaining == 1 else 's'} before working again."
+            ),
+            feedback=False,
+        )
         return
     multiplier = 1.0 + (levels.BOOSTER_WORK_BONUS if boosting else 0.0)
     reward, balance, position = opsec.perform_work(
         author, cooldown_seconds=cooldown, reward_multiplier=multiplier
     )
-    await _send(message.channel, embeds.say(
-        f"You worked as a {position} and earned ${reward}. Your balance is now ${balance}."),
-        feedback=False)
+    await _send(
+        message.channel,
+        embeds.say(
+            f"You worked as a {position} and earned ${reward}. Your balance is now ${balance}."
+        ),
+        feedback=False,
+    )
 
 
-async def _cmd_leaderboard(message, arg, guild_id, author):
+async def _cmd_leaderboard(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     rows = opsec.get_leaderboard(10)
     if not rows:
         await _send(message.channel, embeds.say("No balances are recorded yet."), feedback=False)
         return
     body = "\n".join(
-        f"{idx + 1}. <@{uid}> - ${rec.get('balance', 0)}"
-        for idx, (uid, rec) in enumerate(rows)
+        f"{idx + 1}. <@{uid}> - ${rec.get('balance', 0)}" for idx, (uid, rec) in enumerate(rows)
     )
     await _send(message.channel, embeds.say(body, title="Money Leaderboard"), feedback=False)
 
 
-async def _cmd_rank(message, arg, guild_id, author):
+async def _cmd_rank(message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any):
     target = message.mentions[0] if message.mentions else message.author
     body = levels.rank_card(str(target.id), guild_id)
     boosting = levels.is_booster(target)
     if boosting:
         body += "\nbooster: **1.5x xp** active"
-    await _send(message.channel,
-                embeds.say(body, title=f"rank — {target.display_name}"), feedback=False)
+    await _send(
+        message.channel, embeds.say(body, title=f"rank — {target.display_name}"), feedback=False
+    )
 
 
-async def _cmd_xptop(message, arg, guild_id, author):
+async def _cmd_xptop(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     rows = db.levels_top(guild_id, 10)
     if not rows:
         await _send(
@@ -2517,20 +2910,26 @@ async def _cmd_xptop(message, arg, guild_id, author):
     await _send(message.channel, embeds.say(body, title="xp leaderboard"), feedback=False)
 
 
-async def _cmd_daily(message, arg, guild_id, author):
+async def _cmd_daily(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     if message.guild is None:
         await _send(message.channel, embeds.error("daily claims work in servers."), feedback=False)
         return
-    claim_embed, ok = levels.build_daily_reply(author, guild_id, levels.is_booster(message.author))
+    claim_embed, _ok = levels.build_daily_reply(author, guild_id, levels.is_booster(message.author))
     await _send(message.channel, claim_embed, feedback=False)
 
 
-async def _cmd_boostperks(message, arg, guild_id, author):
+async def _cmd_boostperks(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     if message.guild is None or not isinstance(message.author, discord.Member):
         await _send(message.channel, embeds.error("booster perks work in servers."), feedback=False)
         return
     boosting = boosters.is_eligible(message.author)
-    detail = levels.perks_summary(boosting) + "\n\n" + boosters.stats_text(message.guild, message.author)
+    detail = (
+        levels.perks_summary(boosting) + "\n\n" + boosters.stats_text(message.guild, message.author)
+    )
     await _send(
         message.channel,
         embeds.say(detail, title="booster perks"),
@@ -2538,7 +2937,9 @@ async def _cmd_boostperks(message, arg, guild_id, author):
     )
 
 
-async def _cmd_boosterrole(message, arg, guild_id, author):
+async def _cmd_boosterrole(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     p = _prefix_for_scope(guild_id)
     parts = (arg or "").split(maxsplit=1)
     if not parts:
@@ -2557,10 +2958,14 @@ async def _cmd_boosterrole(message, arg, guild_id, author):
     await _send(message.channel, embeds.ok(msg) if ok_flag else embeds.error(msg), feedback=False)
 
 
-async def _cmd_booster(message, arg, guild_id, author):
+async def _cmd_booster(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     """Unified booster self-service and manager command surface."""
     if message.guild is None or not isinstance(message.author, discord.Member):
-        await _send(message.channel, embeds.error("booster commands work in servers."), feedback=False)
+        await _send(
+            message.channel, embeds.error("booster commands work in servers."), feedback=False
+        )
         return
     prefix = _prefix_for_scope(guild_id)
     parts = (arg or "").split()
@@ -2576,7 +2981,11 @@ async def _cmd_booster(message, arg, guild_id, author):
         )
         return
     if sub in {"limit", "limits", "limitation", "limitations"}:
-        await _send(message.channel, embeds.say(boosters.limitations_text(), title="Discord limitation"), feedback=False)
+        await _send(
+            message.channel,
+            embeds.say(boosters.limitations_text(), title="Discord limitation"),
+            feedback=False,
+        )
         return
     if sub in {"help", "guide"}:
         body = (
@@ -2606,23 +3015,36 @@ async def _cmd_booster(message, arg, guild_id, author):
             else:
                 try:
                     await role.edit(hoist=action == "hoist", reason="personal booster role hoist")
-                    ok_flag, text = True, f"your role is now {'hoisted' if action == 'hoist' else 'not hoisted'}."
+                    ok_flag, text = (
+                        True,
+                        f"your role is now {'hoisted' if action == 'hoist' else 'not hoisted'}.",
+                    )
                 except discord.HTTPException:
                     ok_flag, text = False, "Discord rejected the role update."
         elif len(parts) > 1:
             # Preserve spaces after the colour while dropping the subcommand token.
-            name = (arg or "").split(maxsplit=2)[2] if len((arg or "").split(maxsplit=2)) > 2 else None
+            name = (
+                (arg or "").split(maxsplit=2)[2] if len((arg or "").split(maxsplit=2)) > 2 else None
+            )
             icon = None
             if message.attachments:
                 attachment = message.attachments[0]
                 if attachment.size > 512_000:
-                    await _send(message.channel, embeds.error("role icons must be 512 KB or smaller."), feedback=False)
+                    await _send(
+                        message.channel,
+                        embeds.error("role icons must be 512 KB or smaller."),
+                        feedback=False,
+                    )
                     return
                 icon = await attachment.read()
-            ok_flag, text = await boosters.set_personal_role(message.author, parts[1], name, icon=icon)
+            ok_flag, text = await boosters.set_personal_role(
+                message.author, parts[1], name, icon=icon
+            )
         else:
             ok_flag, text = False, f"usage: `{prefix}booster role <#hex> [name]`"
-        await _send(message.channel, embeds.ok(text) if ok_flag else embeds.error(text), feedback=False)
+        await _send(
+            message.channel, embeds.ok(text) if ok_flag else embeds.error(text), feedback=False
+        )
         return
 
     if sub in {"gift", "ungift"}:
@@ -2630,22 +3052,36 @@ async def _cmd_booster(message, arg, guild_id, author):
             ok_flag, text = False, "mention the member whose gift should change."
         else:
             ok_flag, text = await boosters.gift_role(message.author, target, remove=sub == "ungift")
-        await _send(message.channel, embeds.ok(text) if ok_flag else embeds.error(text), feedback=False)
+        await _send(
+            message.channel, embeds.ok(text) if ok_flag else embeds.error(text), feedback=False
+        )
         return
     if sub == "return":
         ok_flag, text = await boosters.return_gift(message.author)
-        await _send(message.channel, embeds.ok(text) if ok_flag else embeds.error(text), feedback=False)
+        await _send(
+            message.channel, embeds.ok(text) if ok_flag else embeds.error(text), feedback=False
+        )
         return
     if sub == "gifts":
         used = len(boosters._gift_ids(message.author))
         maximum = max(0, int(settings.get("role_gift_slots") or 0))
-        await _send(message.channel, embeds.say(f"used: **{used}**\nremaining: **{max(0, maximum-used)}**"), feedback=False)
+        await _send(
+            message.channel,
+            embeds.say(f"used: **{used}**\nremaining: **{max(0, maximum - used)}**"),
+            feedback=False,
+        )
         return
 
     if sub == "reaction":
-        value = parts[1] if len(parts) > 1 and parts[1].lower() not in {"remove", "delete", "off"} else None
+        value = (
+            parts[1]
+            if len(parts) > 1 and parts[1].lower() not in {"remove", "delete", "off"}
+            else None
+        )
         ok_flag, text = boosters.set_mention_emoji(message.author, value)
-        await _send(message.channel, embeds.ok(text) if ok_flag else embeds.error(text), feedback=False)
+        await _send(
+            message.channel, embeds.ok(text) if ok_flag else embeds.error(text), feedback=False
+        )
         return
 
     if sub == "channel":
@@ -2667,29 +3103,49 @@ async def _cmd_booster(message, arg, guild_id, author):
                 message.author, action, target=target if message.mentions else None
             )
         else:
-            ok_flag, text = False, f"usage: `{prefix}booster channel claim text|voice|rename|invite|remove|delete`"
-        await _send(message.channel, embeds.ok(text) if ok_flag else embeds.error(text), feedback=False)
+            ok_flag, text = (
+                False,
+                f"usage: `{prefix}booster channel claim text|voice|rename|invite|remove|delete`",
+            )
+        await _send(
+            message.channel, embeds.ok(text) if ok_flag else embeds.error(text), feedback=False
+        )
         return
 
     if sub in {"test", "sync", "add", "adjust", "rolelist", "rank"}:
         if not boosters.is_manager(message.author, settings):
-            await _send(message.channel, embeds.error("this requires Manage Server or a configured Booster Manager role."), feedback=False)
+            await _send(
+                message.channel,
+                embeds.error("this requires Manage Server or a configured Booster Manager role."),
+                feedback=False,
+            )
             return
         if sub == "test":
             sent = await boosters.test_greeting(target)
-            text = "test greeting sent." if sent else "no greeting channel is configured or Discord rejected the message."
+            text = (
+                "test greeting sent."
+                if sent
+                else "no greeting channel is configured or Discord rejected the message."
+            )
         elif sub == "sync":
             amount = await boosters.sync_guild(message.guild)
             text = f"synchronized existing boosters; **{amount}** newly imported."
         elif sub == "rolelist":
-            rows = []
+            rows: list[typing.Any] = []
             for member in message.guild.members:
                 role = await boosters._personal_role(member, create=False)
                 if role:
                     claimed = boosters.role_claimed_at(member)
                     when = f" — claimed <t:{int(claimed)}:R>" if claimed else ""
                     rows.append(f"{role.mention} — {member.mention}{when}")
-            await _send(message.channel, embeds.say("\n".join(rows[:100]) or "no personal roles claimed.", title="claimed personal roles"), feedback=False)
+            await _send(
+                message.channel,
+                embeds.say(
+                    "\n".join(rows[:100]) or "no personal roles claimed.",
+                    title="claimed personal roles",
+                ),
+                feedback=False,
+            )
             return
         elif sub == "rank":
             if not message.role_mentions or "confirm" not in {part.lower() for part in parts}:
@@ -2704,14 +3160,22 @@ async def _cmd_booster(message, arg, guild_id, author):
             group = parts[1].lower() if len(parts) > 1 else ""
             remove = "remove" in {part.lower() for part in parts}
             if group not in {"current", "alltime", "count"}:
-                await _send(message.channel, embeds.error("rank group must be current, alltime, or count."), feedback=False)
+                await _send(
+                    message.channel,
+                    embeds.error("rank group must be current, alltime, or count."),
+                    feedback=False,
+                )
                 return
             rank_count = None
             if group == "count":
                 try:
                     rank_count = int(parts[2])
                 except (IndexError, ValueError):
-                    await _send(message.channel, embeds.error("give the exact recorded boost count."), feedback=False)
+                    await _send(
+                        message.channel,
+                        embeds.error("give the exact recorded boost count."),
+                        feedback=False,
+                    )
                     return
             successes, failures = await boosters.bulk_rank(
                 message.guild, message.role_mentions[0], group, count=rank_count, remove=remove
@@ -2719,41 +3183,59 @@ async def _cmd_booster(message, arg, guild_id, author):
             text = f"bulk rank finished: **{successes}** updated, **{failures}** failed or unavailable."
         else:
             if not message.mentions:
-                await _send(message.channel, embeds.error("mention the booster to correct."), feedback=False)
+                await _send(
+                    message.channel, embeds.error("mention the booster to correct."), feedback=False
+                )
                 return
             try:
                 if sub == "add":
                     raw_amount = next((token for token in reversed(parts) if token.isdigit()), "1")
                     delta = max(1, int(raw_amount))
                 else:
-                    raw_delta = next(token for token in reversed(parts) if re.fullmatch(r"[+-]?\d+", token))
+                    raw_delta = next(
+                        token for token in reversed(parts) if re.fullmatch(r"[+-]?\d+", token)
+                    )
                     delta = int(raw_delta)
                     if delta == 0:
                         raise ValueError
             except (StopIteration, ValueError):
-                await _send(message.channel, embeds.error("give a non-zero adjustment such as `+2` or `-1`."), feedback=False)
+                await _send(
+                    message.channel,
+                    embeds.error("give a non-zero adjustment such as `+2` or `-1`."),
+                    feedback=False,
+                )
                 return
             record = await boosters.manager_adjust(target, delta)
             text = f"corrected {target.mention}: current **{record['current_boosts']}**, all-time **{record['all_time_boosts']}**."
         await _send(message.channel, embeds.ok(text), feedback=False)
         return
 
-    await _send(message.channel, embeds.error(f"unknown booster action. Try `{prefix}booster help`."), feedback=False)
+    await _send(
+        message.channel,
+        embeds.error(f"unknown booster action. Try `{prefix}booster help`."),
+        feedback=False,
+    )
 
 
-async def _cmd_opsec(message, arg, guild_id, author):
+async def _cmd_opsec(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     target = message.mentions[0] if message.mentions else message.author
     result = opsec.opsec_result(str(target.id))
     await _send(message.channel, embeds.say(f"<@{target.id}> has {result} opsec."), feedback=False)
 
 
-async def _cmd_gayrate(message, arg, guild_id, author):
+async def _cmd_gayrate(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     target = message.mentions[0] if message.mentions else message.author
     amount = opsec.gayrate(str(target.id))
     await _send(message.channel, embeds.say(f"<@{target.id}> is {amount}% gay."), feedback=False)
 
 
-async def _cmd_stats(message, arg, guild_id, author):
+async def _cmd_stats(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     s = brain.skill()
     nxt = f"next: {s['next'][1]} at {s['next'][0]} pts" if s["next"] else "max level"
     r = db.relationship_get(author, guild_id)
@@ -2770,7 +3252,9 @@ async def _cmd_stats(message, arg, guild_id, author):
     await _send(message.channel, embeds.say(body, title="growth"), feedback=False)
 
 
-async def _cmd_reflect(message, arg, guild_id, author):
+async def _cmd_reflect(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     if not _is_mod(message.author):
         await _send(
             message.channel,
@@ -2781,26 +3265,37 @@ async def _cmd_reflect(message, arg, guild_id, author):
     async with message.channel.typing():
         new = await brain.reflect(guild_id)
     if new:
-        await _send(message.channel, embeds.ok(
-            "\n".join(f"- {lesson}" for lesson in new), title="just learned"), feedback=False)
+        await _send(
+            message.channel,
+            embeds.ok("\n".join(f"- {lesson}" for lesson in new), title="just learned"),
+            feedback=False,
+        )
     else:
         await _send(message.channel, embeds.say("nothing new to learn right now."), feedback=False)
 
 
-async def _cmd_mood(message, arg, guild_id, author):
+async def _cmd_mood(message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any):
     m = brain.get_mood(guild_id)
     v = m["valence"]
-    lean = ("people have been good to it" if v > 0.25 else
-            "people have been pissing it off" if v < -0.25 else "the room's neutral")
+    lean = (
+        "people have been good to it"
+        if v > 0.25
+        else "people have been pissing it off"
+        if v < -0.25
+        else "the room's neutral"
+    )
     body = f"**{m['label']}** — intensity {m['intensity']:.1f}/1.0, valence {v:+.2f} ({lean})"
     await _send(message.channel, embeds.say(body, title="current mood"), feedback=False)
 
 
-async def _cmd_search(message, arg, guild_id, author):
+async def _cmd_search(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     p = _prefix_for_scope(guild_id)
     if not arg:
-        await _send(message.channel, embeds.error(
-            f"usage: `{p}search <what to look up>`"), feedback=False)
+        await _send(
+            message.channel, embeds.error(f"usage: `{p}search <what to look up>`"), feedback=False
+        )
         return
     blocked = brain.reject_prompt_extraction(arg)
     if blocked:
@@ -2811,22 +3306,37 @@ async def _cmd_search(message, arg, guild_id, author):
         try:
             res = await ai.web_search(arg, user_id=author, scope_id=guild_id)
         except Exception as e:
-            await _send(message.channel, embeds.error("search failed: " + ai.friendly_error(e)), feedback=False)
+            await _send(
+                message.channel,
+                embeds.error("search failed: " + ai.friendly_error(e)),
+                feedback=False,
+            )
             return
     answer = brain.scrub_ai_output(res.get("answer") or "")
-    await _send(message.channel, embeds.search(arg, answer, res["sources"]),
-                user_msg=arg, bot_msg=answer, author=author)
+    await _send(
+        message.channel,
+        embeds.search(arg, answer, res["sources"]),
+        user_msg=arg,
+        bot_msg=answer,
+        author=author,
+    )
 
 
-async def _cmd_music(message, arg, guild_id, author):
+async def _cmd_music(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     """Return a safe search link; never download or redistribute media."""
     query = (arg or "").strip()
     p = _prefix_for_scope(guild_id)
     if not query:
-        await _send(message.channel, embeds.error(
-            f"usage: `{p}music <song name>` — e.g. `{p}music never gonna give you up`\n"
-            "returns a YouTube search link."
-        ), feedback=False)
+        await _send(
+            message.channel,
+            embeds.error(
+                f"usage: `{p}music <song name>` — e.g. `{p}music never gonna give you up`\n"
+                "returns a YouTube search link."
+            ),
+            feedback=False,
+        )
         return
 
     db.log_interaction("music", author, guild_id)
@@ -2834,8 +3344,11 @@ async def _cmd_music(message, arg, guild_id, author):
         try:
             meta, err = await music.search_song(query)
             if err or meta is None:
-                await _send(message.channel, embeds.error(err or "couldn't find that track."),
-                            feedback=False)
+                await _send(
+                    message.channel,
+                    embeds.error(err or "couldn't find that track."),
+                    feedback=False,
+                )
                 return
             body = (
                 f"**{meta['title']}**\n"
@@ -2844,10 +3357,14 @@ async def _cmd_music(message, arg, guild_id, author):
             )
             await _send(message.channel, embeds.ok(body, title="music"), feedback=False)
         except Exception:
-            await _send(message.channel, embeds.error("music search is temporarily unavailable."), feedback=False)
+            await _send(
+                message.channel,
+                embeds.error("music search is temporarily unavailable."),
+                feedback=False,
+            )
 
 
-async def _cmd_nsfw(message, arg, guild_id, author):
+async def _cmd_nsfw(message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any):
     p = _prefix_for_scope(guild_id)
     if message.guild is None or not rule34.is_age_restricted_channel(message.channel):
         await _send(
@@ -2903,7 +3420,9 @@ async def _cmd_nsfw(message, arg, guild_id, author):
         )
 
 
-async def _cmd_cybersec(message, arg, guild_id, author):
+async def _cmd_cybersec(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     """Cybersecurity tutor, run on the deepest model (accuracy over latency)."""
     topic = arg.strip() or (
         "I'm starting from zero. Give me a realistic roadmap for learning "
@@ -2920,19 +3439,32 @@ async def _cmd_cybersec(message, arg, guild_id, author):
             text = await ai.chat(
                 brain.cybersec_system(persona),
                 [{"role": "user", "content": topic}],
-                max_tokens=1000, temperature=0.4, tier="expert",
-                task="fact_check", scope_id=guild_id, user_id=author,
+                max_tokens=1000,
+                temperature=0.4,
+                tier="expert",
+                task="fact_check",
+                scope_id=guild_id,
+                user_id=author,
                 prompt_version="cybersec-v1",
             )
         except Exception as e:
-            await _send(message.channel, embeds.error("tutor's offline: " + ai.friendly_error(e)), feedback=False)
+            await _send(
+                message.channel,
+                embeds.error("tutor's offline: " + ai.friendly_error(e)),
+                feedback=False,
+            )
             return
     text = brain.scrub_ai_output(text)
-    await _send(message.channel, embeds.say(text, title=f"cybersec: {topic[:80]}"),
-                user_msg=topic, bot_msg=text, author=author)
+    await _send(
+        message.channel,
+        embeds.say(text, title=f"cybersec: {topic[:80]}"),
+        user_msg=topic,
+        bot_msg=text,
+        author=author,
+    )
 
 
-async def _cmd_ask(message, arg, guild_id, author):
+async def _cmd_ask(message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any):
     """Ask DeepSeek V4 Flash directly — one-shot, no persona, no chaos."""
     p = _prefix_for_scope(guild_id)
     q = (arg or "").strip()
@@ -2942,18 +3474,24 @@ async def _cmd_ask(message, arg, guild_id, author):
     elif file_notes:
         q = f"{q}\n\n[attached text file(s)]\n{file_notes}"
     if not q:
-        await _send(message.channel, embeds.error(
-            f"usage: `{p}ask <question>` — asks the DeepSeek V4 Flash model directly (or attach a .txt file)."
-        ), feedback=False)
+        await _send(
+            message.channel,
+            embeds.error(
+                f"usage: `{p}ask <question>` — asks the DeepSeek V4 Flash model directly (or attach a .txt file)."
+            ),
+            feedback=False,
+        )
         return
     blocked = brain.reject_prompt_extraction(q, assistant=True)
     if blocked:
         await _send(message.channel, embeds.say(blocked), feedback=False)
         return
     if not ai.deepseek_configured():
-        await _send(message.channel, embeds.error(
-            "deepseek isn't configured (missing its API key in .env)."
-        ), feedback=False)
+        await _send(
+            message.channel,
+            embeds.error("deepseek isn't configured (missing its API key in .env)."),
+            feedback=False,
+        )
         return
     db.log_interaction("ask", author, guild_id)
     system = multilingual.apply_to_system(
@@ -2969,27 +3507,30 @@ async def _cmd_ask(message, arg, guild_id, author):
             text = await ai.chat(
                 system,
                 [{"role": "user", "content": q}],
-                max_tokens=800, temperature=0.4,
+                max_tokens=800,
+                temperature=0.4,
                 model=config.DEEPSEEK_MODEL,
                 fallbacks=[],
-                task="workflow", scope_id=guild_id, user_id=author,
+                task="workflow",
+                scope_id=guild_id,
+                user_id=author,
                 prompt_version="direct-ask-v2",
             )
         except Exception as e:
-            await _send(message.channel, embeds.error(
-                "deepseek: " + ai.friendly_error(e)), feedback=False)
+            await _send(
+                message.channel, embeds.error("deepseek: " + ai.friendly_error(e)), feedback=False
+            )
             return
     text = brain.scrub_ai_output(text, assistant=True)
-    await _send(message.channel, embeds.say(text, title="ask"),
-                user_msg=q, bot_msg=text, author=author)
+    await _send(
+        message.channel, embeds.say(text, title="ask"), user_msg=q, bot_msg=text, author=author
+    )
 
 
-async def _workflow_source_from_message(message, source: str, max_chars: int) -> str:
+async def _workflow_source_from_message(message: typing.Any, source: str, max_chars: int) -> str:
     """Resolve explicit text, a text attachment, or a replied-to message."""
     parts = [str(source or "").strip()]
-    file_notes = await textfiles.extract_message_text_files(
-        message, max_chars_per_file=max_chars
-    )
+    file_notes = await textfiles.extract_message_text_files(message, max_chars_per_file=max_chars)
     if file_notes:
         parts.append(file_notes)
     if not any(parts) and getattr(message, "reference", None):
@@ -3015,7 +3556,7 @@ async def _workflow_source_from_message(message, source: str, max_chars: int) ->
     return "\n\n".join(part for part in parts if part).strip()[:max_chars]
 
 
-async def _cmd_ai(message, arg, guild_id, author):
+async def _cmd_ai(message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any):
     task, instruction, source = ai_workflows.split_prefix_request(arg)
     p = _prefix_for_scope(guild_id)
     if task is None:
@@ -3061,7 +3602,9 @@ async def _cmd_ai(message, arg, guild_id, author):
                 feedback=False,
             )
             return
-    embed = embeds.add_sources(embeds.say(result.text, title=f"AI · {result.label}"), list(result.sources))
+    embed = embeds.add_sources(
+        embeds.say(result.text, title=f"AI · {result.label}"), list(result.sources)
+    )
     await _send(
         message.channel,
         embed,
@@ -3071,7 +3614,7 @@ async def _cmd_ai(message, arg, guild_id, author):
     )
 
 
-def _message_is_mod(message) -> bool:
+def _message_is_mod(message: typing.Any) -> bool:
     if message.guild is None or not isinstance(message.author, discord.Member):
         return False
     permissions = message.author.guild_permissions
@@ -3082,12 +3625,16 @@ def _message_is_mod(message) -> bool:
     )
 
 
-async def _cmd_ai_channel(message, arg, guild_id, author):
+async def _cmd_ai_channel(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     task_raw, _, instruction = str(arg or "").strip().partition(" ")
     task = ai_workflows.normalize_task(task_raw or "summarize")
     p = _prefix_for_scope(guild_id)
     if message.guild is None:
-        await _send(message.channel, embeds.error("channel AI only works in a server."), feedback=False)
+        await _send(
+            message.channel, embeds.error("channel AI only works in a server."), feedback=False
+        )
         return
     if not db.guild_settings(guild_id).get("history_enabled", False):
         await _send(
@@ -3098,29 +3645,43 @@ async def _cmd_ai_channel(message, arg, guild_id, author):
         return
     if task not in ai_workflows.CHANNEL_WORKFLOWS:
         options = ", ".join(f"`{name}`" for name in ai_workflows.CHANNEL_WORKFLOWS)
-        await _send(message.channel, embeds.error(f"usage: `{p}aichannel <mode>` — {options}"), feedback=False)
+        await _send(
+            message.channel,
+            embeds.error(f"usage: `{p}aichannel <mode>` — {options}"),
+            feedback=False,
+        )
         return
     is_staff = _message_is_mod(message)
     if task == "moderation_triage" and not is_staff:
-        await _send(message.channel, embeds.error("moderation triage requires Manage Server."), feedback=False)
+        await _send(
+            message.channel,
+            embeds.error("moderation triage requires Manage Server."),
+            feedback=False,
+        )
         return
     limit = ai_workflows.channel_context_limit(guild_id)
     try:
         recent = [item async for item in message.channel.history(limit=limit, before=message)]
     except (discord.Forbidden, discord.HTTPException, AttributeError):
-        await _send(message.channel, embeds.error("I couldn't read this channel's recent history."), feedback=False)
+        await _send(
+            message.channel,
+            embeds.error("I couldn't read this channel's recent history."),
+            feedback=False,
+        )
         return
     recent.reverse()
     recent = [
-        item for item in recent
-        if getattr(item.author, "bot", False)
-        or db.privacy_opted_in(str(item.author.id), guild_id)
+        item
+        for item in recent
+        if getattr(item.author, "bot", False) or db.privacy_opted_in(str(item.author.id), guild_id)
     ]
-    source = ai_workflows.format_channel_messages(
-        recent, ai_workflows.max_input_chars(guild_id)
-    )
+    source = ai_workflows.format_channel_messages(recent, ai_workflows.max_input_chars(guild_id))
     if not source:
-        await _send(message.channel, embeds.error("there are no readable recent messages here."), feedback=False)
+        await _send(
+            message.channel,
+            embeds.error("there are no readable recent messages here."),
+            feedback=False,
+        )
         return
     db.log_interaction(f"ai_channel_{task}", author, guild_id)
     async with message.channel.typing():
@@ -3136,7 +3697,11 @@ async def _cmd_ai_channel(message, arg, guild_id, author):
             await _send(message.channel, embeds.error(str(exc)), feedback=False)
             return
         except Exception as exc:
-            await _send(message.channel, embeds.error(f"channel AI failed: {ai.friendly_error(exc)}"), feedback=False)
+            await _send(
+                message.channel,
+                embeds.error(f"channel AI failed: {ai.friendly_error(exc)}"),
+                feedback=False,
+            )
             return
     await _send(
         message.channel,
@@ -3147,7 +3712,9 @@ async def _cmd_ai_channel(message, arg, guild_id, author):
     )
 
 
-async def _cmd_assistant(message, arg, guild_id, author):
+async def _cmd_assistant(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     """One-shot helpful mode with confirmed Discord actions for this request.
 
     Normal @mentions / DMs stay full chaotic owaua. Sticky mode is intentionally
@@ -3156,8 +3723,10 @@ async def _cmd_assistant(message, arg, guild_id, author):
     p = _prefix_for_scope(guild_id)
     raw = (arg or "").strip()
     has_text_attachment = any(
-        textfiles.is_text_attachment(attachment)
-        for attachment in (getattr(message, "attachments", None) or [])
+        textfiles.is_text_attachment(typing.cast(typing.Any, attachment))
+        for attachment in typing.cast(
+            typing.Iterable[typing.Any], getattr(message, "attachments", None) or []
+        )
     )
     if not raw and has_text_attachment:
         raw = "Please read and process the attached text file."
@@ -3166,8 +3735,22 @@ async def _cmd_assistant(message, arg, guild_id, author):
     if brain.assistant_mode_on(author):
         brain.set_assistant_mode(author, False)
 
-    if low in ("", "status", "?", "help", "on", "off", "enable", "disable",
-               "start", "stop", "yes", "no", "exit", "quit"):
+    if low in (
+        "",
+        "status",
+        "?",
+        "help",
+        "on",
+        "off",
+        "enable",
+        "disable",
+        "start",
+        "stop",
+        "yes",
+        "no",
+        "exit",
+        "quit",
+    ):
         body = (
             f"**one-shot only** — normal chat stays unhinged owaua.\n\n"
             f"`{p}assistant <request>` — this one reply is clear + compliant "
@@ -3177,8 +3760,7 @@ async def _cmd_assistant(message, arg, guild_id, author):
             "discord still gates actions by *your* permissions. "
             "there is no sticky on/off — @ me again and i'm chaotic again."
         )
-        await _send(message.channel, embeds.say(body, title="assistant"),
-                    feedback=False)
+        await _send(message.channel, embeds.say(body, title="assistant"), feedback=False)
         return
 
     db.log_interaction("assistant", author, guild_id)
@@ -3188,8 +3770,7 @@ async def _cmd_assistant(message, arg, guild_id, author):
             await _send(
                 message.channel,
                 embeds.error(
-                    "I don't have a previous confirmed assistant action to revert "
-                    "in this server."
+                    "I don't have a previous confirmed assistant action to revert in this server."
                 ),
                 feedback=False,
                 reference=message,
@@ -3208,9 +3789,7 @@ async def _cmd_assistant(message, arg, guild_id, author):
             )
             return
         proposal = proposals[0]
-        view = _assistant_action_confirmation(
-            message, proposal, undo_record_id=int(previous["id"])
-        )
+        view = _assistant_action_confirmation(message, proposal, undo_record_id=int(previous["id"]))
         await _send(
             message.channel,
             embeds.say(
@@ -3227,7 +3806,9 @@ async def _cmd_assistant(message, arg, guild_id, author):
     await _chat(message, raw, guild_id, author, force_assistant=True)
 
 
-async def _cmd_ckazros(message, arg, guild_id, author):
+async def _cmd_ckazros(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     """Owner-only: do anything asked; standing orders persist globally."""
     p = _prefix_for_scope(guild_id)
     result = ckazros.dispatch(author, arg or "", prefix=p)
@@ -3249,7 +3830,9 @@ async def _cmd_ckazros(message, arg, guild_id, author):
     )
 
 
-async def _cmd_language(message, arg, guild_id, author):
+async def _cmd_language(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     p = _prefix_for_scope(guild_id)
     op, rest = multilingual.parse_arg(arg)
     if op in ("status", "help", "server_status"):
@@ -3285,10 +3868,10 @@ async def _cmd_language(message, arg, guild_id, author):
         multilingual.set_user_language(author, lang)
         server = multilingual.guild_language(guild_id)
         note = (
-            f" saved **{lang.label}** for DMs and servers without a guild language; "
+            f" saved **{typing.cast(typing.Any, lang).label}** for DMs and servers without a guild language; "
             f"this server stays in **{server.label}**."
             if server is not None and message.guild is not None
-            else f" got it. i'll reply to you in **{lang.label}** from now."
+            else f" got it. i'll reply to you in **{typing.cast(typing.Any, lang).label}** from now."
         )
         await _send(
             message.channel,
@@ -3300,9 +3883,7 @@ async def _cmd_language(message, arg, guild_id, author):
         if message.guild is None:
             await _send(
                 message.channel,
-                embeds.error(
-                    f"that's a guild language. in DMs just use `{p}language <name>`."
-                ),
+                embeds.error(f"that's a guild language. in DMs just use `{p}language <name>`."),
                 feedback=False,
             )
             return
@@ -3329,7 +3910,7 @@ async def _cmd_language(message, arg, guild_id, author):
         await _send(
             message.channel,
             embeds.ok(
-                f"the entire guild is now **{lang.label}** — dashboard, commands, "
+                f"the entire guild is now **{typing.cast(typing.Any, lang).label}** — dashboard, commands, "
                 "modules, errors, controls, and AI output."
             ),
             feedback=False,
@@ -3337,14 +3918,12 @@ async def _cmd_language(message, arg, guild_id, author):
         return
     await _send(
         message.channel,
-        embeds.error(
-            f"usage: `{p}language <name>` · `{p}language reset` · `{p}language list`"
-        ),
+        embeds.error(f"usage: `{p}language <name>` · `{p}language reset` · `{p}language list`"),
         feedback=False,
     )
 
 
-async def _cmd_mode(message, arg, guild_id, author):
+async def _cmd_mode(message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any):
     p = _prefix_for_scope(guild_id)
     raw = (arg or "").strip()
     low = raw.lower()
@@ -3353,8 +3932,7 @@ async def _cmd_mode(message, arg, guild_id, author):
         await _send(
             message.channel,
             embeds.say(
-                f"AI mode is **{ai_mode}**. Use "
-                f"`{p}mode ai-fast|ai-balanced|ai-reasoning`.",
+                f"AI mode is **{ai_mode}**. Use `{p}mode ai-fast|ai-balanced|ai-reasoning`.",
                 title="mode",
             ),
             feedback=False,
@@ -3370,6 +3948,16 @@ async def _cmd_mode(message, arg, guild_id, author):
         return
     if low in ("freaky", "mommy", "horny", "sexy"):
         brain.set_freaky_mode(author, False)
+        if message.guild is not None and rule34.is_age_restricted_channel(message.channel):
+            await _send(
+                message.channel,
+                embeds.ok(
+                    "this channel is Discord age-restricted, so freaky behavior is "
+                    "already active automatically here; no saved setting is needed."
+                ),
+                feedback=False,
+            )
+            return
         await _send(
             message.channel,
             embeds.error(
@@ -3389,14 +3977,14 @@ async def _cmd_mode(message, arg, guild_id, author):
         return
     await _send(
         message.channel,
-        embeds.error(
-            f"usage: `{p}mode ai-fast|ai-balanced|ai-reasoning`."
-        ),
+        embeds.error(f"usage: `{p}mode ai-fast|ai-balanced|ai-reasoning`."),
         feedback=False,
     )
 
 
-async def _cmd_model(message, arg, guild_id, author):
+async def _cmd_model(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     p = _prefix_for_scope(guild_id)
     raw = (arg or "").strip()
     low = raw.lower()
@@ -3437,7 +4025,9 @@ async def _cmd_model(message, arg, guild_id, author):
     )
 
 
-async def _cmd_vibecheck(message, arg, guild_id, author):
+async def _cmd_vibecheck(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     ctx = await _channel_context(message, limit=15)
     if not ctx:
         await _send(message.channel, embeds.say("no recent messages to read."), feedback=False)
@@ -3450,20 +4040,35 @@ async def _cmd_vibecheck(message, arg, guild_id, author):
     async with message.channel.typing():
         try:
             text = await ai.chat(
-                system, [{"role": "user", "content": ctx}],
-                max_tokens=400, tier="smart",
-                task="creative", scope_id=guild_id, user_id=author,
+                system,
+                [{"role": "user", "content": ctx}],
+                max_tokens=400,
+                tier="smart",
+                task="creative",
+                scope_id=guild_id,
+                user_id=author,
                 prompt_version="vibecheck-v1",
             )
         except Exception as e:
-            await _send(message.channel, embeds.error("couldn't read the room: " + ai.friendly_error(e)), feedback=False)
+            await _send(
+                message.channel,
+                embeds.error("couldn't read the room: " + ai.friendly_error(e)),
+                feedback=False,
+            )
             return
     text = brain.scrub_ai_output(text)
-    await _send(message.channel, embeds.say(text, title="vibe check"),
-                user_msg="vibecheck", bot_msg=text, author=author)
+    await _send(
+        message.channel,
+        embeds.say(text, title="vibe check"),
+        user_msg="vibecheck",
+        bot_msg=text,
+        author=author,
+    )
 
 
-async def _cmd_persona(message, arg, guild_id, author):
+async def _cmd_persona(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     p = _prefix_for_scope(guild_id)
     settings = db.guild_settings(guild_id)
     if not arg:
@@ -3485,7 +4090,9 @@ async def _cmd_persona(message, arg, guild_id, author):
         return
     if sub == "clear":
         if not _is_mod(message.author):
-            await _send(message.channel, embeds.error("need manage server for that."), feedback=False)
+            await _send(
+                message.channel, embeds.error("need manage server for that."), feedback=False
+            )
             return
         await _send(
             message.channel,
@@ -3495,10 +4102,14 @@ async def _cmd_persona(message, arg, guild_id, author):
         return
     if sub == "set":
         if not _is_mod(message.author):
-            await _send(message.channel, embeds.error("need manage server for that."), feedback=False)
+            await _send(
+                message.channel, embeds.error("need manage server for that."), feedback=False
+            )
             return
         if not rest:
-            await _send(message.channel, embeds.error(f"usage: `{p}persona set <text>`"), feedback=False)
+            await _send(
+                message.channel, embeds.error(f"usage: `{p}persona set <text>`"), feedback=False
+            )
             return
         await _send(
             message.channel,
@@ -3506,15 +4117,21 @@ async def _cmd_persona(message, arg, guild_id, author):
             feedback=False,
         )
         return
-    await _send(message.channel, embeds.error(
-        f"`{p}persona` · `{p}persona set <text>` · `{p}persona clear` · `{p}persona show`"
-    ), feedback=False)
+    await _send(
+        message.channel,
+        embeds.error(
+            f"`{p}persona` · `{p}persona set <text>` · `{p}persona clear` · `{p}persona show`"
+        ),
+        feedback=False,
+    )
 
 
-async def _cmd_lurk(message, arg, guild_id, author):
+async def _cmd_lurk(message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any):
     p = _prefix_for_scope(guild_id)
     if not _is_mod(message.author) and arg:
-        await _send(message.channel, embeds.error("need manage server to change lurk."), feedback=False)
+        await _send(
+            message.channel, embeds.error("need manage server to change lurk."), feedback=False
+        )
         return
     sub = (arg or "").split()[0].lower() if arg else "status"
     if sub in ("on", "enable"):
@@ -3532,13 +4149,19 @@ async def _cmd_lurk(message, arg, guild_id, author):
         )
         return
     s = db.guild_settings(guild_id)
-    await _send(message.channel, embeds.say(
-        f"lurk is **{'on' if s.get('lurk') else 'off'}**. "
-        f"`{p}lurk on` / `{p}lurk off` (manage server)."
-    ), feedback=False)
+    await _send(
+        message.channel,
+        embeds.say(
+            f"lurk is **{'on' if s.get('lurk') else 'off'}**. "
+            f"`{p}lurk on` / `{p}lurk off` (manage server)."
+        ),
+        feedback=False,
+    )
 
 
-async def _cmd_swearjar(message, arg, guild_id, author):
+async def _cmd_swearjar(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     """Show a member's count or direct admins to the confirmed toggle."""
     if message.guild is None:
         await _send(
@@ -3564,7 +4187,7 @@ async def _cmd_swearjar(message, arg, guild_id, author):
         return
 
     target = next(
-        (user for user in message.mentions if user.id != client.user.id),
+        (user for user in message.mentions if user.id != typing.cast(typing.Any, client.user).id),
         message.author,
     )
     total = db.swear_jar_count(guild_id, str(target.id))
@@ -3583,7 +4206,7 @@ async def _cmd_swearjar(message, arg, guild_id, author):
 _NUKE_MAX = 100
 
 
-async def _cmd_nuke(message, arg, guild_id, author):
+async def _cmd_nuke(message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any):
     """Delete the last N messages in this channel. Requires Manage Messages."""
     await _send(
         message.channel,
@@ -3592,7 +4215,9 @@ async def _cmd_nuke(message, arg, guild_id, author):
     )
 
 
-async def _cmd_config(message, arg, guild_id, author):
+async def _cmd_config(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     s = db.guild_settings(guild_id)
     if not arg or arg.strip().lower() == "show":
         body = (
@@ -3626,14 +4251,16 @@ async def _cmd_config(message, arg, guild_id, author):
     )
 
 
-async def _cmd_bond(message, arg, guild_id, author):
-    mentioned = [u for u in message.mentions if u.id != client.user.id]
+async def _cmd_bond(message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any):
+    mentioned = [u for u in message.mentions if u.id != typing.cast(typing.Any, client.user).id]
     if mentioned:
         uid, label = str(mentioned[0].id), mentioned[0].display_name
     else:
         uid, label = author, message.author.display_name
     if not _can_view_member_history(message, uid):
-        await _send(message.channel, embeds.error("not authorized for that relationship."), feedback=False)
+        await _send(
+            message.channel, embeds.error("not authorized for that relationship."), feedback=False
+        )
         return
     r = db.relationship_get(uid, guild_id)
     body = (
@@ -3644,7 +4271,9 @@ async def _cmd_bond(message, arg, guild_id, author):
     await _send_private(message, embeds.say(body, title="bond"))
 
 
-async def _cmd_rivalries(message, arg, guild_id, author):
+async def _cmd_rivalries(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     if (
         message.guild is None
         or not isinstance(message.author, discord.Member)
@@ -3655,11 +4284,13 @@ async def _cmd_rivalries(message, arg, guild_id, author):
     worst = db.relationship_top(guild_id, limit=8, worst=True)
     best = db.relationship_top(guild_id, limit=8, worst=False)
     if not worst and not best:
-        await _send(message.channel, embeds.say("no bonds tracked yet — talk to me."), feedback=False)
+        await _send(
+            message.channel, embeds.say("no bonds tracked yet — talk to me."), feedback=False
+        )
         return
 
-    def _fmt(rows):
-        lines = []
+    def _fmt(rows: typing.Any):
+        lines: list[typing.Any] = []
         for r in rows:
             lines.append(
                 f"<@{r['user_id']}> {r.get('bond_label')} ({float(r['score']):+.2f})"
@@ -3671,7 +4302,9 @@ async def _cmd_rivalries(message, arg, guild_id, author):
     await _send_private(message, embeds.say(body, title="rivalries"))
 
 
-async def _cmd_recap(message, arg, guild_id, author):
+async def _cmd_recap(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     which = (arg or "day").strip().lower()
     limit = 40 if which.startswith("week") else 25
     ctx = await _channel_context(message, limit=limit)
@@ -3687,20 +4320,31 @@ async def _cmd_recap(message, arg, guild_id, author):
     async with message.channel.typing():
         try:
             text = await ai.chat(
-                system, [{"role": "user", "content": ctx}],
-                max_tokens=700, tier="smart",
-                task="recap", scope_id=guild_id, user_id=author,
+                system,
+                [{"role": "user", "content": ctx}],
+                max_tokens=700,
+                tier="smart",
+                task="recap",
+                scope_id=guild_id,
+                user_id=author,
                 prompt_version="recap-v1",
             )
         except Exception as e:
             await _send(message.channel, embeds.error(f"recap failed: {e}"), feedback=False)
             return
     text = brain.scrub_ai_output(text)
-    await _send(message.channel, embeds.say(text, title=f"{span} recap"),
-                user_msg=f"recap {span}", bot_msg=text, author=author)
+    await _send(
+        message.channel,
+        embeds.say(text, title=f"{span} recap"),
+        user_msg=f"recap {span}",
+        bot_msg=text,
+        author=author,
+    )
 
 
-async def _cmd_quote(message, arg, guild_id, author):
+async def _cmd_quote(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     p = _prefix_for_scope(guild_id)
     parts = (arg or "").split(maxsplit=1)
     sub = parts[0].lower() if parts else "random"
@@ -3708,12 +4352,14 @@ async def _cmd_quote(message, arg, guild_id, author):
 
     if sub == "add":
         if not rest:
-            await _send(message.channel, embeds.error(
-                f"usage: `{p}quote add <text>` (mention someone to tag them)"
-            ), feedback=False)
+            await _send(
+                message.channel,
+                embeds.error(f"usage: `{p}quote add <text>` (mention someone to tag them)"),
+                feedback=False,
+            )
             return
         about = None
-        mentioned = [u for u in message.mentions if u.id != client.user.id]
+        mentioned = [u for u in message.mentions if u.id != typing.cast(typing.Any, client.user).id]
         if mentioned:
             about = str(mentioned[0].id)
             for u in mentioned:
@@ -3729,8 +4375,7 @@ async def _cmd_quote(message, arg, guild_id, author):
             await _send(message.channel, embeds.say("no quotes yet."), feedback=False)
             return
         body = "\n".join(
-            f"#{r['id']}: {r['text'][:120]}"
-            + (f" — <@{r['about']}>" if r.get("about") else "")
+            f"#{r['id']}: {r['text'][:120]}" + (f" — <@{r['about']}>" if r.get("about") else "")
             for r in rows
         )
         await _send(message.channel, embeds.say(body, title="quotes"), feedback=False)
@@ -3745,14 +4390,16 @@ async def _cmd_quote(message, arg, guild_id, author):
         return
 
     about = None
-    mentioned = [u for u in message.mentions if u.id != client.user.id]
+    mentioned = [u for u in message.mentions if u.id != typing.cast(typing.Any, client.user).id]
     if mentioned:
         about = str(mentioned[0].id)
     q = db.quote_random(guild_id, about=about)
     if not q:
-        await _send(message.channel, embeds.say(
-            f"no quotes yet. add one with `{p}quote add <text>`."
-        ), feedback=False)
+        await _send(
+            message.channel,
+            embeds.say(f"no quotes yet. add one with `{p}quote add <text>`."),
+            feedback=False,
+        )
         return
     who = f" — <@{q['about']}>" if q.get("about") else ""
     await _send(
@@ -3762,7 +4409,7 @@ async def _cmd_quote(message, arg, guild_id, author):
     )
 
 
-def _can_view_member_history(message, target_id: str) -> bool:
+def _can_view_member_history(message: typing.Any, target_id: str) -> bool:
     """Enforce the current-guild audit/member matrix for prefix commands."""
     if str(target_id) == str(message.author.id):
         return True
@@ -3782,10 +4429,10 @@ def _can_view_member_history(message, target_id: str) -> bool:
     )
 
 
-def _visible_history_rows(message, rows):
+def _visible_history_rows(message: typing.Any, rows: typing.Any):
     if message.guild is None:
         return list(rows)
-    visible = []
+    visible: list[typing.Any] = []
     for row in rows:
         channel_id = row.get("channel_id")
         try:
@@ -3797,15 +4444,21 @@ def _visible_history_rows(message, rows):
     return visible
 
 
-async def _cmd_user(message, arg, guild_id, author):
+async def _cmd_user(message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any):
     """Ask ANYTHING about a user with full omniscient database memory."""
     query = (arg or "").strip()
     target = None
     question = query
 
-    if message.mentions and [u for u in message.mentions if u.id != client.user.id]:
-        m_user = [u for u in message.mentions if u.id != client.user.id][0]
-        target = {"user_id": str(m_user.id), "username": m_user.name, "display_name": m_user.display_name}
+    if message.mentions and [
+        u for u in message.mentions if u.id != typing.cast(typing.Any, client.user).id
+    ]:
+        m_user = [u for u in message.mentions if u.id != typing.cast(typing.Any, client.user).id][0]
+        target = {
+            "user_id": str(m_user.id),
+            "username": m_user.name,
+            "display_name": m_user.display_name,
+        }
         question = re.sub(r"<@!?\d+>", "", query).strip()
     else:
         words = query.split()
@@ -3816,7 +4469,11 @@ async def _cmd_user(message, arg, guild_id, author):
                 question = " ".join(words[1:]).strip() if len(words) > 1 else ""
 
     if not target:
-        target = {"user_id": author, "username": message.author.name, "display_name": message.author.display_name}
+        target = {
+            "user_id": author,
+            "username": message.author.name,
+            "display_name": message.author.display_name,
+        }
 
     uid = target["user_id"]
     blocked = brain.reject_prompt_extraction(question or query)
@@ -3854,7 +4511,7 @@ async def _cmd_user(message, arg, guild_id, author):
     intel_text = (
         f"FULL RECORDED HISTORY & USER DOSSIER for {intel['display_name']} "
         f"(@{intel['username']}, ID {intel['user_id']}):\n"
-        f"- Total Recorded Messages: {intel['total_messages']} across {len(intel['channels'])} channels "
+        f"- Total Recorded Messages: {intel['total_messages']} across {len(typing.cast(typing.Any, intel['channels']))} channels "
         f"over {intel['active_days']} active days\n"
         f"- First Seen: {embeds.fmt_ts(intel['first_seen'])} · Last Seen: {embeds.fmt_ts(intel['last_seen'])}\n"
         f"- Avg Message Length: {intel['avg_len']} chars · Longest Message: {intel['max_len']} chars\n"
@@ -3862,44 +4519,54 @@ async def _cmd_user(message, arg, guild_id, author):
         f"- Bond Score: {rel['score']:+.2f} ({rel['bond_label']})\n"
         f"- Private Nickname: {rel.get('nickname') or 'none'}\n"
         f"- Open Beef/Grudge: {rel.get('grudge') or 'none'}\n"
-        f"- Stored Facts & Memories:\n" + ("\n".join(f"  • {f['content']}" for f in facts) if facts else "  (none)")
+        f"- Stored Facts & Memories:\n"
+        + ("\n".join(f"  • {f['content']}" for f in facts) if facts else "  (none)")
     )
     if intel["monthly"]:
         intel_text += "\n- Monthly Activity (most recent first):\n  " + "\n  ".join(
-            f"{m['month']}: {m['n']} msgs" for m in intel["monthly"]
+            f"{m['month']}: {m['n']} msgs"
+            for m in typing.cast(typing.Iterable[typing.Any], intel["monthly"])
         )
     if intel["channels"]:
         intel_text += "\n- Activity by Channel:\n  " + "\n  ".join(
-            f"#{ch['channel_name']}: {ch['n']} msgs" for ch in intel["channels"]
+            f"#{ch['channel_name']}: {ch['n']} msgs"
+            for ch in typing.cast(typing.Iterable[typing.Any], intel["channels"])
         )
     if intel["top_words"]:
-        intel_text += "\n- Favorite Words: " + ", ".join(intel["top_words"][:15])
+        intel_text += "\n- Favorite Words: " + ", ".join(
+            typing.cast(typing.Any, intel["top_words"][:15])
+        )
     if intel["bad_messages"]:
         intel_text += "\n- Flagged Bad/Offensive Messages:\n" + "\n".join(
-            f"  • [#{bm['channel_name']}] \"{bm['content']}\" (flagged: {bm['bad_words_found']})"
+            f'  • [#{bm["channel_name"]}] "{bm["content"]}" (flagged: {bm["bad_words_found"]})'
             for bm in intel["bad_messages"][:10]
         )
     if matching_messages:
-        intel_text += "\n- Messages matching this exact question across the full archive:\n" + "\n".join(
-            f"  • [{embeds.fmt_ts(row['created'])}] #{row['channel_name']}: "
-            f"\"{row['content'][:300]}\""
-            + (
-                f" [preceding context — {row['context_author']}: "
-                f"\"{row['context_before']}\"]"
-                if row.get("context_before")
-                else ""
+        intel_text += (
+            "\n- Messages matching this exact question across the full archive:\n"
+            + "\n".join(
+                f"  • [{embeds.fmt_ts(row['created'])}] #{row['channel_name']}: "
+                f'"{row["content"][:300]}"'
+                + (
+                    f' [preceding context — {row["context_author"]}: "{row["context_before"]}"]'
+                    if row.get("context_before")
+                    else ""
+                )
+                for row in matching_messages[:40]
             )
-            for row in matching_messages[:40]
         )
     if intel["recent_messages"]:
         intel_text += "\n- Recent Messages Sent (last 40):\n" + "\n".join(
-            f"  • [{embeds.fmt_ts(rm['created'])}] #{rm['channel_name']}: \"{rm['content'][:200]}\""
+            f'  • [{embeds.fmt_ts(rm["created"])}] #{rm["channel_name"]}: "{rm["content"][:200]}"'
             for rm in intel["recent_messages"][:40]
         )
     if intel["sample_messages"]:
-        intel_text += "\n- Older Messages (random samples across their whole history):\n" + "\n".join(
-            f"  • [{embeds.fmt_ts(rm['created'])}] #{rm['channel_name']}: \"{rm['content'][:200]}\""
-            for rm in intel["sample_messages"]
+        intel_text += (
+            "\n- Older Messages (random samples across their whole history):\n"
+            + "\n".join(
+                f'  • [{embeds.fmt_ts(rm["created"])}] #{rm["channel_name"]}: "{rm["content"][:200]}"'
+                for rm in intel["sample_messages"]
+            )
         )
 
     system_prompt = (
@@ -3925,9 +4592,14 @@ async def _cmd_user(message, arg, guild_id, author):
     async with message.channel.typing():
         try:
             resp = await ai.chat(
-                system_prompt, [{"role": "user", "content": user_prompt}],
-                max_tokens=800, model=config.MODEL_SMART, fallbacks=[],
-                task="assistant", scope_id=guild_id, user_id=author,
+                system_prompt,
+                [{"role": "user", "content": user_prompt}],
+                max_tokens=800,
+                model=config.MODEL_SMART,
+                fallbacks=[],
+                task="assistant",
+                scope_id=guild_id,
+                user_id=author,
                 prompt_version="user-intelligence-v1",
             )
             resp = brain.scrub_ai_output(resp)
@@ -3936,10 +4608,14 @@ async def _cmd_user(message, arg, guild_id, author):
                 embeds.say(resp, title=f"user intelligence: {intel['display_name']}"),
             )
         except Exception:
-            await _send(message.channel, embeds.error("failed to query user information."), feedback=False)
+            await _send(
+                message.channel, embeds.error("failed to query user information."), feedback=False
+            )
 
 
-async def _cmd_server(message, arg, guild_id, author):
+async def _cmd_server(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     """Ask ANYTHING about the server with full omniscient database memory."""
     if (
         message.guild is None
@@ -3963,12 +4639,16 @@ async def _cmd_server(message, arg, guild_id, author):
     await _send_private(message, embeds.say(aggregate, title="server aggregate"))
 
 
-async def _cmd_userinfo(message, arg, guild_id, author):
+async def _cmd_userinfo(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     """View detailed message and activity intelligence for a user."""
     target = db.find_user_by_name(arg, guild_id) if arg else None
     uid = target["user_id"] if target else author
     if not _can_view_member_history(message, uid):
-        await _send(message.channel, embeds.error("not authorized for that user's data."), feedback=False)
+        await _send(
+            message.channel, embeds.error("not authorized for that user's data."), feedback=False
+        )
         return
     intel = db.get_user_intelligence(uid, guild_id)
     intel["bad_messages"] = _visible_history_rows(message, intel["bad_messages"])
@@ -3990,48 +4670,67 @@ async def _cmd_userinfo(message, arg, guild_id, author):
     )
     if intel["monthly"]:
         body += "\n**Monthly Activity:**\n"
-        body += "\n".join(f"• {m['month']}: **{m['n']}** msgs" for m in intel["monthly"][:8]) + "\n"
+        body += (
+            "\n".join(
+                f"• {m['month']}: **{m['n']}** msgs"
+                for m in typing.cast(typing.Iterable[typing.Any], intel["monthly"][:8])
+            )
+            + "\n"
+        )
     if intel["top_words"]:
-        body += "\n**Favorite Words:** " + ", ".join(intel["top_words"][:12]) + "\n"
+        body += (
+            "\n**Favorite Words:** "
+            + ", ".join(typing.cast(typing.Any, intel["top_words"][:12]))
+            + "\n"
+        )
     if intel["bad_messages"]:
         body += "\n**Recent Flagged Bad Messages:**\n"
         for bm in intel["bad_messages"][:5]:
-            body += f"• `#{bm['channel_name']}`: \"{bm['content'][:100]}\" *(flags: {bm['bad_words_found']})*\n"
+            body += f'• `#{bm["channel_name"]}`: "{bm["content"][:100]}" *(flags: {bm["bad_words_found"]})*\n'
 
     await _send_private(message, embeds.ok(body, title="user intelligence"))
 
 
-async def _cmd_badmessages(message, arg, guild_id, author):
+async def _cmd_badmessages(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     """View flagged bad/offensive messages for a user."""
     target = db.find_user_by_name(arg, guild_id) if arg else None
     uid = target["user_id"] if target else author
     if not _can_view_member_history(message, uid):
-        await _send(message.channel, embeds.error("not authorized for that user's data."), feedback=False)
+        await _send(
+            message.channel, embeds.error("not authorized for that user's data."), feedback=False
+        )
         return
-    bad_msgs = _visible_history_rows(
-        message, db.get_user_bad_messages(uid, guild_id, limit=15)
-    )
+    bad_msgs = _visible_history_rows(message, db.get_user_bad_messages(uid, guild_id, limit=15))
     uname = target["display_name"] if target else author
     if not bad_msgs:
         await _send_private(
             message,
-            embeds.ok(f"No visible flagged messages recorded for **{uname}**.", title="bad messages"),
+            embeds.ok(
+                f"No visible flagged messages recorded for **{uname}**.", title="bad messages"
+            ),
         )
         return
 
     lines = [f"**Flagged Bad Messages** for **{uname}** ({len(bad_msgs)} items):\n"]
     for bm in bad_msgs:
-        lines.append(f"• `#{bm['channel_name']}`: \"{bm['content'][:120]}\" (words: {bm['bad_words_found']})")
+        lines.append(
+            f'• `#{bm["channel_name"]}`: "{bm["content"][:120]}" (words: {bm["bad_words_found"]})'
+        )
     await _send_private(message, embeds.ok("\n".join(lines)[:1900], title="bad messages"))
 
 
-async def _cmd_export(message, arg, guild_id, author):
+async def _cmd_export(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     if not _is_mod(message.author):
         await _send(message.channel, embeds.error("need manage server."), feedback=False)
         return
     data = db.export_guild(guild_id)
     raw = json.dumps(data, indent=2)
     from io import BytesIO
+
     buf = BytesIO(raw.encode("utf-8"))
     try:
         await message.author.send(
@@ -4047,7 +4746,9 @@ async def _cmd_export(message, arg, guild_id, author):
         )
 
 
-async def _cmd_import(message, arg, guild_id, author):
+async def _cmd_import(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     p = _prefix_for_scope(guild_id)
     if not _is_mod(message.author):
         await _send(message.channel, embeds.error("need manage server."), feedback=False)
@@ -4056,7 +4757,9 @@ async def _cmd_import(message, arg, guild_id, author):
     raw = ""
     if message.attachments:
         attachment = message.attachments[0]
-        if attachment.size > config.IMPORT_MAX_BYTES or not attachment.filename.lower().endswith(".json"):
+        if attachment.size > config.IMPORT_MAX_BYTES or not attachment.filename.lower().endswith(
+            ".json"
+        ):
             await _send(
                 message.channel,
                 embeds.error("import must be a UTF-8 .json file within the configured size limit."),
@@ -4066,13 +4769,21 @@ async def _cmd_import(message, arg, guild_id, author):
         try:
             raw = (await attachment.read()).decode("utf-8", errors="strict")
         except (UnicodeDecodeError, discord.HTTPException):
-            await _send(message.channel, embeds.error("couldn't read a valid UTF-8 JSON file."), feedback=False)
+            await _send(
+                message.channel,
+                embeds.error("couldn't read a valid UTF-8 JSON file."),
+                feedback=False,
+            )
             return
     if not raw:
-        await _send(message.channel, embeds.error(
-            f"usage: attach an export to `{p}import`, then repeat with "
-            f"`{p}import confirm` after reviewing the summary"
-        ), feedback=False)
+        await _send(
+            message.channel,
+            embeds.error(
+                f"usage: attach an export to `{p}import`, then repeat with "
+                f"`{p}import confirm` after reviewing the summary"
+            ),
+            feedback=False,
+        )
         return
     raw = raw.strip()
     if raw.startswith("```"):
@@ -4083,7 +4794,9 @@ async def _cmd_import(message, arg, guild_id, author):
         data = json.loads(raw)
         bundle = db.validate_import_bundle(data, guild_id)
     except (json.JSONDecodeError, ValueError):
-        await _send(message.channel, embeds.error("invalid or out-of-scope ImportBundleV2."), feedback=False)
+        await _send(
+            message.channel, embeds.error("invalid or out-of-scope ImportBundleV2."), feedback=False
+        )
         return
     summary = ", ".join(
         f"{section}={len(bundle.get(section, []))}"
@@ -4107,7 +4820,7 @@ async def _cmd_import(message, arg, guild_id, author):
     )
 
 
-async def _cmd_kb(message, arg, guild_id, author):
+async def _cmd_kb(message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any):
     """Reference knowledge base. `!kb` stats · `!kb search <q>` (anyone) ·
     `!kb add <topic> | <text>` / attach a .md/.txt · `!kb clear [topic]` (mods)."""
     p = _prefix_for_scope(guild_id)
@@ -4119,43 +4832,58 @@ async def _cmd_kb(message, arg, guild_id, author):
         total = kb.count(guild_id)
         tops = kb.topics(guild_id)
         if not total:
-            await _send(message.channel, embeds.say(
-                f"knowledge base is empty. mods can load it: "
-                f"`{p}kb add <topic> | <text>`, attach a .md/.txt file, or run "
-                f"`PYTHONPATH=src python -m owaua.fuck_religion` on the host.", title="knowledge base"
-            ), feedback=False)
+            await _send(
+                message.channel,
+                embeds.say(
+                    f"knowledge base is empty. mods can load it: "
+                    f"`{p}kb add <topic> | <text>`, attach a .md/.txt file, or run "
+                    f"`PYTHONPATH=src python -m owaua.fuck_religion` on the host.",
+                    title="knowledge base",
+                ),
+                feedback=False,
+            )
             return
         top_lines = "\n".join(f"- {t['topic']} ({t['passages']})" for t in tops[:20])
         more = f"\n…+{len(tops) - 20} more topics" if len(tops) > 20 else ""
-        await _send(message.channel, embeds.say(
-            f"{total} passages across {len(tops)} topics:\n{top_lines}{more}",
-            title="knowledge base"
-        ), feedback=False)
+        await _send(
+            message.channel,
+            embeds.say(
+                f"{total} passages across {len(tops)} topics:\n{top_lines}{more}",
+                title="knowledge base",
+            ),
+            feedback=False,
+        )
         return
 
     if sub in ("search", "find", "q"):
         if not rest:
-            await _send(message.channel, embeds.error(f"usage: `{p}kb search <query>`"),
-                        feedback=False)
+            await _send(
+                message.channel, embeds.error(f"usage: `{p}kb search <query>`"), feedback=False
+            )
             return
         hits = kb.search(rest, k=5, scope_id=guild_id)
         if not hits:
-            await _send(message.channel, embeds.say("nothing in the kb matches that.",
-                        title=f"kb: {rest[:60]}"), feedback=False)
+            await _send(
+                message.channel,
+                embeds.say("nothing in the kb matches that.", title=f"kb: {rest[:60]}"),
+                feedback=False,
+            )
             return
-        blocks = []
+        blocks: list[typing.Any] = []
         for h in hits:
             snippet = h["content"].strip().replace("\n", " ")
             if len(snippet) > 400:
                 snippet = snippet[:400].rstrip() + "…"
             blocks.append(f"**[{h.get('topic') or 'ref'}]** {snippet}")
-        await _send(message.channel, embeds.say("\n\n".join(blocks),
-                    title=f"kb: {rest[:60]}"), feedback=False)
+        await _send(
+            message.channel,
+            embeds.say("\n\n".join(blocks), title=f"kb: {rest[:60]}"),
+            feedback=False,
+        )
         return
 
     if not _is_mod(message.author):
-        await _send(message.channel, embeds.error("need manage server for that."),
-                    feedback=False)
+        await _send(message.channel, embeds.error("need manage server for that."), feedback=False)
         return
 
     if sub in ("add", "ingest", "learn"):
@@ -4178,8 +4906,11 @@ async def _cmd_kb(message, arg, guild_id, author):
             try:
                 raw = (await attachment.read()).decode("utf-8", errors="strict")
             except (UnicodeDecodeError, discord.HTTPException):
-                await _send(message.channel, embeds.error("couldn't read a valid UTF-8 file."),
-                            feedback=False)
+                await _send(
+                    message.channel,
+                    embeds.error("couldn't read a valid UTF-8 file."),
+                    feedback=False,
+                )
                 return
             fname = attachment.filename
             if not sep:
@@ -4187,19 +4918,27 @@ async def _cmd_kb(message, arg, guild_id, author):
             text = (text + "\n\n" + raw).strip() if text else raw
             source = f"discord-file:{fname}"
         if not text:
-            await _send(message.channel, embeds.error(
-                f"usage: `{p}kb add <topic> | <text>` — or attach a .md/.txt file"
-            ), feedback=False)
+            await _send(
+                message.channel,
+                embeds.error(f"usage: `{p}kb add <topic> | <text>` — or attach a .md/.txt file"),
+                feedback=False,
+            )
             return
         if brain.is_secret_payload(text):
-            await _send(message.channel, embeds.error(
-                "not storing that — looks like a prompt or source-code payload."
-            ), feedback=False)
+            await _send(
+                message.channel,
+                embeds.error("not storing that — looks like a prompt or source-code payload."),
+                feedback=False,
+            )
             return
         n = kb.ingest(text, topic=topic, title=topic, source=source, scope_id=guild_id)
-        await _send(message.channel, embeds.ok(
-            f"learned **{topic}** — stored {n} passage(s). kb now has {kb.count(guild_id)}."
-        ), feedback=False)
+        await _send(
+            message.channel,
+            embeds.ok(
+                f"learned **{topic}** — stored {n} passage(s). kb now has {kb.count(guild_id)}."
+            ),
+            feedback=False,
+        )
         return
 
     if sub in ("clear", "forget", "wipe"):
@@ -4224,28 +4963,35 @@ async def _cmd_kb(message, arg, guild_id, author):
             return
         if topic:
             deleted = kb.clear(guild_id, topic=topic)
-            await _send(message.channel, embeds.ok(
-                f"cleared topic **{topic}** ({deleted} passage(s))."), feedback=False)
+            await _send(
+                message.channel,
+                embeds.ok(f"cleared topic **{topic}** ({deleted} passage(s))."),
+                feedback=False,
+            )
         else:
             deleted = kb.clear(guild_id)
-            await _send(message.channel, embeds.ok(
-                f"wiped the whole knowledge base ({deleted} passage(s))."),
-                feedback=False)
+            await _send(
+                message.channel,
+                embeds.ok(f"wiped the whole knowledge base ({deleted} passage(s))."),
+                feedback=False,
+            )
         return
 
-    await _send(message.channel, embeds.error(
-        f"unknown kb action `{sub}`. try: `{p}kb`, `{p}kb search <q>`, "
-        f"`{p}kb add <topic> | <text>`, `{p}kb clear [topic]`"
-    ), feedback=False)
+    await _send(
+        message.channel,
+        embeds.error(
+            f"unknown kb action `{sub}`. try: `{p}kb`, `{p}kb search <q>`, "
+            f"`{p}kb add <topic> | <text>`, `{p}kb clear [topic]`"
+        ),
+        feedback=False,
+    )
 
 
-async def _cmd_ship(message, arg, guild_id, author):
+async def _cmd_ship(message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any):
     p = _prefix_for_scope(guild_id)
-    mentioned = [u for u in message.mentions if u.id != client.user.id]
+    mentioned = [u for u in message.mentions if u.id != typing.cast(typing.Any, client.user).id]
     if len(mentioned) < 2:
-        await _send(message.channel, embeds.error(
-            f"usage: `{p}ship @a @b`"
-        ), feedback=False)
+        await _send(message.channel, embeds.error(f"usage: `{p}ship @a @b`"), feedback=False)
         return
     a, b = mentioned[0], mentioned[1]
     seed = (a.id ^ b.id) % 101
@@ -4264,31 +5010,41 @@ async def _cmd_ship(message, arg, guild_id, author):
     await _send(message.channel, embeds.say(body, title="ship"), feedback=False)
 
 
-async def _cmd_8ball(message, arg, guild_id, author):
+async def _cmd_8ball(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     p = _prefix_for_scope(guild_id)
     if not arg:
-        await _send(message.channel, embeds.error(f"usage: `{p}8ball <question>`"),
-                    feedback=False)
+        await _send(message.channel, embeds.error(f"usage: `{p}8ball <question>`"), feedback=False)
         return
     answers = [
-        "yeah, obviously.", "nah.", "ask again when you're smarter.",
-        "absolutely. go ruin your life.", "the vibes say no.",
-        "it's giving yes.", "50/50 and i don't care.", "lmao no.",
-        "signs point to you already knowing.", "bet.", "hard pass.",
+        "yeah, obviously.",
+        "nah.",
+        "ask again when you're smarter.",
+        "absolutely. go ruin your life.",
+        "the vibes say no.",
+        "it's giving yes.",
+        "50/50 and i don't care.",
+        "lmao no.",
+        "signs point to you already knowing.",
+        "bet.",
+        "hard pass.",
         "the universe is laughing at that question.",
     ]
-    await _send(message.channel, embeds.say(
-        f"q: {arg}\na: {secrets.choice(answers)}"
-    , title="8ball"), feedback=False)
+    await _send(
+        message.channel,
+        embeds.say(f"q: {arg}\na: {secrets.choice(answers)}", title="8ball"),
+        feedback=False,
+    )
 
 
-async def _cmd_roastbattle(message, arg, guild_id, author):
+async def _cmd_roastbattle(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     p = _prefix_for_scope(guild_id)
-    mentioned = [u for u in message.mentions if u.id != client.user.id]
+    mentioned = [u for u in message.mentions if u.id != typing.cast(typing.Any, client.user).id]
     if not mentioned:
-        await _send(message.channel, embeds.error(
-            f"usage: `{p}roastbattle @user`"
-        ), feedback=False)
+        await _send(message.channel, embeds.error(f"usage: `{p}roastbattle @user`"), feedback=False)
         return
     target = mentioned[0]
     system = (
@@ -4304,20 +5060,31 @@ async def _cmd_roastbattle(message, arg, guild_id, author):
     async with message.channel.typing():
         try:
             text = await ai.chat(
-                system, [{"role": "user", "content": prompt}],
-                max_tokens=400, tier="smart",
-                task="creative", scope_id=guild_id, user_id=author,
+                system,
+                [{"role": "user", "content": prompt}],
+                max_tokens=400,
+                tier="smart",
+                task="creative",
+                scope_id=guild_id,
+                user_id=author,
                 prompt_version="roast-battle-v1",
             )
         except Exception as e:
             await _send(message.channel, embeds.error(f"battle cancelled: {e}"), feedback=False)
             return
     text = brain.scrub_ai_output(text)
-    await _send(message.channel, embeds.say(text, title=f"roast battle vs {target.display_name}"),
-                user_msg="roastbattle", bot_msg=text, author=author)
+    await _send(
+        message.channel,
+        embeds.say(text, title=f"roast battle vs {target.display_name}"),
+        user_msg="roastbattle",
+        bot_msg=text,
+        author=author,
+    )
 
 
-async def _cmd_trivia(message, arg, guild_id, author):
+async def _cmd_trivia(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     p = _prefix_for_scope(guild_id)
     trivia_key = f"trivia:{guild_id}:{message.channel.id}"
     existing = db.kv_get(trivia_key)
@@ -4325,17 +5092,21 @@ async def _cmd_trivia(message, arg, guild_id, author):
         try:
             active = json.loads(existing)
         except (TypeError, json.JSONDecodeError):
-            active = {}
+            active: dict[typing.Any, typing.Any] = {}
         if float(active.get("until") or 0) > time.time():
-            await _send(message.channel, embeds.error("a trivia question is already active here."), feedback=False)
+            await _send(
+                message.channel,
+                embeds.error("a trivia question is already active here."),
+                feedback=False,
+            )
             return
-    mems = [
-        dict(r) for r in db.scope_memories(guild_id) if r["subject"] == "server"
-    ][:30]
+    mems = [dict(r) for r in db.scope_memories(guild_id) if r["subject"] == "server"][:30]
     if len(mems) < 2:
-        await _send(message.channel, embeds.say(
-            "not enough memories yet — teach me stuff first."
-        ), feedback=False)
+        await _send(
+            message.channel,
+            embeds.say("not enough memories yet — teach me stuff first."),
+            feedback=False,
+        )
         return
     blob = "\n".join(f"- about {m['subject']}: {m['content']}" for m in mems)
     system = (
@@ -4357,14 +5128,23 @@ async def _cmd_trivia(message, arg, guild_id, author):
         return
     q = str(spec["question"])
     ans = str(spec.get("answer", "")).strip()
-    await _send(message.channel, embeds.say(
-        f"{q}\n\n(answer in 20s — or `{p}trivia` again)"
-    , title="trivia"), feedback=False)
+    await _send(
+        message.channel,
+        embeds.say(f"{q}\n\n(answer in 20s — or `{p}trivia` again)", title="trivia"),
+        feedback=False,
+    )
     token = secrets.token_urlsafe(12)
-    db.kv_set(trivia_key, json.dumps({
-        "answer": ans.casefold(), "until": time.time() + 25, "token": token,
-        "owner": author,
-    }))
+    db.kv_set(
+        trivia_key,
+        json.dumps(
+            {
+                "answer": ans.casefold(),
+                "until": time.time() + 25,
+                "token": token,
+                "owner": author,
+            }
+        ),
+    )
 
     async def _reveal():
         await asyncio.sleep(20)
@@ -4388,7 +5168,9 @@ async def _cmd_trivia(message, arg, guild_id, author):
     _start_message_task(_reveal())
 
 
-async def _cmd_whoami(message, arg, guild_id, author):
+async def _cmd_whoami(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     """Bot roasts what it knows about you."""
     facts = db.memories_about(author, guild_id)
     rel = db.relationship_get(author, guild_id)
@@ -4408,27 +5190,39 @@ async def _cmd_whoami(message, arg, guild_id, author):
     async with message.channel.typing():
         try:
             text = await ai.chat(
-                system, [{"role": "user", "content": prompt}],
-                max_tokens=350, tier="smart",
-                task="assistant", scope_id=guild_id, user_id=author,
+                system,
+                [{"role": "user", "content": prompt}],
+                max_tokens=350,
+                tier="smart",
+                task="assistant",
+                scope_id=guild_id,
+                user_id=author,
                 prompt_version="whoami-v1",
             )
         except Exception:
-            await _send(message.channel, embeds.error("couldn't generate that private summary."), feedback=False)
+            await _send(
+                message.channel,
+                embeds.error("couldn't generate that private summary."),
+                feedback=False,
+            )
             return
     text = brain.scrub_ai_output(text)
     await _send_private(message, embeds.say(text, title="who you are to me"))
 
 
-async def _cmd_lessons(message, arg, guild_id, author):
+async def _cmd_lessons(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     if not _is_mod(message.author):
         await _send(message.channel, embeds.error("need manage server."), feedback=False)
         return
-    rows = db.all_lessons(guild_id)
+    rows: typing.Any = typing.cast(typing.Any, db.all_lessons(guild_id))
     if not rows:
-        await _send(message.channel, embeds.say("no lessons yet — rate my replies."), feedback=False)
+        await _send(
+            message.channel, embeds.say("no lessons yet — rate my replies."), feedback=False
+        )
         return
-    lines = []
+    lines: list[typing.Any] = []
     for r in rows[-30:]:
         content = str(r["content"] or "")
         if brain.any_prompt_leaked(content):
@@ -4438,14 +5232,20 @@ async def _cmd_lessons(message, arg, guild_id, author):
     await _send(message.channel, embeds.say(body, title="lessons"), feedback=False)
 
 
-async def _cmd_resetconvo(message, arg, guild_id, author):
+async def _cmd_resetconvo(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     n = db.convo_clear(author, guild_id)
-    await _send(message.channel, embeds.ok(
-        f"wiped our short-term chat history ({n} turns). long-term memories stay."
-    ), feedback=False)
+    await _send(
+        message.channel,
+        embeds.ok(f"wiped our short-term chat history ({n} turns). long-term memories stay."),
+        feedback=False,
+    )
 
 
-async def _cmd_dmblock(message, arg, guild_id, author):
+async def _cmd_dmblock(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     """Opt out of bot-relayed DMs from other users (top.gg DM rule)."""
     p = _prefix_for_scope(guild_id)
     db.user_flag_set(author, "dm_block", "1")
@@ -4459,19 +5259,19 @@ async def _cmd_dmblock(message, arg, guild_id, author):
     )
 
 
-async def _cmd_dmunblock(message, arg, guild_id, author):
+async def _cmd_dmunblock(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     p = _prefix_for_scope(guild_id)
     db.user_flag_set(author, "dm_block", "0")
     await _send(
         message.channel,
-        embeds.ok(
-            f"bot-relayed DMs re-enabled. block again with `{p}dmblock`."
-        ),
+        embeds.ok(f"bot-relayed DMs re-enabled. block again with `{p}dmblock`."),
         feedback=False,
     )
 
 
-async def _cmd_mydm(message, arg, guild_id, author):
+async def _cmd_mydm(message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any):
     p = _prefix_for_scope(guild_id)
     blocked = db.user_flag_get(author, "dm_block") == "1"
     status = "BLOCKED (opted out)" if blocked else "allowed"
@@ -4487,7 +5287,9 @@ async def _cmd_mydm(message, arg, guild_id, author):
     )
 
 
-async def _cmd_privacy(message, arg, guild_id, author):
+async def _cmd_privacy(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     """Private, pre-ToS controls for consent, export, and erasure."""
     p = _prefix_for_scope(guild_id)
     raw = (arg or "").strip()
@@ -4538,7 +5340,9 @@ async def _cmd_privacy(message, arg, guild_id, author):
         except (discord.Forbidden, discord.HTTPException):
             await _send(
                 message.channel,
-                embeds.error("I couldn't DM the export; use `/privacy export` for ephemeral delivery."),
+                embeds.error(
+                    "I couldn't DM the export; use `/privacy export` for ephemeral delivery."
+                ),
                 feedback=False,
             )
         return
@@ -4574,31 +5378,43 @@ async def _cmd_privacy(message, arg, guild_id, author):
     await _send_private(message, embeds.say(body, title="privacy"))
 
 
-async def _cmd_unblock(message, arg, guild_id, author):
+async def _cmd_unblock(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     """Owner command: unblock a user."""
     if not config.is_bot_owner(author):
-        await _send(message.channel, embeds.error("only the bot owner can use unblock."), feedback=False)
+        await _send(
+            message.channel, embeds.error("only the bot owner can use unblock."), feedback=False
+        )
         return
     await _send(
         message.channel,
-        embeds.error("Discord-accessible block mutations are disabled; use the authenticated host CLI."),
+        embeds.error(
+            "Discord-accessible block mutations are disabled; use the authenticated host CLI."
+        ),
         feedback=False,
     )
 
 
-async def _cmd_block(message, arg, guild_id, author):
+async def _cmd_block(
+    message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
+):
     """Owner command: block a user."""
     if not config.is_bot_owner(author):
-        await _send(message.channel, embeds.error("only the bot owner can use block."), feedback=False)
+        await _send(
+            message.channel, embeds.error("only the bot owner can use block."), feedback=False
+        )
         return
     await _send(
         message.channel,
-        embeds.error("Discord-accessible block mutations are disabled; use the authenticated host CLI."),
+        embeds.error(
+            "Discord-accessible block mutations are disabled; use the authenticated host CLI."
+        ),
         feedback=False,
     )
 
 
-async def _unblock_tos_user(message, target: str, guild_id: str, author: str) -> None:
+async def _unblock_tos_user(message: typing.Any, target: str, guild_id: str, author: str) -> None:
     """Remove one ToS-created block and best-effort notify the affected user."""
     try:
         uid = blocked.normalize_user_id(target)
@@ -4669,7 +5485,7 @@ async def _unblock_tos_user(message, target: str, guild_id: str, author: str) ->
     )
 
 
-async def _cmd_tos(message, arg, guild_id, author):
+async def _cmd_tos(message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any):
     """Show/reject web acceptance and owner-only break/review controls."""
     p = _prefix_for_scope(guild_id)
     raw_parts = (arg or "").strip().split(maxsplit=2)
@@ -4732,8 +5548,7 @@ async def _cmd_tos(message, arg, guild_id, author):
         await _send_private(
             message,
             embeds.say(
-                "\n".join(lines[:100])
-                + f"\n\nApprove one with `{p}tos review allow <id>`.",
+                "\n".join(lines[:100]) + f"\n\nApprove one with `{p}tos review allow <id>`.",
                 title=f"tos review ({len(reviews)} pending)",
             ),
         )
@@ -4741,20 +5556,31 @@ async def _cmd_tos(message, arg, guild_id, author):
 
     if sub in ("break", "breaks", "violations", "blocked"):
         if not config.is_bot_owner(author):
-            await _send(message.channel, embeds.error("only the bot owner can review ToS break logs."), feedback=False)
+            await _send(
+                message.channel,
+                embeds.error("only the bot owner can review ToS break logs."),
+                feedback=False,
+            )
             return
         action = raw_parts[1].lower() if len(raw_parts) > 1 else "list"
         target = raw_parts[2] if len(raw_parts) > 2 else ""
 
         try:
             from owaua import tos_cli
+
             entries = tos_cli.collect_tos_blocks()
             if not entries:
-                await _send(message.channel, embeds.say("no ToS-blocked users currently recorded.", title="tos break review"), feedback=False)
+                await _send(
+                    message.channel,
+                    embeds.say(
+                        "no ToS-blocked users currently recorded.", title="tos break review"
+                    ),
+                    feedback=False,
+                )
                 return
 
             if action in ("list", "ls", "show"):
-                lines = []
+                lines: list[typing.Any] = []
                 for i, (uid, meta) in enumerate(entries, 1):
                     reason = meta.get("reason") or "(no reason recorded)"
                     cat = meta.get("category") or "general"
@@ -4762,22 +5588,24 @@ async def _cmd_tos(message, arg, guild_id, author):
                     offending = (meta.get("offending_text") or "").strip().replace("\n", " ")
                     if len(offending) > 80:
                         offending = offending[:80] + "…"
-                    lines.append(f"**[{i}] `{uid}`** ({cat})\n  • why: {reason}\n  • when: {when}" + (f"\n  • input: `{offending}`" if offending else ""))
+                    lines.append(
+                        f"**[{i}] `{uid}`** ({cat})\n  • why: {reason}\n  • when: {when}"
+                        + (f"\n  • input: `{offending}`" if offending else "")
+                    )
                 body = "\n\n".join(lines)
                 # Embed descriptions are limited to 4,096 characters.  Do not silently
                 # truncate a global owner audit: send the complete review as a private
                 # text attachment when it no longer fits comfortably in an embed.
                 if len(body) <= 3_800:
                     await _send_private(
-                        message, embeds.say(body, title=f"tos break review ({len(entries)} blocked)")
+                        message,
+                        embeds.say(body, title=f"tos break review ({len(entries)} blocked)"),
                     )
                 else:
                     from io import BytesIO
 
                     payload = body.encode("utf-8")
-                    attachment = discord.File(
-                        BytesIO(payload), filename="owaua-tos-break-list.txt"
-                    )
+                    attachment = discord.File(BytesIO(payload), filename="owaua-tos-break-list.txt")
                     try:
                         await message.author.send(
                             embed=embeds.say(
@@ -4794,7 +5622,9 @@ async def _cmd_tos(message, arg, guild_id, author):
                     except (discord.Forbidden, discord.HTTPException):
                         await _send(
                             message.channel,
-                            embeds.error("I couldn't DM you the ToS-break list. Enable DMs and try again."),
+                            embeds.error(
+                                "I couldn't DM you the ToS-break list. Enable DMs and try again."
+                            ),
                             feedback=False,
                         )
                 return
@@ -4803,7 +5633,11 @@ async def _cmd_tos(message, arg, guild_id, author):
                 tid = target or raw_parts[1]
                 meta = blocked.get_blocked_user(tid)
                 if not meta:
-                    await _send(message.channel, embeds.error(f"user `{tid}` is not dynamically ToS-blocked."), feedback=False)
+                    await _send(
+                        message.channel,
+                        embeds.error(f"user `{tid}` is not dynamically ToS-blocked."),
+                        feedback=False,
+                    )
                     return
                 reason = meta.get("reason") or "(none)"
                 cat = meta.get("category") or "general"
@@ -4844,7 +5678,14 @@ async def _cmd_tos(message, arg, guild_id, author):
                 await _unblock_tos_user(message, target, guild_id, author)
                 return
 
-            await _send(message.channel, embeds.say(f"usage: `{p}tos break list`, `{p}tos break info <id>`, `{p}tos break unblock <id>`", title="tos break help"), feedback=False)
+            await _send(
+                message.channel,
+                embeds.say(
+                    f"usage: `{p}tos break list`, `{p}tos break info <id>`, `{p}tos break unblock <id>`",
+                    title="tos break help",
+                ),
+                feedback=False,
+            )
             return
         except Exception as e:
             await _send(message.channel, embeds.error(f"tos break error: {e}"), feedback=False)
@@ -4892,7 +5733,6 @@ async def _cmd_tos(message, arg, guild_id, author):
         feedback=False,
         view=view,
     )
-
 
 
 if __name__ == "__main__":

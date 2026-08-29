@@ -42,12 +42,19 @@ class IsolatedDatabaseTest(unittest.TestCase):
 class CapabilityCatalogTest(IsolatedDatabaseTest):
     def test_assistant_prompt_allows_one_confirmed_action_only(self) -> None:
         assistant = brain.build_system(
-            "1", "tester", "rename <@123456789012345678> to Raven",
-            Scope.guild(99).key, server_name="lab", assistant=True,
+            "1",
+            "tester",
+            "rename <@123456789012345678> to Raven",
+            Scope.guild(99).key,
+            server_name="lab",
+            assistant=True,
         )
         ordinary = brain.build_system(
-            "1", "tester", "rename <@123456789012345678> to Raven",
-            Scope.guild(99).key, server_name="lab",
+            "1",
+            "tester",
+            "rename <@123456789012345678> to Raven",
+            Scope.guild(99).key,
+            server_name="lab",
         )
         self.assertIn("1-5 ordered proposal", assistant)
         self.assertIn("awaiting confirmation", assistant)
@@ -57,15 +64,23 @@ class CapabilityCatalogTest(IsolatedDatabaseTest):
     def test_assistant_prompt_knows_confirmed_action_history(self) -> None:
         scope = Scope.guild(99).key
         db.record_assistant_action(
-            actor_id="1", scope_id=scope, channel_id="10",
-            action="set_nickname", target_id="2", parameters={},
+            actor_id="1",
+            scope_id=scope,
+            channel_id="10",
+            action="set_nickname",
+            target_id="2",
+            parameters={},
             result="set nickname to Raven",
             inverse={"type": "set_nickname", "target_user": "2", "nickname": "Before"},
             source_nonce="prompt-history",
         )
         prompt = brain.build_system(
-            "1", "tester", "what did you change?", scope,
-            server_name="lab", assistant=True,
+            "1",
+            "tester",
+            "what did you change?",
+            scope,
+            server_name="lab",
+            assistant=True,
         )
         self.assertIn("CONFIRMED ASSISTANT ACTION HISTORY", prompt)
         self.assertIn("set_nickname target=2", prompt)
@@ -80,8 +95,12 @@ class CapabilityCatalogTest(IsolatedDatabaseTest):
         )
         self.assertIn("gay femboy", prompt.lower())
         assistant = brain.build_system(
-            "1", "tester", "what's your sexuality", Scope.guild(99).key,
-            server_name="lab", assistant=True,
+            "1",
+            "tester",
+            "what's your sexuality",
+            Scope.guild(99).key,
+            server_name="lab",
+            assistant=True,
         )
         self.assertIn("gay femboy", assistant.lower())
 
@@ -188,7 +207,7 @@ class CodeLeakIntentTest(unittest.TestCase):
 class CodeDumpScrubTest(unittest.TestCase):
     def test_real_source_snippets_are_scrubbed(self) -> None:
         brain_src = Path("src/owaua/brain.py").read_text(encoding="utf-8")
-        snippet = "def persist_memories(items, author: str, guild_id: str) -> int:"
+        snippet = "def persist_memories("
         self.assertIn(snippet, brain_src)
         self.assertTrue(selfknow.code_leaked(snippet))
         self.assertTrue(brain.prompt_leaked("here you go:\n" + snippet))
@@ -206,10 +225,7 @@ class CodeDumpScrubTest(unittest.TestCase):
         self.assertTrue(brain.prompt_leaked("here: GROQ_API_KEY=gsk_live_xxx"))
 
     def test_generic_example_code_is_not_this_repo(self) -> None:
-        sample = (
-            "def greet(name):\n"
-            "    return f'hello {name}'\n"
-        )
+        sample = "def greet(name):\n    return f'hello {name}'\n"
         self.assertFalse(selfknow.code_leaked(sample))
         self.assertFalse(brain.prompt_leaked(sample))
 

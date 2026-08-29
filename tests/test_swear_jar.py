@@ -1,3 +1,5 @@
+# pyright: reportUnknownLambdaType=false
+import typing
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
@@ -29,7 +31,9 @@ class SwearJarTests(unittest.TestCase):
         )
         self.assertEqual(swearjar.count_swears(requested), 35)
         self.assertGreaterEqual(
-            swearjar.count_swears("asshat asswipe bellend bugger dipshit fuckwit hell shithead tosser"),
+            swearjar.count_swears(
+                "asshat asswipe bellend bugger dipshit fuckwit hell shithead tosser"
+            ),
             9,
         )
 
@@ -44,7 +48,18 @@ class SwearJarTests(unittest.TestCase):
 
     def test_concurrent_increments_do_not_lose_counts(self):
         with ThreadPoolExecutor(max_workers=8) as executor:
-            list(executor.map(lambda _index: db.swear_jar_increment("1", "42", 1), range(50)))
+            list(
+                executor.map(
+                    typing.cast(
+                        typing.Callable[..., typing.Any],
+                        typing.cast(
+                            typing.Callable[[typing.Any], typing.Any],
+                            lambda _index: db.swear_jar_increment("1", "42", 1),
+                        ),
+                    ),
+                    range(50),
+                )
+            )
         self.assertEqual(db.swear_jar_count("guild:1", "42"), 50)
 
     def test_dashboard_setting_defaults_on_and_can_be_configured(self):

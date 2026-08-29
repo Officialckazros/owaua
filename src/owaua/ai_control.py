@@ -3,6 +3,7 @@
 The module deliberately stores metadata only.  Prompt and response contents never
 enter traces, provider-health state, or usage counters.
 """
+
 from __future__ import annotations
 
 import collections
@@ -12,6 +13,7 @@ import hashlib
 import math
 import threading
 import time
+import typing
 import uuid
 from typing import Any, Final, Iterable, Mapping, Sequence
 
@@ -34,15 +36,33 @@ class AIPolicy:
 
 POLICIES: Final[dict[str, AIPolicy]] = {
     "chat": AIPolicy("chat", "smart", "brain-v5", 1_200, 0.8),
-    "assistant": AIPolicy("assistant", "expert", "assistant-v4", 2_000, 0.35, structured=True, tools=True),
-    "memory_extract": AIPolicy("memory_extract", "fast", "memory-v4", 600, 0.15, structured=True, reasoning_allowed=False),
-    "structured_repair": AIPolicy("structured_repair", "fast", "json-repair-v1", 1_000, 0.0, structured=True, reasoning_allowed=False),
+    "assistant": AIPolicy(
+        "assistant", "expert", "assistant-v4", 2_000, 0.35, structured=True, tools=True
+    ),
+    "memory_extract": AIPolicy(
+        "memory_extract", "fast", "memory-v4", 600, 0.15, structured=True, reasoning_allowed=False
+    ),
+    "structured_repair": AIPolicy(
+        "structured_repair",
+        "fast",
+        "json-repair-v1",
+        1_000,
+        0.0,
+        structured=True,
+        reasoning_allowed=False,
+    ),
     "workflow": AIPolicy("workflow", "smart", "workflow-v3", 1_200, 0.35),
     "fact_check": AIPolicy("fact_check", "expert", "fact-check-v2", 1_200, 0.2),
-    "moderation": AIPolicy("moderation", "fast", "moderation-v3", 600, 0.0, structured=True, reasoning_allowed=False),
-    "vision": AIPolicy("vision", "vision", "vision-v3", 700, 0.2, vision=True, reasoning_allowed=False),
+    "moderation": AIPolicy(
+        "moderation", "fast", "moderation-v3", 600, 0.0, structured=True, reasoning_allowed=False
+    ),
+    "vision": AIPolicy(
+        "vision", "vision", "vision-v3", 700, 0.2, vision=True, reasoning_allowed=False
+    ),
     "recap": AIPolicy("recap", "smart", "recap-v4", 1_200, 0.3),
-    "planning": AIPolicy("planning", "expert", "planning-v2", 1_600, 0.25, structured=True, tools=True),
+    "planning": AIPolicy(
+        "planning", "expert", "planning-v2", 1_600, 0.25, structured=True, tools=True
+    ),
     "creative": AIPolicy("creative", "smart", "creative-v2", 1_200, 0.85),
 }
 
@@ -108,8 +128,12 @@ def route(
         task=policy.task,
         tier=tier,
         prompt_version=str(prompt_version or policy.prompt_version)[:80],
-        max_tokens=max(1, min(int(max_tokens or policy.max_output_tokens), policy.max_output_tokens)),
-        temperature=max(0.0, min(float(policy.temperature if temperature is None else temperature), 1.5)),
+        max_tokens=max(
+            1, min(int(max_tokens or policy.max_output_tokens), policy.max_output_tokens)
+        ),
+        temperature=max(
+            0.0, min(float(policy.temperature if temperature is None else temperature), 1.5)
+        ),
         mode=mode,
     )
 
@@ -147,7 +171,9 @@ def record_provider_result(
     with _health_lock:
         state = _health.setdefault(key, _ProviderHealth())
         latency = max(0.0, float(latency_ms))
-        state.latency_ms = latency if state.latency_ms <= 0 else (state.latency_ms * 0.8 + latency * 0.2)
+        state.latency_ms = (
+            latency if state.latency_ms <= 0 else (state.latency_ms * 0.8 + latency * 0.2)
+        )
         if success:
             state.successes += 1
             state.consecutive_failures = 0
@@ -161,28 +187,32 @@ def record_provider_result(
         if state.consecutive_failures >= threshold:
             exponent = min(4, state.consecutive_failures - threshold)
             state.opened_until = time.monotonic() + min(
-                900.0, max(5.0, float(config.AI_CIRCUIT_COOLDOWN_SECONDS)) * (2 ** exponent)
+                900.0, max(5.0, float(config.AI_CIRCUIT_COOLDOWN_SECONDS)) * (2**exponent)
             )
 
 
 def provider_health_snapshot() -> list[dict[str, Any]]:
     now_value = time.monotonic()
     with _health_lock:
-        rows = []
+        rows: list[typing.Any] = []
         for model, state in _health.items():
             total = state.successes + state.failures
             success_rate = state.successes / total if total else 1.0
-            rows.append({
-                "model": model,
-                "health": round(success_rate * 100.0, 1),
-                "successes": state.successes,
-                "failures": state.failures,
-                "consecutive_failures": state.consecutive_failures,
-                "latency_ms": round(state.latency_ms, 1),
-                "circuit_open_seconds": round(max(0.0, state.opened_until - now_value), 1),
-                "last_error": state.last_error,
-            })
-        return sorted(rows, key=lambda row: (-row["circuit_open_seconds"], row["health"], row["model"]))
+            rows.append(
+                {
+                    "model": model,
+                    "health": round(success_rate * 100.0, 1),
+                    "successes": state.successes,
+                    "failures": state.failures,
+                    "consecutive_failures": state.consecutive_failures,
+                    "latency_ms": round(state.latency_ms, 1),
+                    "circuit_open_seconds": round(max(0.0, state.opened_until - now_value), 1),
+                    "last_error": state.last_error,
+                }
+            )
+        return sorted(
+            rows, key=lambda row: (-row["circuit_open_seconds"], row["health"], row["model"])
+        )
 
 
 _usage_lock = threading.Lock()
@@ -209,10 +239,14 @@ class AIBudgetExceeded(RuntimeError):
     """A paid-AI request was rejected before another provider call was made."""
 
 
-def _retry_after(bucket: collections.deque, now_value: float, window: float = 60.0) -> int:
+def _retry_after(
+    bucket: collections.deque[typing.Any], now_value: float, window: float = 60.0
+) -> int:
     if not bucket:
         return 1
-    oldest = float(bucket[0][0] if isinstance(bucket[0], tuple) else bucket[0])
+    oldest = float(
+        typing.cast(typing.Any, bucket[0][0] if isinstance(bucket[0], tuple) else bucket[0])
+    )
     return max(1, math.ceil(window - (now_value - oldest)))
 
 
@@ -256,7 +290,12 @@ def _cleanup_usage_maps(now_value: float) -> None:
             _token_usage_daily.pop(key, None)
 
 
-def _budget_error(bucket: collections.deque, now_value: float, window: float = 60.0, msg: str | None = None) -> AIBudgetExceeded:
+def _budget_error(
+    bucket: collections.deque[typing.Any],
+    now_value: float,
+    window: float = 60.0,
+    msg: str | None = None,
+) -> AIBudgetExceeded:
     wait_s = _retry_after(bucket, now_value, window)
     if msg:
         return AIBudgetExceeded(f"{msg}; retry in {wait_s}s")
@@ -267,9 +306,7 @@ def _budget_error(bucket: collections.deque, now_value: float, window: float = 6
     return AIBudgetExceeded(f"AI spending limit reached; retry in {wait_s}s")
 
 
-def check_request_budget(
-    scope_id: str | None, task: str, *, user_id: str | None = None
-) -> None:
+def check_request_budget(scope_id: str | None, task: str, *, user_id: str | None = None) -> None:
     """Atomically admit one logical AI request across shared hard ceilings (minute, hour, day).
 
     The task is accepted for trace/caller compatibility but deliberately is not
@@ -301,41 +338,41 @@ def check_request_budget(
         _cleanup_usage_maps(now_value)
 
         # 1. Global Checks
-        glob_min = _usage.setdefault(('global', '*'), collections.deque())
+        glob_min = _usage.setdefault(("global", "*"), collections.deque())
         _prune_times(glob_min, now_value, 60.0)
         if len(glob_min) >= host_min_limit:
             raise _budget_error(glob_min, now_value, 60.0)
 
-        glob_hr = _usage_hourly.setdefault(('global', '*'), collections.deque())
+        glob_hr = _usage_hourly.setdefault(("global", "*"), collections.deque())
         _prune_times(glob_hr, now_value, 3600.0)
         if len(glob_hr) >= host_hr_limit:
             raise _budget_error(glob_hr, now_value, 3600.0)
 
-        glob_day = _usage_daily.setdefault(('global', '*'), collections.deque())
+        glob_day = _usage_daily.setdefault(("global", "*"), collections.deque())
         _prune_times(glob_day, now_value, 86400.0)
         if len(glob_day) >= host_day_limit:
             raise _budget_error(glob_day, now_value, 86400.0)
 
         # 2. Scope Checks
         if scope:
-            sc_min = _usage.setdefault(('scope', scope), collections.deque())
+            sc_min = _usage.setdefault(("scope", scope), collections.deque())
             _prune_times(sc_min, now_value, 60.0)
             if len(sc_min) >= scope_limit if (scope_limit := scope_min_limit) else host_min_limit:
                 raise _budget_error(sc_min, now_value, 60.0)
 
         # 3. User Checks (exempt bot owner)
         if user and not is_owner:
-            u_min = _usage.setdefault(('user', user), collections.deque())
+            u_min = _usage.setdefault(("user", user), collections.deque())
             _prune_times(u_min, now_value, 60.0)
             if len(u_min) >= user_min_limit:
                 raise _budget_error(u_min, now_value, 60.0)
 
-            u_hr = _usage_hourly.setdefault(('user', user), collections.deque())
+            u_hr = _usage_hourly.setdefault(("user", user), collections.deque())
             _prune_times(u_hr, now_value, 3600.0)
             if len(u_hr) >= user_hr_limit:
                 raise _budget_error(u_hr, now_value, 3600.0)
 
-            u_day = _usage_daily.setdefault(('user', user), collections.deque())
+            u_day = _usage_daily.setdefault(("user", user), collections.deque())
             _prune_times(u_day, now_value, 86400.0)
             if len(u_day) >= user_day_limit:
                 raise _budget_error(u_day, now_value, 86400.0)
@@ -348,7 +385,7 @@ def check_request_budget(
         glob_hr.append(now_value)
         glob_day.append(now_value)
         if scope:
-            _usage.setdefault(('scope', scope), collections.deque()).append(now_value)
+            _usage.setdefault(("scope", scope), collections.deque()).append(now_value)
 
 
 def reserve_provider_attempt(
@@ -363,25 +400,20 @@ def reserve_provider_attempt(
     is_owner = bool(user and config.is_bot_owner(user))
     token_cost = max(1, int(estimated_tokens))
 
-    host_attempt_limit = max(
-        1, min(10_000, int(config.AI_PROVIDER_ATTEMPTS_PER_MINUTE))
-    )
-    host_token_min_limit = max(
-        1_000, min(10_000_000, int(config.AI_TOKEN_BUDGET_PER_MINUTE))
-    )
-    host_token_hr_limit = max(
-        50_000, min(50_000_000, int(config.AI_TOKEN_BUDGET_PER_HOUR))
-    )
-    host_token_day_limit = max(
-        200_000, min(200_000_000, int(config.AI_TOKEN_BUDGET_PER_DAY))
-    )
+    host_attempt_limit = max(1, min(10_000, int(config.AI_PROVIDER_ATTEMPTS_PER_MINUTE)))
+    host_token_min_limit = max(1_000, min(10_000_000, int(config.AI_TOKEN_BUDGET_PER_MINUTE)))
+    host_token_hr_limit = max(50_000, min(50_000_000, int(config.AI_TOKEN_BUDGET_PER_HOUR)))
+    host_token_day_limit = max(200_000, min(200_000_000, int(config.AI_TOKEN_BUDGET_PER_DAY)))
 
     scope_token_min_limit = host_token_min_limit
     if scope:
         settings = db.guild_settings(scope)
         scope_token_min_limit = max(
             1_000,
-            min(host_token_min_limit, int(settings.get("ai_tokens_per_minute") or host_token_min_limit)),
+            min(
+                host_token_min_limit,
+                int(settings.get("ai_tokens_per_minute") or host_token_min_limit),
+            ),
         )
 
     user_token_min_limit = max(
@@ -405,41 +437,41 @@ def reserve_provider_attempt(
             raise _budget_error(_provider_attempts, now_value, 60.0)
 
         # 1. Global Token Checks
-        g_min_tokens = _token_usage.setdefault(('global', '*'), collections.deque())
+        g_min_tokens = _token_usage.setdefault(("global", "*"), collections.deque())
         _prune_tokens(g_min_tokens, now_value, 60.0)
         if sum(cost for _t, cost in g_min_tokens) + token_cost > host_token_min_limit:
             raise _budget_error(g_min_tokens, now_value, 60.0)
 
-        g_hr_tokens = _token_usage_hourly.setdefault(('global', '*'), collections.deque())
+        g_hr_tokens = _token_usage_hourly.setdefault(("global", "*"), collections.deque())
         _prune_tokens(g_hr_tokens, now_value, 3600.0)
         if sum(cost for _t, cost in g_hr_tokens) + token_cost > host_token_hr_limit:
             raise _budget_error(g_hr_tokens, now_value, 3600.0)
 
-        g_day_tokens = _token_usage_daily.setdefault(('global', '*'), collections.deque())
+        g_day_tokens = _token_usage_daily.setdefault(("global", "*"), collections.deque())
         _prune_tokens(g_day_tokens, now_value, 86400.0)
         if sum(cost for _t, cost in g_day_tokens) + token_cost > host_token_day_limit:
             raise _budget_error(g_day_tokens, now_value, 86400.0)
 
         # 2. Scope Token Checks
         if scope:
-            sc_tokens = _token_usage.setdefault(('scope', scope), collections.deque())
+            sc_tokens = _token_usage.setdefault(("scope", scope), collections.deque())
             _prune_tokens(sc_tokens, now_value, 60.0)
             if sum(cost for _t, cost in sc_tokens) + token_cost > scope_token_min_limit:
                 raise _budget_error(sc_tokens, now_value, 60.0)
 
         # 3. User Token Checks (exempt bot owner)
         if user and not is_owner:
-            u_min_tokens = _token_usage.setdefault(('user', user), collections.deque())
+            u_min_tokens = _token_usage.setdefault(("user", user), collections.deque())
             _prune_tokens(u_min_tokens, now_value, 60.0)
             if sum(cost for _t, cost in u_min_tokens) + token_cost > user_token_min_limit:
                 raise _budget_error(u_min_tokens, now_value, 60.0)
 
-            u_hr_tokens = _token_usage_hourly.setdefault(('user', user), collections.deque())
+            u_hr_tokens = _token_usage_hourly.setdefault(("user", user), collections.deque())
             _prune_tokens(u_hr_tokens, now_value, 3600.0)
             if sum(cost for _t, cost in u_hr_tokens) + token_cost > user_token_hr_limit:
                 raise _budget_error(u_hr_tokens, now_value, 3600.0)
 
-            u_day_tokens = _token_usage_daily.setdefault(('user', user), collections.deque())
+            u_day_tokens = _token_usage_daily.setdefault(("user", user), collections.deque())
             _prune_tokens(u_day_tokens, now_value, 86400.0)
             if sum(cost for _t, cost in u_day_tokens) + token_cost > user_token_day_limit:
                 raise _budget_error(u_day_tokens, now_value, 86400.0)
@@ -453,7 +485,9 @@ def reserve_provider_attempt(
         g_hr_tokens.append((now_value, token_cost))
         g_day_tokens.append((now_value, token_cost))
         if scope:
-            _token_usage.setdefault(('scope', scope), collections.deque()).append((now_value, token_cost))
+            _token_usage.setdefault(("scope", scope), collections.deque()).append(
+                (now_value, token_cost)
+            )
 
 
 @contextlib.asynccontextmanager
@@ -496,9 +530,7 @@ def check_search_budget(user_id: str | None) -> None:
         _prune_times(bucket, now_val, window)
         if len(bucket) >= limit:
             wait_s = max(1, math.ceil(window - (now_val - bucket[0])))
-            raise AIBudgetExceeded(
-                f"Web search limit reached ({limit} per 5m); retry in {wait_s}s"
-            )
+            raise AIBudgetExceeded(f"Web search limit reached ({limit} per 5m); retry in {wait_s}s")
         bucket.append(now_val)
 
 
@@ -517,9 +549,7 @@ def check_tts_budget(user_id: str | None) -> None:
         _prune_times(bucket, now_val, window)
         if len(bucket) >= limit:
             wait_s = max(1, math.ceil(window - (now_val - bucket[0])))
-            raise AIBudgetExceeded(
-                f"TTS speech limit reached ({limit} per 5m); retry in {wait_s}s"
-            )
+            raise AIBudgetExceeded(f"TTS speech limit reached ({limit} per 5m); retry in {wait_s}s")
         bucket.append(now_val)
 
 
@@ -562,18 +592,23 @@ def estimate_chat_tokens(system: str, messages: object) -> int:
         if isinstance(value, str):
             return estimate_tokens(value)
         if isinstance(value, list):
-            return sum(_parts(item) for item in value)
+            return typing.cast(
+                typing.Any,
+                sum(_parts(item) for item in typing.cast(typing.Iterable[typing.Any], value)),
+            )
         if isinstance(value, dict):
-            part_type = str(value.get("type") or "")
+            part_type = str(typing.cast(typing.Any, value).get("type") or "")
             if part_type in {"image_url", "input_image", "image"}:
                 # Conservative fixed reservation for provider image tokenization;
                 # the encoded transport bytes themselves are not prompt tokens.
                 return 2_000
             if "content" in value:
-                return _parts(value.get("content")) + estimate_tokens(value.get("role"))
+                return _parts(typing.cast(typing.Any, value).get("content")) + estimate_tokens(
+                    typing.cast(typing.Any, value).get("role")
+                )
             if "text" in value:
-                return _parts(value.get("text"))
-            return min(2_000, estimate_tokens(value))
+                return _parts(typing.cast(typing.Any, value).get("text"))
+            return min(2_000, estimate_tokens(typing.cast(typing.Any, value)))
         return estimate_tokens(value)
 
     return estimate_tokens(system) + _parts(messages)
@@ -643,7 +678,13 @@ def begin_trace(
     }
 
 
-def finish_trace(trace: Mapping[str, Any], *, status: str, output_text: str = "", error: BaseException | None = None) -> None:
+def finish_trace(
+    trace: Mapping[str, Any],
+    *,
+    status: str,
+    output_text: str = "",
+    error: BaseException | None = None,
+) -> None:
     if not trace.get("scope_id"):
         return
     try:
@@ -669,7 +710,7 @@ def finish_trace(trace: Mapping[str, Any], *, status: str, output_text: str = ""
         return
 
 
-_SCHEMAS: Final[dict[str, dict[str, type | tuple[type, ...]]]] = {
+_SCHEMAS: Final[dict[str, dict[str, type[typing.Any] | tuple[type[typing.Any], ...]]]] = {
     "brain_response": {
         "response": str,
         "title": (str, type(None)),
@@ -689,20 +730,20 @@ _SCHEMAS: Final[dict[str, dict[str, type | tuple[type, ...]]]] = {
 }
 
 
-def validate_structured(value: object, schema: str | None) -> dict | None:
+def validate_structured(value: object, schema: str | None) -> dict[typing.Any, typing.Any] | None:
     """Validate known structured contracts and reject unexpected top-level fields."""
     if not isinstance(value, dict):
         return None
     if not schema:
-        return value
+        return typing.cast(typing.Any, value)
     expected = _SCHEMAS.get(schema)
-    if expected is None or set(value) - set(expected):
+    if expected is None or set(typing.cast(typing.Any, value)) - set(expected):
         return None
     clean: dict[str, Any] = {}
     for key, kind in expected.items():
         if key not in value:
             continue
-        candidate = value[key]
+        candidate: typing.Any = typing.cast(typing.Any, value[key])
         if not isinstance(candidate, kind):
             return None
         clean[key] = candidate

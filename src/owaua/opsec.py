@@ -30,12 +30,12 @@ def get_leaderboard(limit: int = 10) -> List[Tuple[str, Dict[str, int]]]:
     return db.economy_leaderboard(limit)
 
 
-def work_cooldown_left(
-    user_id: str, cooldown_seconds: int = _WORK_COOLDOWN_SECONDS
-) -> int:
-    row = db.conn().execute(
-        "SELECT last_work FROM work_cooldowns WHERE user_id=?", (str(user_id),)
-    ).fetchone()
+def work_cooldown_left(user_id: str, cooldown_seconds: int = _WORK_COOLDOWN_SECONDS) -> int:
+    row = (
+        db.conn()
+        .execute("SELECT last_work FROM work_cooldowns WHERE user_id=?", (str(user_id),))
+        .fetchone()
+    )
     if not row:
         return 0
     return max(0, int(cooldown_seconds - (db.now() - float(row["last_work"]))))

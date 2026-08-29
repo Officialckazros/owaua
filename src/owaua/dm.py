@@ -19,6 +19,7 @@ import secrets
 import stat
 import sys
 import time
+import typing
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
@@ -124,8 +125,8 @@ def _contact_row(user_id: object, info: object) -> tuple[str, str, str] | None:
     uid = _discord_id(user_id)
     if not uid or not isinstance(info, dict):
         return None
-    name = _safe_terminal_text(info.get("name") or "?", 200).strip() or "?"
-    last_message_at = str(info.get("last_message_at") or "").strip()[:64]
+    name = _safe_terminal_text(typing.cast(typing.Any, info).get("name") or "?", 200).strip() or "?"
+    last_message_at = str(typing.cast(typing.Any, info).get("last_message_at") or "").strip()[:64]
     try:
         parsed = datetime.fromisoformat(last_message_at)
     except (TypeError, ValueError):
@@ -146,14 +147,17 @@ def _migrate_contacts() -> None:
         return
     records: list[tuple[str, str, str]] = []
     if isinstance(decoded, dict):
-        for user_id, info in list(decoded.items())[:_MAX_CONTACTS]:
+        for user_id, info in typing.cast(
+            typing.Iterable[typing.Any],
+            list(typing.cast(typing.Any, decoded.items()))[:_MAX_CONTACTS],
+        ):
             row = _contact_row(user_id, info)
             if row is not None:
                 records.append(row)
     db.import_legacy_dm_contacts(migration, records)
 
 
-def load_contacts() -> dict:
+def load_contacts() -> dict[typing.Any, typing.Any]:
     """Return contacts from SQLite after an idempotent legacy import."""
     _migrate_contacts()
     # Bot startup calls this API, so complete the companion active-session
@@ -162,12 +166,12 @@ def load_contacts() -> dict:
     return db.dm_contacts_all()
 
 
-def save_contacts(contacts: dict) -> None:
+def save_contacts(contacts: dict[typing.Any, typing.Any]) -> None:
     """Compatibility bulk-upsert for callers that previously saved JSON."""
     _migrate_contacts()
     if not isinstance(contacts, dict):
         raise TypeError("contacts must be a mapping")
-    records = []
+    records: list[typing.Any] = []
     for user_id, info in list(contacts.items())[:_MAX_CONTACTS]:
         row = _contact_row(user_id, info)
         if row is not None:
@@ -197,7 +201,10 @@ def _migrate_active() -> None:
     records: list[tuple[str, str, float]] = []
     if isinstance(decoded, dict):
         current = time.time()
-        for user_id, heartbeat in list(decoded.items())[:_MAX_CONTACTS]:
+        for user_id, heartbeat in typing.cast(
+            typing.Iterable[typing.Any],
+            list(typing.cast(typing.Any, decoded.items()))[:_MAX_CONTACTS],
+        ):
             uid = _discord_id(user_id)
             try:
                 stamp = float(heartbeat)
@@ -208,7 +215,7 @@ def _migrate_active() -> None:
     db.import_legacy_cli_active(migration, records)
 
 
-def _load_active() -> dict:
+def _load_active() -> dict[typing.Any, typing.Any]:
     """Compatibility snapshot using the newest heartbeat per user."""
     _migrate_active()
     rows = (
@@ -252,7 +259,7 @@ def message_text(msg: discord.Message) -> str:
     empty — fall back to the embed's title/description/fields for those."""
     if msg.content:
         return _safe_terminal_text(msg.content)
-    parts = []
+    parts: list[typing.Any] = []
     for e in msg.embeds:
         if e.title:
             parts.append(_safe_terminal_text(e.title))
@@ -295,7 +302,7 @@ class DMShell(discord.Client):
             return
         if not isinstance(message.channel, discord.DMChannel):
             return
-        self._touch_contact(message.author)
+        self._touch_contact(typing.cast(typing.Any, message.author))
         stamp = datetime.now().astimezone().strftime("%H:%M:%S")
         if self.chat_target == message.author.id:
             print(f"\n[{stamp}] {message.author}: {message_text(message)}")
@@ -357,7 +364,11 @@ class DMShell(discord.Client):
         try:
             count = 0
             async for msg in channel.history(limit=None, oldest_first=True):
-                who = "you" if msg.author.id == self.user.id else str(msg.author)
+                who = (
+                    "you"
+                    if msg.author.id == typing.cast(typing.Any, self.user).id
+                    else str(msg.author)
+                )
                 stamp = msg.created_at.astimezone().strftime("%Y-%m-%d %H:%M:%S")
                 print(f"  [{stamp}] {who}: {message_text(msg)}")
                 count += 1

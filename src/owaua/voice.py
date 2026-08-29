@@ -13,12 +13,14 @@ Voice receive requires ``discord-ext-voice-recv`` (and ``audioop-lts`` on
 Python >= 3.13) — if it's missing the STT half degrades gracefully while
 ``/join`` / ``/leave`` / ``/say`` keep working.
 """
+
 import asyncio
 import contextlib
 import io
 import logging
 import threading
 import time
+import typing
 import wave
 from typing import Callable, Optional, Tuple
 
@@ -31,7 +33,9 @@ from owaua.services.llm_client import LLMError, llm
 log = logging.getLogger("owaua.voice")
 
 try:
-    from discord.ext import voice_recv
+    from discord.ext import (
+        voice_recv,  # pyright: ignore[reportAttributeAccessIssue, reportUnknownVariableType]
+    )
 
     _VOICE_RECV_OK = True
 except Exception as e:
@@ -54,19 +58,19 @@ _TTS_ACQUIRE_TIMEOUT_SECONDS = 0.25
 _VOICE_CONNECT_TIMEOUT_SECONDS = 15.0
 
 
-_stt_sessions: dict = {}
+_stt_sessions: dict[typing.Any, typing.Any] = {}
 _tts_slots = asyncio.Semaphore(4)
 _stt_lifecycle_lock = asyncio.Lock()
 _stt_shutting_down = False
 
 
-def _voice_channel_of(member) -> Optional[discord.VoiceChannel]:
+def _voice_channel_of(member: typing.Any) -> Optional[discord.VoiceChannel]:
     if isinstance(member, discord.Member) and member.voice:
-        return member.voice.channel
+        return typing.cast(discord.VoiceChannel, member.voice.channel)
     return None
 
 
-def _can_control_channel(interaction: discord.Interaction, channel) -> bool:
+def _can_control_channel(interaction: discord.Interaction, channel: typing.Any) -> bool:
     """Allow active channel members or users with manage_channels."""
     return _member_can_control_channel(interaction.user, channel)
 
@@ -95,10 +99,7 @@ def _guild_stt_enabled(guild_id: int) -> bool:
     """Voice transcription is off until a guild explicitly opts in."""
     try:
         return (
-            db.guild_settings(Scope.guild(guild_id).key).get(
-                "voice_transcription_enabled"
-            )
-            is True
+            db.guild_settings(Scope.guild(guild_id).key).get("voice_transcription_enabled") is True
         )
     except Exception:
         log.exception("could not read voice settings for guild %s", guild_id)
@@ -158,7 +159,7 @@ def _can_start_stt(member: object, channel: object) -> bool:
     if getattr(member.guild, "owner_id", None) == member.id:
         return True
     try:
-        permissions = channel.permissions_for(member)
+        permissions: typing.Any = typing.cast(typing.Any, channel).permissions_for(member)
     except (AttributeError, TypeError):
         permissions = member.guild_permissions
     return bool(
@@ -169,19 +170,20 @@ def _can_start_stt(member: object, channel: object) -> bool:
 
 def _can_view_transcripts(destination: object, member: object) -> bool:
     try:
-        permissions = destination.permissions_for(member)
+        permissions: typing.Any = typing.cast(typing.Any, destination).permissions_for(member)
     except (AttributeError, TypeError):
         return False
     return bool(
-        getattr(permissions, "administrator", False)
-        or getattr(permissions, "view_channel", False)
+        getattr(permissions, "administrator", False) or getattr(permissions, "view_channel", False)
     )
 
 
 def _human_participants(channel: object) -> list[discord.Member]:
     return [
         member
-        for member in (getattr(channel, "members", None) or [])
+        for member in typing.cast(
+            typing.Iterable[typing.Any], getattr(channel, "members", None) or []
+        )
         if isinstance(member, discord.Member) and not getattr(member, "bot", False)
     ]
 
@@ -220,13 +222,13 @@ def _pcm_to_wav(pcm: bytes) -> bytes:
 class _UtteranceSinkBase:
     """Placeholder used when voice-recv isn't importable (live STT disabled)."""
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args: typing.Any, **kwargs: typing.Any) -> None:
         raise RuntimeError("voice receive is unavailable")
 
 
 if _VOICE_RECV_OK:
 
-    class UtteranceSink(voice_recv.BasicSink):
+    class UtteranceSink(typing.cast(typing.Any, voice_recv).BasicSink):
         """Buffers PCM per user and emits WAV utterances on silence / max length.
 
         Runs on the voice-receive thread; hands finished utterances to the asyncio
@@ -242,7 +244,7 @@ if _VOICE_RECV_OK:
             max_ms: float = min(15.0, config.STT_MAX_UTTERANCE_SECONDS) * 1000.0,
             threshold: float = 0.012,
         ) -> None:
-            super().__init__(self._on_packet, decode=True)
+            typing.cast(typing.Any, super()).__init__(self._on_packet, decode=True)
             self._enqueue = enqueue
             self._loop = asyncio.get_running_loop()
             self._buffers: dict[int, bytearray] = {}
@@ -257,13 +259,9 @@ if _VOICE_RECV_OK:
         def wants_opus(self) -> bool:
             return False
 
-        def _on_packet(self, user, data) -> None:
+        def _on_packet(self, user: typing.Any, data: typing.Any) -> None:
             with self._buffer_lock:
-                if (
-                    not self._accepting_audio
-                    or user is None
-                    or getattr(user, "bot", False)
-                ):
+                if not self._accepting_audio or user is None or getattr(user, "bot", False):
                     return
                 pcm = getattr(data, "pcm", None)
                 if not pcm:
@@ -298,9 +296,7 @@ if _VOICE_RECV_OK:
                     log.exception("failed to build wav for %s", uid)
                     return
                 try:
-                    self._loop.call_soon_threadsafe(
-                        self._enqueue, uid, wav, duration_ms
-                    )
+                    self._loop.call_soon_threadsafe(self._enqueue, uid, wav, duration_ms)
                 except RuntimeError:
                     pass
 
@@ -327,7 +323,7 @@ if _VOICE_RECV_OK:
 
         def cleanup(self) -> None:
             self.disarm()
-            super().cleanup()
+            typing.cast(typing.Any, super()).cleanup()
 
 else:
 
@@ -341,7 +337,7 @@ class SttSession:
     def __init__(
         self,
         guild_id: int,
-        text_channel,
+        text_channel: typing.Any,
         *,
         controller_id: Optional[int] = None,
         voice_channel_id: Optional[int] = None,
@@ -352,11 +348,11 @@ class SttSession:
         self.controller_id = controller_id
         self.voice_channel_id = voice_channel_id
         self.consenting_user_ids = frozenset(consenting_user_ids or set())
-        self.queue: asyncio.Queue = asyncio.Queue(maxsize=16)
+        self.queue: asyncio.Queue[tuple[int, bytes, float]] = asyncio.Queue(maxsize=16)
         self.stop_event = asyncio.Event()
-        self.task = None
-        self.sink = None
-        self.voice_client = None
+        self.task: asyncio.Task[None] | None = None
+        self.sink: typing.Any = None
+        self.voice_client: typing.Any = None
         self.accepting_audio = True
         self.announce_stop = False
         self.queued_audio_bytes = 0
@@ -366,17 +362,14 @@ class SttSession:
         if (
             not self.accepting_audio
             or self.stop_event.is_set()
-            or (
-                self.consenting_user_ids
-                and uid not in self.consenting_user_ids
-            )
+            or (self.consenting_user_ids and uid not in self.consenting_user_ids)
             or len(wav) > _MAX_STT_AUDIO_BYTES
             or self.queued_audio_bytes + len(wav) > _MAX_STT_QUEUE_BYTES
         ):
             log.warning("discarded STT audio due to consent, lifecycle, or byte limits")
             return
         try:
-            self.queue.put_nowait((uid, wav, duration_ms))
+            typing.cast(typing.Any, self).queue.put_nowait((uid, wav, duration_ms))
             self.queued_audio_bytes += len(wav)
         except asyncio.QueueFull:
             log.warning("stt queue full in guild %s; dropping utterance", self.guild_id)
@@ -405,13 +398,11 @@ def _request_session_stop(session: SttSession, *, announce: bool = False) -> Non
 
 
 def _drain_stt_queue(session: SttSession) -> None:
-    while not session.queue.empty():
+    while not typing.cast(typing.Any, session).queue.empty():
         with contextlib.suppress(asyncio.QueueEmpty):
-            _uid, wav, _duration_ms = session.queue.get_nowait()
-            session.queued_audio_bytes = max(
-                0, session.queued_audio_bytes - len(wav)
-            )
-            session.queue.task_done()
+            _uid, wav, _duration_ms = typing.cast(typing.Any, session).queue.get_nowait()
+            session.queued_audio_bytes = max(0, session.queued_audio_bytes - len(wav))
+            typing.cast(typing.Any, session).queue.task_done()
 
 
 def _destination_is_usable(
@@ -425,7 +416,7 @@ def _destination_is_usable(
     if me is None:
         return False
     try:
-        permissions = destination.permissions_for(me)
+        permissions: typing.Any = typing.cast(typing.Any, destination).permissions_for(me)
     except (AttributeError, TypeError):
         return False
     return bool(
@@ -440,7 +431,7 @@ def _destination_is_usable(
     )
 
 
-def _session_is_authorized(session: SttSession, vc) -> bool:
+def _session_is_authorized(session: SttSession, vc: typing.Any) -> bool:
     """Revalidate connection, controller presence, participant consent, and visibility."""
     if (
         session.stop_event.is_set()
@@ -462,11 +453,7 @@ def _session_is_authorized(session: SttSession, vc) -> bool:
     if session.controller_id is not None and session.controller_id not in participant_ids:
         return False
     controller = next(
-        (
-            participant
-            for participant in participants
-            if participant.id == session.controller_id
-        ),
+        (participant for participant in participants if participant.id == session.controller_id),
         None,
     )
     if controller is None or not _can_start_stt(controller, voice_channel):
@@ -486,21 +473,21 @@ def _session_is_authorized(session: SttSession, vc) -> bool:
     return True
 
 
-async def _stt_worker(session: SttSession, vc) -> None:
+async def _stt_worker(session: SttSession, vc: typing.Any) -> None:
     """Drain finished utterances, transcribe with Whisper, post to the channel."""
     try:
         while _session_is_authorized(session, vc):
             try:
-                item = await asyncio.wait_for(session.queue.get(), timeout=0.5)
+                item: typing.Any = typing.cast(
+                    typing.Any, await asyncio.wait_for(session.queue.get(), timeout=0.5)
+                )
             except asyncio.TimeoutError:
                 if session.sink is not None and hasattr(session.sink, "flush_stale"):
                     session.sink.flush_stale()
                 continue
             try:
                 uid, wav, duration_ms = item
-                session.queued_audio_bytes = max(
-                    0, session.queued_audio_bytes - len(wav)
-                )
+                session.queued_audio_bytes = max(0, session.queued_audio_bytes - len(wav))
                 if (
                     uid not in session.consenting_user_ids
                     or duration_ms < 400
@@ -547,7 +534,7 @@ async def _stt_worker(session: SttSession, vc) -> None:
             except Exception:
                 log.exception("stt utterance processing failed")
             finally:
-                session.queue.task_done()
+                typing.cast(typing.Any, session).queue.task_done()
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -575,7 +562,7 @@ async def _stt_worker(session: SttSession, vc) -> None:
             _stt_sessions.pop(session.guild_id, None)
 
 
-async def _stop_stt_session(guild_id: int, vc=None) -> bool:
+async def _stop_stt_session(guild_id: int, vc: typing.Any = None) -> bool:
     """Stop and fully drain one transcription session."""
     session = _stt_sessions.pop(guild_id, None)
     if session is None:
@@ -609,22 +596,23 @@ async def _connect(channel: discord.VoiceChannel):
     """Connect using VoiceRecvClient when available, else the stock client."""
     if _VOICE_RECV_OK:
         return await asyncio.wait_for(
-            channel.connect(cls=voice_recv.VoiceRecvClient),
+            channel.connect(cls=typing.cast(typing.Any, voice_recv).VoiceRecvClient),
             timeout=_VOICE_CONNECT_TIMEOUT_SECONDS,
         )
-    return await asyncio.wait_for(
-        channel.connect(), timeout=_VOICE_CONNECT_TIMEOUT_SECONDS
-    )
+    return await asyncio.wait_for(channel.connect(), timeout=_VOICE_CONNECT_TIMEOUT_SECONDS)
 
 
-async def join(interaction: discord.Interaction, channel=None) -> Tuple[bool, str]:
+async def join(interaction: discord.Interaction, channel: typing.Any = None) -> Tuple[bool, str]:
     """Connect the bot to the caller's voice channel."""
     guild = interaction.guild
     if guild is None:
         return False, "this only works in a server."
     vc = guild.voice_client
-    if vc is not None and vc.is_connected():
-        return False, f"already connected to **{vc.channel.name}**."
+    if vc is not None and typing.cast(typing.Any, vc).is_connected():
+        return (
+            False,
+            f"already connected to **{typing.cast(typing.Any, vc).channel.name}**.",
+        )
     target = channel or _voice_channel_of(interaction.user)
     if target is None:
         return False, "you're not in a voice channel — join one first."
@@ -651,13 +639,13 @@ async def _leave_locked(interaction: discord.Interaction) -> Tuple[bool, str]:
     if guild is None:
         return False, "this only works in a server."
     vc = guild.voice_client
-    if vc is None or not vc.is_connected():
+    if vc is None or not typing.cast(typing.Any, vc).is_connected():
         return False, "not in a voice channel."
     if not _can_control_channel(interaction, vc.channel):
         return False, "join my voice channel first (or use manage channels permission)."
     await _stop_stt_session(guild.id, vc)
     try:
-        await vc.disconnect()
+        await vc.disconnect(force=True)
     except discord.HTTPException:
         return False, "couldn't disconnect; Discord rejected the request."
     return True, "disconnected."
@@ -688,14 +676,12 @@ async def say(interaction: discord.Interaction, text: str) -> Tuple[bool, str]:
         if target is None:
             return False, "join a voice channel first (or use /join)."
         try:
-            vc = await _connect(target)
+            vc: typing.Any = typing.cast(typing.Any, await _connect(target))
             connected_here = True
         except (discord.HTTPException, discord.ClientException, asyncio.TimeoutError):
             return False, "couldn't join; Discord rejected the request."
     try:
-        await asyncio.wait_for(
-            _tts_slots.acquire(), timeout=_TTS_ACQUIRE_TIMEOUT_SECONDS
-        )
+        await asyncio.wait_for(_tts_slots.acquire(), timeout=_TTS_ACQUIRE_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
         if connected_here:
             with contextlib.suppress(discord.HTTPException):
@@ -737,9 +723,7 @@ async def say(interaction: discord.Interaction, text: str) -> Tuple[bool, str]:
             with contextlib.suppress(discord.HTTPException):
                 await vc.disconnect()
         return False, "your current voice access could not be revalidated."
-    if not vc.is_connected() or not _member_can_control_channel(
-        current_member, vc.channel
-    ):
+    if not vc.is_connected() or not _member_can_control_channel(current_member, vc.channel):
         if connected_here:
             with contextlib.suppress(discord.HTTPException):
                 await vc.disconnect()
@@ -794,8 +778,12 @@ async def _toggle_stt_locked(interaction: discord.Interaction) -> Tuple[bool, st
         return False, "live transcription is at capacity; try again later."
 
     vc = guild.voice_client
-    already_connected = vc is not None and vc.is_connected()
-    voice_channel = vc.channel if already_connected else _voice_channel_of(interaction.user)
+    already_connected: typing.Any = vc is not None and vc.is_connected()
+    voice_channel = (
+        typing.cast(typing.Any, vc).channel
+        if already_connected
+        else _voice_channel_of(interaction.user)
+    )
     if voice_channel is None:
         return False, "join a voice channel first (or use /join)."
     member = interaction.user
@@ -822,9 +810,7 @@ async def _toggle_stt_locked(interaction: discord.Interaction) -> Tuple[bool, st
     missing_consent = [
         participant
         for participant in participants
-        if participant.id != member.id and not has_stt_consent(
-            participant.id, guild.id
-        )
+        if participant.id != member.id and not has_stt_consent(participant.id, guild.id)
     ]
     if missing_consent:
         names = ", ".join(
@@ -857,7 +843,7 @@ async def _toggle_stt_locked(interaction: discord.Interaction) -> Tuple[bool, st
 
     if not already_connected:
         try:
-            vc = await _connect(voice_channel)
+            vc: typing.Any = typing.cast(typing.Any, await _connect(voice_channel))
         except (discord.HTTPException, discord.ClientException, asyncio.TimeoutError):
             if _stt_sessions.get(guild.id) is session:
                 _stt_sessions.pop(guild.id, None)
@@ -869,20 +855,20 @@ async def _toggle_stt_locked(interaction: discord.Interaction) -> Tuple[bool, st
             _stt_sessions.pop(guild.id, None)
         if not already_connected:
             with contextlib.suppress(discord.HTTPException):
-                await vc.disconnect()
+                await typing.cast(typing.Any, vc).disconnect()
         return False, "transcription startup was cancelled; nothing was recorded."
-    if not isinstance(vc, voice_recv.VoiceRecvClient):
+    if not isinstance(vc, typing.cast(typing.Any, voice_recv).VoiceRecvClient):
         if _stt_sessions.get(guild.id) is session:
             _stt_sessions.pop(guild.id, None)
         _request_session_stop(session)
         if not already_connected:
             with contextlib.suppress(discord.HTTPException):
-                await vc.disconnect()
+                await typing.cast(typing.Any, vc).disconnect()
         return False, "already connected with a non-recv voice client — /leave first."
 
     # The status notice must be visible before any capture begins.
     try:
-        notice = await destination.send(
+        notice: typing.Any = await typing.cast(typing.Any, destination).send(
             f"🎙️ **Live transcription is starting** in **{voice_channel.name}** by "
             f"{discord.utils.escape_mentions(member.display_name)}. "
             "Audio will be sent to the configured transcription provider. "
@@ -895,7 +881,7 @@ async def _toggle_stt_locked(interaction: discord.Interaction) -> Tuple[bool, st
         _request_session_stop(session)
         if not already_connected:
             with contextlib.suppress(discord.HTTPException):
-                await vc.disconnect()
+                await typing.cast(typing.Any, vc).disconnect()
         return False, "couldn't post the recording notice; transcription was not started."
 
     # Recheck everyone after the notice/network await. Anyone joining, leaving,
@@ -908,14 +894,10 @@ async def _toggle_stt_locked(interaction: discord.Interaction) -> Tuple[bool, st
         and _can_start_stt(member, voice_channel)
         and _destination_is_usable(destination, guild, current_bot)
         and all(
-            participant.id == member.id
-            or has_stt_consent(participant.id, guild.id)
+            participant.id == member.id or has_stt_consent(participant.id, guild.id)
             for participant in participants
         )
-        and all(
-            _can_view_transcripts(destination, participant)
-            for participant in participants
-        )
+        and all(_can_view_transcripts(destination, participant) for participant in participants)
     )
     if not startup_valid:
         if _stt_sessions.get(guild.id) is session:
@@ -929,13 +911,13 @@ async def _toggle_stt_locked(interaction: discord.Interaction) -> Tuple[bool, st
             )
         if not already_connected:
             with contextlib.suppress(discord.HTTPException):
-                await vc.disconnect()
+                await typing.cast(typing.Any, vc).disconnect()
         return False, "consent, membership, or channel access changed; nothing was recorded."
 
     session.consenting_user_ids = frozenset(participant_ids)
-    session.sink = UtteranceSink(session.enqueue)
+    typing.cast(typing.Any, session).sink = UtteranceSink(session.enqueue)
     try:
-        vc.listen(session.sink)
+        typing.cast(typing.Any, vc).listen(session.sink)
     except Exception:
         log.exception("could not start voice receiver")
         if _stt_sessions.get(guild.id) is session:
@@ -948,9 +930,9 @@ async def _toggle_stt_locked(interaction: discord.Interaction) -> Tuple[bool, st
             )
         if not already_connected:
             with contextlib.suppress(discord.HTTPException):
-                await vc.disconnect()
+                await typing.cast(typing.Any, vc).disconnect()
         return False, "couldn't start listening; check the bot logs."
-    session.task = asyncio.create_task(
+    typing.cast(typing.Any, session).task = asyncio.create_task(
         _stt_worker(session, vc), name=f"stt-guild-{guild.id}"
     )
     try:
@@ -967,7 +949,7 @@ async def _toggle_stt_locked(interaction: discord.Interaction) -> Tuple[bool, st
         await _stop_stt_session(guild.id, vc)
         if not already_connected:
             with contextlib.suppress(discord.HTTPException):
-                await vc.disconnect()
+                await typing.cast(typing.Any, vc).disconnect()
         return False, "couldn't update the recording notice; transcription was stopped."
     if session.stop_event.is_set():
         if _stt_sessions.get(guild.id) is session:
@@ -979,7 +961,7 @@ async def _toggle_stt_locked(interaction: discord.Interaction) -> Tuple[bool, st
             )
         if not already_connected:
             with contextlib.suppress(discord.HTTPException):
-                await vc.disconnect()
+                await typing.cast(typing.Any, vc).disconnect()
         return False, "transcription startup was cancelled; nothing remains active."
     return True, (
         f"🎙️ live transcription on in **{voice_channel.name}** — transcripts post "

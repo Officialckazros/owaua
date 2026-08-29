@@ -18,8 +18,10 @@ reference facts.
 Everything lives in the same SQLite file as the rest of the brain (`db.conn()`),
 so it persists across restarts with zero extra config.
 """
+
 import logging
 import re
+import typing
 from typing import List, Optional
 
 from owaua import db
@@ -32,7 +34,7 @@ _READY = False
 _WORD = re.compile(r"[a-z0-9]{2,}")
 
 
-def _detect_fts5(c) -> bool:
+def _detect_fts5(c: typing.Any) -> bool:
     try:
         c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS _fts_probe USING fts5(x)")
         c.execute("DROP TABLE IF EXISTS _fts_probe")
@@ -61,9 +63,7 @@ def ensure() -> None:
     """)
     columns = {r["name"] for r in c.execute("PRAGMA table_info(kb_docs)").fetchall()}
     if "scope_id" not in columns:
-        c.execute(
-            "ALTER TABLE kb_docs ADD COLUMN scope_id TEXT NOT NULL DEFAULT 'legacy:disabled'"
-        )
+        c.execute("ALTER TABLE kb_docs ADD COLUMN scope_id TEXT NOT NULL DEFAULT 'legacy:disabled'")
     c.execute("CREATE INDEX IF NOT EXISTS idx_kb_scope_topic ON kb_docs(scope_id,topic)")
     _HAS_FTS5 = _detect_fts5(c)
     if _HAS_FTS5:
@@ -109,7 +109,7 @@ def _chunk(text: str, size: int = 700, overlap: int = 120) -> List[str]:
                 buf = ""
             start = 0
             while start < len(p):
-                chunks.append(p[start:start + size].strip())
+                chunks.append(p[start : start + size].strip())
                 start += max(1, size - overlap)
             continue
         if buf and len(buf) + len(p) + 2 > size:
@@ -123,8 +123,15 @@ def _chunk(text: str, size: int = 700, overlap: int = 120) -> List[str]:
     return [c for c in chunks if c]
 
 
-def ingest(content: str, topic: str = "general", title: str = None,
-           source: str = None, tags: str = None, *, scope_id: str) -> int:
+def ingest(
+    content: str,
+    topic: str = "general",
+    title: str | None = None,
+    source: str | None = None,
+    tags: str | None = None,
+    *,
+    scope_id: str,
+) -> int:
     """Chunk `content` and store each passage. Returns number of passages stored."""
     ensure()
     n = 0
@@ -144,7 +151,8 @@ def ingest(content: str, topic: str = "general", title: str = None,
 
 
 def _keywords(text: str) -> List[str]:
-    seen, out = set(), []
+    seen: set[str] = set()
+    out: list[str] = []
     for w in _WORD.findall((text or "").lower()):
         if w not in seen:
             seen.add(w)
@@ -162,7 +170,7 @@ def _fts_query(query: str) -> str:
     return " OR ".join(f'"{w}"' for w in kws)
 
 
-def search(query: str, k: int = 6, *, scope_id: str) -> List[dict]:
+def search(query: str, k: int = 6, *, scope_id: str) -> List[dict[typing.Any, typing.Any]]:
     """Return up to `k` most relevant passages for `query`, best first."""
     ensure()
     c = db.conn()
@@ -184,7 +192,7 @@ def search(query: str, k: int = 6, *, scope_id: str) -> List[dict]:
     kws = _keywords(query)
     if not kws:
         return []
-    scored = []
+    scored: list[typing.Any] = []
     for r in c.execute(
         "SELECT topic,title,source,content FROM kb_docs WHERE scope_id=?", (scope_id,)
     ).fetchall():
@@ -198,21 +206,27 @@ def search(query: str, k: int = 6, *, scope_id: str) -> List[dict]:
 
 def count(scope_id: str) -> int:
     ensure()
-    return db.conn().execute(
-        "SELECT COUNT(*) n FROM kb_docs WHERE scope_id=?", (scope_id,)
-    ).fetchone()["n"]
+    return (
+        db.conn()
+        .execute("SELECT COUNT(*) n FROM kb_docs WHERE scope_id=?", (scope_id,))
+        .fetchone()["n"]
+    )
 
 
-def topics(scope_id: str) -> List[dict]:
+def topics(scope_id: str) -> List[dict[typing.Any, typing.Any]]:
     ensure()
-    rows = db.conn().execute(
-        "SELECT topic, COUNT(*) n FROM kb_docs WHERE scope_id=? "
-        "GROUP BY topic ORDER BY n DESC", (scope_id,)
-    ).fetchall()
+    rows = (
+        db.conn()
+        .execute(
+            "SELECT topic, COUNT(*) n FROM kb_docs WHERE scope_id=? GROUP BY topic ORDER BY n DESC",
+            (scope_id,),
+        )
+        .fetchall()
+    )
     return [{"topic": r["topic"], "passages": r["n"]} for r in rows]
 
 
-def clear(scope_id: str, topic: str = None) -> int:
+def clear(scope_id: str, topic: str | None = None) -> int:
     """Delete all passages, or just one topic. Returns rows deleted."""
     ensure()
     c = db.conn()

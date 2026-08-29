@@ -5,9 +5,11 @@ banned/kicked someone, who renamed a role, ...), pull real entries from the
 Discord audit log and hand them to the model as authoritative context instead
 of letting it guess or answer "I can't see that".
 """
+
 import logging
 import re
 import time
+import typing
 
 import discord
 
@@ -51,14 +53,14 @@ def wants_audit_log(query: str) -> bool:
     return bool(_AUDIT_ASK_RE.search(q) and _AUDIT_VERB_RE.search(q))
 
 
-def _short(v, n=80) -> str:
-    if isinstance(v, (list, tuple, set, dict, str)) and len(v) == 0:
+def _short(v: typing.Any, n: int = 80) -> str:
+    if isinstance(v, (list, tuple, set, dict, str)) and len(typing.cast(typing.Any, v)) == 0:
         return "none"
-    s = str(v)
+    s = str(typing.cast(typing.Any, v))
     return s[:n] + "…" if len(s) > n else s
 
 
-def _change_bits(entry) -> str:
+def _change_bits(entry: typing.Any) -> str:
     """Summarize the before->after field changes of an audit entry.
 
     discord.py 2.x exposes changes as AuditLogChanges with `.before`/`.after`
@@ -69,7 +71,7 @@ def _change_bits(entry) -> str:
         after = entry.after
     except Exception:
         return ""
-    keys = set()
+    keys: typing.Any = typing.cast(typing.Any, set())
     for diff in (before, after):
         if diff is None:
             continue
@@ -78,7 +80,7 @@ def _change_bits(entry) -> str:
         except Exception:
             _LOG.debug("could not enumerate an audit-log change diff", exc_info=True)
             continue
-    bits = []
+    bits: list[typing.Any] = []
     for key in sorted(keys):
         if key in ("id", "type", "position"):
             continue
@@ -97,7 +99,7 @@ def _change_bits(entry) -> str:
     return "; ".join(bits)
 
 
-def _target_label(target) -> str:
+def _target_label(target: typing.Any) -> str:
     if target is None:
         return "?"
     if isinstance(target, (discord.Member, discord.User)):
@@ -106,7 +108,7 @@ def _target_label(target) -> str:
     return str(name) if name else str(target)[:40]
 
 
-async def fetch_context(query: str, guild, requester=None) -> str:
+async def fetch_context(query: str, guild: typing.Any, requester: typing.Any = None) -> str:
     """Return formatted audit-log lines for `query`, or "" when not applicable.
 
     Non-empty results are authoritative context for the brain. When the bot
@@ -124,10 +126,12 @@ async def fetch_context(query: str, guild, requester=None) -> str:
     me = getattr(guild, "me", None)
     perms = getattr(me, "guild_permissions", None) if me is not None else None
     if me is None or (perms is not None and not (perms.view_audit_log or perms.administrator)):
-        return ("(NOTE: owaua lacks the view_audit_log permission here, so it "
-                "cannot read this server's audit log. If asked who did what, say "
-                "that honestly — do NOT guess.)")
-    lines = []
+        return (
+            "(NOTE: owaua lacks the view_audit_log permission here, so it "
+            "cannot read this server's audit log. If asked who did what, say "
+            "that honestly — do NOT guess.)"
+        )
+    lines: list[typing.Any] = []
     cutoff = time.time() - _RETENTION_DAYS * 86400
     try:
         async for entry in guild.audit_logs(limit=_MAX_ENTRIES):
@@ -138,7 +142,7 @@ async def fetch_context(query: str, guild, requester=None) -> str:
                 actor_name = f"@{actor.name} (id={actor.id})" if actor else "unknown"
                 label = str(entry.action).rsplit(".", 1)[-1].replace("_", " ")
                 target = _target_label(entry.target)
-                bits = []
+                bits: list[typing.Any] = []
                 chg = _change_bits(entry)
                 if chg:
                     bits.append(chg)
@@ -153,8 +157,10 @@ async def fetch_context(query: str, guild, requester=None) -> str:
                 print(f"[audit] entry skipped: {e}")
                 continue
     except discord.Forbidden:
-        return ("(NOTE: owaua cannot read this server's audit log (permission "
-                "denied). If asked who did what, say that honestly — do NOT guess.)")
+        return (
+            "(NOTE: owaua cannot read this server's audit log (permission "
+            "denied). If asked who did what, say that honestly — do NOT guess.)"
+        )
     except (discord.HTTPException, discord.NotFound) as e:
         print(f"[audit] http error: {e}")
         return ""

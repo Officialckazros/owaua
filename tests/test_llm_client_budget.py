@@ -31,10 +31,10 @@ class LLMClientBudgetTest(unittest.IsolatedAsyncioTestCase):
         response = mock.MagicMock()
         response.status_code = 200
         response.content = b'{"choices":[{"message":{"content":"ok"}}]}'
-        response.json.return_value = {
-            "choices": [{"message": {"content": "ok", "tool_calls": []}}]
-        }
-        with mock.patch.object(self.client._client, "post", new=mock.AsyncMock(return_value=response)):
+        response.json.return_value = {"choices": [{"message": {"content": "ok", "tool_calls": []}}]}
+        with mock.patch.object(
+            self.client._client, "post", new=mock.AsyncMock(return_value=response)
+        ):
             text, calls = await self.client.chat_with_tools(
                 "tool-model",
                 [{"role": "user", "content": "help"}],

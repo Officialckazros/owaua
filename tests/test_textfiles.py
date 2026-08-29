@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import typing
 import unittest
 from unittest import mock
 
@@ -36,7 +37,7 @@ class DummyMessage:
     def __init__(
         self,
         content: str = "",
-        attachments: list | None = None,
+        attachments: list[typing.Any] | None = None,
         reference: object | None = None,
     ):
         self.content = content
@@ -67,18 +68,37 @@ class TextFilesTests(unittest.IsolatedAsyncioTestCase):
         kb._READY = False
         kb._HAS_FTS5 = None
         self._tempdir.cleanup()
+
     def test_is_text_attachment(self) -> None:
-        self.assertTrue(textfiles.is_text_attachment(DummyAttachment("doc.txt")))
-        self.assertTrue(textfiles.is_text_attachment(DummyAttachment("data.TEXT")))
-        self.assertTrue(textfiles.is_text_attachment(DummyAttachment("server.log")))
-        self.assertTrue(textfiles.is_text_attachment(DummyAttachment("sheet.csv")))
+        self.assertTrue(
+            textfiles.is_text_attachment(typing.cast(typing.Any, DummyAttachment("doc.txt")))
+        )
+        self.assertTrue(
+            textfiles.is_text_attachment(typing.cast(typing.Any, DummyAttachment("data.TEXT")))
+        )
+        self.assertTrue(
+            textfiles.is_text_attachment(typing.cast(typing.Any, DummyAttachment("server.log")))
+        )
+        self.assertTrue(
+            textfiles.is_text_attachment(typing.cast(typing.Any, DummyAttachment("sheet.csv")))
+        )
         self.assertTrue(
             textfiles.is_text_attachment(
-                DummyAttachment("file", content_type="text/plain; charset=utf-8")
+                typing.cast(
+                    typing.Any, DummyAttachment("file", content_type="text/plain; charset=utf-8")
+                )
             )
         )
-        self.assertFalse(textfiles.is_text_attachment(DummyAttachment("pic.png", "image/png")))
-        self.assertFalse(textfiles.is_text_attachment(DummyAttachment("binary.bin", "application/octet-stream")))
+        self.assertFalse(
+            textfiles.is_text_attachment(
+                typing.cast(typing.Any, DummyAttachment("pic.png", "image/png"))
+            )
+        )
+        self.assertFalse(
+            textfiles.is_text_attachment(
+                typing.cast(typing.Any, DummyAttachment("binary.bin", "application/octet-stream"))
+            )
+        )
         self.assertFalse(textfiles.is_text_attachment(None))
 
     async def test_read_attachment_text_utf8(self) -> None:
@@ -86,35 +106,37 @@ class TextFilesTests(unittest.IsolatedAsyncioTestCase):
             filename="sample.txt",
             content="Hello world!\nLine 2".encode("utf-8"),
         )
-        result = await textfiles.read_attachment_text(att)
+        result = await textfiles.read_attachment_text(typing.cast(typing.Any, att))
         self.assertIsNotNone(result)
-        self.assertIn("[attached text file: sample.txt]", result)
-        self.assertIn("Hello world!\nLine 2", result)
+        self.assertIn("[attached text file: sample.txt]", typing.cast(typing.Any, result))
+        self.assertIn("Hello world!\nLine 2", typing.cast(typing.Any, result))
 
     async def test_read_attachment_text_encoding_fallback(self) -> None:
         latin1_bytes = "Café au lait".encode("latin-1")
         att = DummyAttachment(filename="latin.txt", content=latin1_bytes)
-        result = await textfiles.read_attachment_text(att)
+        result = await textfiles.read_attachment_text(typing.cast(typing.Any, att))
         self.assertIsNotNone(result)
-        self.assertIn("Café au lait", result)
+        self.assertIn("Café au lait", typing.cast(typing.Any, result))
 
     async def test_read_attachment_text_size_limit(self) -> None:
         att = DummyAttachment(filename="huge.txt", size=10_000_000, content=b"x" * 100)
-        result = await textfiles.read_attachment_text(att, max_bytes=1000)
-        self.assertIn("exceeds configured limit", result)
+        result = await textfiles.read_attachment_text(typing.cast(typing.Any, att), max_bytes=1000)
+        self.assertIn("exceeds configured limit", typing.cast(typing.Any, result))
 
     async def test_read_attachment_text_truncation(self) -> None:
         large_text = "A" * 500
         att = DummyAttachment(filename="long.txt", content=large_text.encode("utf-8"), size=500)
-        result = await textfiles.read_attachment_text(att, max_chars=100)
-        self.assertIn("[... truncated (400 characters omitted) ...]", result)
-        self.assertIn("A" * 100, result)
+        result = await textfiles.read_attachment_text(typing.cast(typing.Any, att), max_chars=100)
+        self.assertIn(
+            "[... truncated (400 characters omitted) ...]", typing.cast(typing.Any, result)
+        )
+        self.assertIn("A" * 100, typing.cast(typing.Any, result))
 
     async def test_extract_message_text_files_direct(self) -> None:
         att1 = DummyAttachment(filename="log1.txt", content=b"log data 1")
         att2 = DummyAttachment(filename="log2.txt", content=b"log data 2")
         msg = DummyMessage(attachments=[att1, att2])
-        extracted = await textfiles.extract_message_text_files(msg)
+        extracted = await textfiles.extract_message_text_files(typing.cast(typing.Any, msg))
         self.assertIn("log data 1", extracted)
         self.assertIn("log data 2", extracted)
 
@@ -124,7 +146,7 @@ class TextFilesTests(unittest.IsolatedAsyncioTestCase):
         ref = mock.Mock()
         ref.resolved = parent_msg
         msg = DummyMessage(attachments=[], reference=ref)
-        extracted = await textfiles.extract_message_text_files(msg)
+        extracted = await textfiles.extract_message_text_files(typing.cast(typing.Any, msg))
         self.assertIn("parent message content", extracted)
 
     def test_brain_build_system_includes_file_notes(self) -> None:

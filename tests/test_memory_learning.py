@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import typing
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -129,7 +130,7 @@ class MemoryLearningTest(unittest.IsolatedAsyncioTestCase):
                 self.scope,
             )
 
-        prompt = provider.await_args.args[1]
+        prompt = typing.cast(typing.Any, provider.await_args).args[1]
         self.assertIn("I build custom keyboards on weekends", prompt)
         self.assertNotIn("buy every switch", prompt)
 

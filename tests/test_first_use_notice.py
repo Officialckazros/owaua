@@ -31,4 +31,3 @@ class FirstUseNoticeTest(unittest.TestCase):
         self.assertEqual(len(exported["first_use_notice"]), 1)
         db.privacy_delete_user("123")
         self.assertTrue(db.claim_first_use_notice("123"))
-

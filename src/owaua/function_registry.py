@@ -6,9 +6,11 @@ that the *invoking member* has the matching Discord permission and that the
 target is actually actionable (role hierarchy, owner, self) before doing
 anything.
 """
+
 import datetime
 import json
 import logging
+import typing
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -32,8 +34,6 @@ class ActionContext:
     bot_member: Optional[discord.Member] = None
 
 
-
-
 TOOL_SCHEMAS: List[Dict[str, Any]] = [
     {
         "type": "function",
@@ -43,7 +43,10 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "user_id": {"type": "string", "description": "The target member's Discord user id."},
+                    "user_id": {
+                        "type": "string",
+                        "description": "The target member's Discord user id.",
+                    },
                     "reason": {"type": "string", "description": "Reason for the kick."},
                 },
                 "required": ["user_id", "reason"],
@@ -58,7 +61,10 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "user_id": {"type": "string", "description": "The target member's Discord user id."},
+                    "user_id": {
+                        "type": "string",
+                        "description": "The target member's Discord user id.",
+                    },
                     "reason": {"type": "string", "description": "Reason for the ban."},
                 },
                 "required": ["user_id", "reason"],
@@ -73,8 +79,14 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "user_id": {"type": "string", "description": "The target member's Discord user id."},
-                    "minutes": {"type": "integer", "description": "Timeout duration in minutes (1-10080)."},
+                    "user_id": {
+                        "type": "string",
+                        "description": "The target member's Discord user id.",
+                    },
+                    "minutes": {
+                        "type": "integer",
+                        "description": "Timeout duration in minutes (1-10080).",
+                    },
                     "reason": {"type": "string", "description": "Reason for the timeout."},
                 },
                 "required": ["user_id", "minutes", "reason"],
@@ -117,8 +129,6 @@ TOOL_PERMS: Dict[str, Optional[str]] = {
 MUTATING_TOOLS = frozenset({"kick_user", "ban_user", "timeout_user"})
 
 
-
-
 def _actor_has(ctx: ActionContext, perm: Optional[str]) -> bool:
     if not isinstance(ctx.actor, discord.Member):
         return False
@@ -140,10 +150,7 @@ def _bot_has(ctx: ActionContext, perm: Optional[str]) -> bool:
     if not isinstance(member, discord.Member):
         return False
     permissions = member.guild_permissions
-    return bool(
-        getattr(permissions, "administrator", False)
-        or getattr(permissions, perm, False)
-    )
+    return bool(getattr(permissions, "administrator", False) or getattr(permissions, perm, False))
 
 
 def _error(msg: str) -> str:
@@ -183,8 +190,6 @@ def _hierarchy_ok(ctx: ActionContext, target: discord.Member) -> Optional[str]:
     if bot_member is not None and bot_member.top_role <= target.top_role:
         return _error(f"my top role is not high enough to moderate {target.display_name}.")
     return None
-
-
 
 
 async def _kick_user(ctx: ActionContext, **args: Any) -> str:
@@ -273,9 +278,7 @@ async def _get_user_info(ctx: ActionContext, **args: Any) -> str:
             or getattr(permissions, "administrator", False)
             or getattr(permissions, "view_audit_log", False)
         ):
-            return json.dumps(
-                {"error": "view_audit_log is required for another member"}
-            )
+            return json.dumps({"error": "view_audit_log is required for another member"})
     info = {
         "id": str(target.id),
         "name": target.name,
@@ -297,13 +300,11 @@ _EXECUTORS = {
 }
 
 
-
-
 def preview_tool(name: str, args: Dict[str, Any]) -> str:
     """Return a bounded, mention-safe tool preview for confirmation UI."""
     if name not in _EXECUTORS:
         return "unknown tool"
-    values = []
+    values: list[typing.Any] = []
     for key in ("user_id", "minutes", "reason"):
         if key in (args or {}):
             values.append(f"{key}={str(args[key])[:120]}")
@@ -322,9 +323,7 @@ def audit_tool_arguments(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         audit["user_id"] = user_id
     if name == "timeout_user":
         try:
-            audit["minutes"] = max(
-                1, min(int(values.get("minutes") or 0), MAX_TIMEOUT_MINUTES)
-            )
+            audit["minutes"] = max(1, min(int(values.get("minutes") or 0), MAX_TIMEOUT_MINUTES))
         except (TypeError, ValueError):
             audit["minutes"] = "invalid"
     reason = str(values.get("reason") or "")
@@ -346,9 +345,7 @@ async def execute_tool(
     if not isinstance(args, dict):
         return _error("tool arguments must be an object; nothing was executed.")
     if name in MUTATING_TOOLS and not confirmed:
-        return _error(
-            f"confirmation required — nothing executed: {preview_tool(name, args)}"
-        )
+        return _error(f"confirmation required — nothing executed: {preview_tool(name, args)}")
     if name in MUTATING_TOOLS or TOOL_PERMS.get(name) is not None:
         actor_id = getattr(ctx.actor, "id", None)
         if actor_id is None or ctx.guild is None:
@@ -356,22 +353,16 @@ async def execute_tool(
         try:
             fresh_actor = await ctx.guild.fetch_member(actor_id)
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            return _error(
-                "the requester could not be revalidated; nothing was executed."
-            )
+            return _error("the requester could not be revalidated; nothing was executed.")
         fresh_bot_member = None
         if name in MUTATING_TOOLS:
             bot_id = getattr(getattr(ctx.bot, "user", None), "id", None)
             if bot_id is None:
-                return _error(
-                    "the bot member could not be revalidated; nothing was executed."
-                )
+                return _error("the bot member could not be revalidated; nothing was executed.")
             try:
                 fresh_bot_member = await ctx.guild.fetch_member(bot_id)
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                return _error(
-                    "the bot member could not be revalidated; nothing was executed."
-                )
+                return _error("the bot member could not be revalidated; nothing was executed.")
         ctx = ActionContext(
             guild=ctx.guild,
             actor=fresh_actor,
@@ -381,9 +372,7 @@ async def execute_tool(
         )
     perm = TOOL_PERMS.get(name)
     if not _actor_has(ctx, perm):
-        return _error(
-            f"you need the `{perm}` permission to use `{name}` — nothing was executed."
-        )
+        return _error(f"you need the `{perm}` permission to use `{name}` — nothing was executed.")
     if name in MUTATING_TOOLS and not _bot_has(ctx, perm):
         return _error(f"the bot needs the `{perm}` permission — nothing was executed.")
     try:
@@ -403,8 +392,8 @@ def tool_calls_from_arguments(calls: List[Dict[str, str]]) -> List[Dict[str, Any
         try:
             args = json.loads(call.get("arguments") or "{}")
         except json.JSONDecodeError:
-            args = {}
+            args: dict[typing.Any, typing.Any] = {}
         if not isinstance(args, dict):
-            args = {}
+            args: dict[typing.Any, typing.Any] = {}
         parsed.append({"name": name, "arguments": args})
     return parsed

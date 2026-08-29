@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import typing
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -36,8 +37,17 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("profile", self.commands)
         self.assertNotIn("whoami", self.commands)
         for alias in {
-            "lang", "models", "google", "infosec", "sec", "song",
-            "assist", "level", "purge", "quotes", "relationship",
+            "lang",
+            "models",
+            "google",
+            "infosec",
+            "sec",
+            "song",
+            "assist",
+            "level",
+            "purge",
+            "quotes",
+            "relationship",
         }:
             self.assertNotIn(alias, self.commands)
         self.assertIn("mode", self.commands)
@@ -45,8 +55,24 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
 
     def test_general_mode_picker_does_not_advertise_adult_personas(self) -> None:
         command = self.commands["mode"]
-        choice = {parameter.name: parameter for parameter in command.parameters}["choice"]
-        values = [item.value for item in choice.choices]
+        choice: typing.Any = typing.cast(
+            typing.Any,
+            {
+                typing.cast(typing.Any, parameter).name: parameter
+                for parameter in typing.cast(
+                    typing.Iterable[typing.Any], typing.cast(typing.Any, command).parameters
+                )
+            }["choice"],
+        )
+        values: typing.Any = typing.cast(
+            typing.Any,
+            [
+                typing.cast(typing.Any, item).value
+                for item in typing.cast(
+                    typing.Iterable[typing.Any], typing.cast(typing.Any, choice).choices
+                )
+            ],
+        )
         self.assertEqual(values, ["ai-fast", "ai-balanced", "ai-reasoning", "status"])
 
     async def test_general_help_hides_age_restricted_features_in_sfw_contexts(self) -> None:
@@ -57,7 +83,7 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
             response=SimpleNamespace(send_message=mock.AsyncMock()),
         )
 
-        await command.callback(interaction)
+        await typing.cast(typing.Any, command).callback(typing.cast(typing.Any, interaction))
 
         embed = interaction.response.send_message.await_args.kwargs["embed"]
         text = embed.description.casefold()
@@ -73,7 +99,7 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
             response=SimpleNamespace(send_message=mock.AsyncMock()),
         )
 
-        await command.callback(interaction)
+        await typing.cast(typing.Any, command).callback(typing.cast(typing.Any, interaction))
 
         embed = interaction.response.send_message.await_args.kwargs["embed"]
         self.assertIn("/nsfw", embed.description)
@@ -101,7 +127,7 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
             response=SimpleNamespace(send_message=mock.AsyncMock()),
         )
 
-        await command.callback(interaction)
+        await typing.cast(typing.Any, command).callback(typing.cast(typing.Any, interaction))
 
         interaction.client.fetch_user.assert_awaited_once_with(123)
         embed = interaction.response.send_message.await_args.kwargs["embed"]
@@ -111,11 +137,19 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
 
     def test_nsfw_command_is_discord_marked_guild_only_and_count_bounded(self) -> None:
         command = self.commands["nsfw"]
-        parameters = {parameter.name: parameter for parameter in command.parameters}
+        parameters: typing.Any = typing.cast(
+            typing.Any,
+            {
+                typing.cast(typing.Any, parameter).name: parameter
+                for parameter in typing.cast(
+                    typing.Iterable[typing.Any], typing.cast(typing.Any, command).parameters
+                )
+            },
+        )
         self.assertTrue(command.nsfw)
         self.assertTrue(command.guild_only)
-        self.assertEqual(parameters["amount"].min_value, 1)
-        self.assertEqual(parameters["amount"].max_value, 10)
+        self.assertEqual(typing.cast(typing.Any, parameters["amount"]).min_value, 1)
+        self.assertEqual(typing.cast(typing.Any, parameters["amount"]).max_value, 10)
 
     async def test_nsfw_command_rechecks_the_live_channel_flag(self) -> None:
         command = self.commands["nsfw"]
@@ -126,7 +160,9 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
         )
         slash._last_uses.clear()
         with mock.patch.object(slash.rule34, "search", mock.AsyncMock()) as search:
-            await command.callback(interaction, "kit_gameoverse", 1)
+            await typing.cast(typing.Any, command).callback(
+                typing.cast(typing.Any, interaction), typing.cast(typing.Any, "kit_gameoverse"), 1
+            )
         search.assert_not_awaited()
         interaction.response.send_message.assert_awaited_once()
 
@@ -145,18 +181,47 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
 
     def test_model_picker_lists_every_live_groq_chat_model(self) -> None:
         command = self.commands["model"]
-        parameters = {parameter.name: parameter for parameter in command.parameters}
-        self.assertIn("choice", parameters)
-        values = [choice.value for choice in parameters["choice"].choices]
-        names = [choice.name for choice in parameters["choice"].choices]
-        self.assertIn("deepseek", values)
-        self.assertIn("big", values)
+        parameters: typing.Any = typing.cast(
+            typing.Any,
+            {
+                typing.cast(typing.Any, parameter).name: parameter
+                for parameter in typing.cast(
+                    typing.Iterable[typing.Any], typing.cast(typing.Any, command).parameters
+                )
+            },
+        )
+        self.assertIn("choice", typing.cast(typing.Any, parameters))
+        values: typing.Any = typing.cast(
+            typing.Any,
+            [
+                typing.cast(typing.Any, choice).value
+                for choice in typing.cast(
+                    typing.Iterable[typing.Any],
+                    typing.cast(typing.Any, parameters["choice"]).choices,
+                )
+            ],
+        )
+        names: typing.Any = typing.cast(
+            typing.Any,
+            [
+                typing.cast(typing.Any, choice).name
+                for choice in typing.cast(
+                    typing.Iterable[typing.Any],
+                    typing.cast(typing.Any, parameters["choice"]).choices,
+                )
+            ],
+        )
+        self.assertIn("deepseek", typing.cast(typing.Any, values))
+        self.assertIn("big", typing.cast(typing.Any, values))
         for model_id, label in config.GROQ_CHAT_MODELS:
-            self.assertIn(model_id, values)
-            self.assertIn(label, names)
-        self.assertNotIn("llama-3.3-70b-versatile", values)
-        self.assertLessEqual(len(values), 25)
-        self.assertEqual(len(values), len(set(values)))
+            self.assertIn(model_id, typing.cast(typing.Any, values))
+            self.assertIn(label, typing.cast(typing.Any, names))
+        self.assertNotIn("llama-3.3-70b-versatile", typing.cast(typing.Any, values))
+        self.assertLessEqual(len(typing.cast(typing.Any, values)), 25)
+        self.assertEqual(
+            len(typing.cast(typing.Any, values)),
+            len(typing.cast(typing.Any, set(typing.cast(typing.Any, values)))),
+        )
 
     def test_upload_commands_register_real_attachment_options(self) -> None:
         expected = {
@@ -170,24 +235,72 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
         }
         for command_name, attachment_names in expected.items():
             with self.subTest(command=command_name):
-                parameters = {
-                    parameter.name: parameter
-                    for parameter in self.commands[command_name].parameters
-                }
+                parameters: typing.Any = typing.cast(
+                    typing.Any,
+                    {
+                        typing.cast(typing.Any, parameter).name: parameter
+                        for parameter in typing.cast(
+                            typing.Any, typing.cast(typing.Any, self).commands[command_name]
+                        ).parameters
+                    },
+                )
                 for name in attachment_names:
-                    self.assertIn(name, parameters)
-                    self.assertIs(parameters[name].type, discord.AppCommandOptionType.attachment)
+                    self.assertIn(name, typing.cast(typing.Any, parameters))
+                    self.assertIs(
+                        typing.cast(typing.Any, typing.cast(typing.Any, parameters[name]).type),
+                        discord.AppCommandOptionType.attachment,
+                    )
 
     def test_ai_workflows_extend_existing_commands_without_exceeding_discord_limit(self) -> None:
-        ask = {parameter.name: parameter for parameter in self.commands["ask"].parameters}
-        workflows = [choice.value for choice in ask["workflow"].choices]
+        ask: typing.Any = typing.cast(
+            typing.Any,
+            {
+                typing.cast(typing.Any, parameter).name: parameter
+                for parameter in typing.cast(
+                    typing.Iterable[typing.Any],
+                    typing.cast(
+                        typing.Any, typing.cast(typing.Any, self).commands["ask"]
+                    ).parameters,
+                )
+            },
+        )
+        workflows: typing.Any = typing.cast(
+            typing.Any,
+            [
+                typing.cast(typing.Any, choice).value
+                for choice in typing.cast(
+                    typing.Iterable[typing.Any], typing.cast(typing.Any, ask["workflow"]).choices
+                )
+            ],
+        )
         self.assertEqual(workflows, [])
-        self.assertIsNotNone(ask["workflow"].autocomplete)
+        self.assertIsNotNone(
+            typing.cast(typing.Any, typing.cast(typing.Any, ask["workflow"]).autocomplete)
+        )
 
-        recap = {parameter.name: parameter for parameter in self.commands["recap"].parameters}
-        recap_modes = [choice.value for choice in recap["mode"].choices]
-        self.assertIn("action_items", recap_modes)
-        self.assertIn("moderation_triage", recap_modes)
+        recap: typing.Any = typing.cast(
+            typing.Any,
+            {
+                typing.cast(typing.Any, parameter).name: parameter
+                for parameter in typing.cast(
+                    typing.Iterable[typing.Any],
+                    typing.cast(
+                        typing.Any, typing.cast(typing.Any, self).commands["recap"]
+                    ).parameters,
+                )
+            },
+        )
+        recap_modes: typing.Any = typing.cast(
+            typing.Any,
+            [
+                typing.cast(typing.Any, choice).value
+                for choice in typing.cast(
+                    typing.Iterable[typing.Any], typing.cast(typing.Any, recap["mode"]).choices
+                )
+            ],
+        )
+        self.assertIn("action_items", typing.cast(typing.Any, recap_modes))
+        self.assertIn("moderation_triage", typing.cast(typing.Any, recap_modes))
 
         menu_names = {
             command.name
@@ -196,6 +309,7 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
         }
         self.assertIn("AI: Summarize", menu_names)
         self.assertIn("AI: Fact-check", menu_names)
+
 
 if __name__ == "__main__":
     unittest.main()

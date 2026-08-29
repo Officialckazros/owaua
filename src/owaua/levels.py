@@ -14,7 +14,9 @@ Booster perks
 - A bot-managed custom role (own name + color) via ``!boosterrole``
 - Automatic removal of that role when boosting stops
 """
+
 import secrets
+import typing
 
 import discord
 
@@ -47,7 +49,7 @@ LEVEL_TITLES = [
 _BOOSTER_ROLE_KEY = "boosterrole:{guild_id}:{user_id}"
 
 
-def is_booster(member) -> bool:
+def is_booster(member: typing.Any) -> bool:
     return getattr(member, "premium_since", None) is not None
 
 
@@ -102,9 +104,9 @@ def award_message(
     guild_id: str,
     *,
     is_boosting: bool,
-    settings: dict | None = None,
+    settings: dict[typing.Any, typing.Any] | None = None,
     channel_id: str | None = None,
-) -> dict | None:
+) -> dict[typing.Any, typing.Any] | None:
     """Record a message for XP; returns level-up info or None when on cooldown."""
     options = settings if isinstance(settings, dict) else {}
     low = max(1, min(1000, int(options.get("xp_min") or BASE_XP_MIN)))
@@ -116,7 +118,11 @@ def award_message(
     if isinstance(channel_multipliers, dict) and channel_id is not None:
         try:
             channel_multiplier = max(
-                0.0, min(100.0, float(channel_multipliers.get(str(channel_id), 1.0)))
+                0.0,
+                min(
+                    100.0,
+                    float(typing.cast(typing.Any, channel_multipliers).get(str(channel_id), 1.0)),
+                ),
             )
         except (TypeError, ValueError):
             channel_multiplier = 1.0
@@ -231,23 +237,16 @@ def _parse_color(raw: str):
 
 def build_daily_reply(user_id: str, guild_id: str, is_boosting: bool):
     """Claim the daily stipend; returns (embed, ok)."""
-    remaining, credited, streak = db.daily_claim(
-        user_id, guild_id, daily_reward(is_boosting)
-    )
+    remaining, credited, streak = db.daily_claim(user_id, guild_id, daily_reward(is_boosting))
     if remaining > 0:
         hours, mins = divmod(int(remaining // 60), 60)
         return (
-            embeds.error(
-                f"already claimed today — next claim in {hours}h {mins}m."
-            ),
+            embeds.error(f"already claimed today — next claim in {hours}h {mins}m."),
             False,
         )
     balance = opsec.add_balance(user_id, credited)
     label = "booster stipend" if is_boosting else "daily stipend"
     return (
-        embeds.say(
-            f"{label}: **${credited}** — streak **{streak}** day(s). "
-            f"balance: ${balance}."
-        ),
+        embeds.say(f"{label}: **${credited}** — streak **{streak}** day(s). balance: ${balance}."),
         True,
     )

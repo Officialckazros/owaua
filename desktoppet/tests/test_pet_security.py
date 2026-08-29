@@ -4,6 +4,7 @@ import os
 import stat
 import sys
 import tempfile
+import typing
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -12,8 +13,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 PET_PATH = Path(__file__).resolve().parents[1] / "pet.py"
 SPEC = importlib.util.spec_from_file_location("owaua_test_module", PET_PATH)
-pet = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(pet)
+pet = importlib.util.module_from_spec(typing.cast(typing.Any, SPEC))
+typing.cast(typing.Any, typing.cast(typing.Any, SPEC).loader).exec_module(pet)
 
 
 class SafeMathTests(unittest.TestCase):
@@ -67,9 +68,7 @@ class EndpointTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             pet.validate_api_base_url("http://localhost:8080/v1")
         self.assertEqual(
-            pet.validate_api_base_url(
-                "http://localhost:8080/v1", allow_insecure_local=True
-            ),
+            pet.validate_api_base_url("http://localhost:8080/v1", allow_insecure_local=True),
             "http://localhost:8080/v1",
         )
         with self.assertRaises(ValueError):
@@ -164,9 +163,7 @@ class ConfigurationTests(unittest.TestCase):
             canonical_dir = root / ".owaua"
             legacy_dir.mkdir()
             legacy_key = "SEF" + "PET_AI_KEY"
-            (legacy_dir / ".env").write_text(
-                f"{legacy_key}=secret\n", encoding="utf-8"
-            )
+            (legacy_dir / ".env").write_text(f"{legacy_key}=secret\n", encoding="utf-8")
             fake_keyring = mock.Mock()
             fake_keyring.get_password.side_effect = [None, "keyring-secret"]
             with (
@@ -197,9 +194,7 @@ class ConfigurationTests(unittest.TestCase):
             ):
                 settings, mood = pet.load_settings()
             self.assertEqual(settings, pet.DEFAULT_SETTINGS)
-            self.assertEqual(
-                mood, {key: float(value) for key, value in pet.DEFAULT_MOOD.items()}
-            )
+            self.assertEqual(mood, {key: float(value) for key, value in pet.DEFAULT_MOOD.items()})
             self.assertFalse(config_file.exists())
             self.assertEqual(
                 (config_dir / "config.corrupt.json").read_text(encoding="utf-8"),

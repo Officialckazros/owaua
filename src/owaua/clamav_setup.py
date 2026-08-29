@@ -44,9 +44,7 @@ def _runtime_env() -> dict[str, str]:
         values.append(environment["LD_LIBRARY_PATH"])
     environment["LD_LIBRARY_PATH"] = os.pathsep.join(values)
     environment["CVD_CERTS_DIR"] = str(
-        (
-            config.MALWARE_CLAMAV_ROOT / "usr" / "local" / "etc" / "certs"
-        ).absolute()
+        (config.MALWARE_CLAMAV_ROOT / "usr" / "local" / "etc" / "certs").absolute()
     )
     return environment
 
@@ -110,9 +108,7 @@ def _write_configuration() -> None:
     database = config.MALWARE_DATABASE_DIR.absolute()
     database.mkdir(parents=True, exist_ok=True)
     root = config.MALWARE_CLAMAV_ROOT.parent.absolute()
-    certs = (
-        config.MALWARE_CLAMAV_ROOT / "usr" / "local" / "etc" / "certs"
-    ).absolute()
+    certs = (config.MALWARE_CLAMAV_ROOT / "usr" / "local" / "etc" / "certs").absolute()
     user = getpass.getuser()
     _write_private(
         config.MALWARE_FRESHCLAM_CONFIG,

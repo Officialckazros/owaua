@@ -67,17 +67,13 @@ button{background:#eee;color:#111;border:0;border-radius:.35rem;padding:.75rem 1
 label.accept{display:flex;gap:.7rem;align-items:flex-start;margin:1.2rem 0}
 label.accept input{margin-top:.4rem}
 """.strip()
-_STYLE_HASH: Final = base64.b64encode(
-    hashlib.sha256(_STYLE.encode("utf-8")).digest()
-).decode("ascii")
-_READINESS_COMPONENTS: Final = frozenset(
-    {"service", "discord", "database", "malware_scanner"}
+_STYLE_HASH: Final = base64.b64encode(hashlib.sha256(_STYLE.encode("utf-8")).digest()).decode(
+    "ascii"
 )
+_READINESS_COMPONENTS: Final = frozenset({"service", "discord", "database", "malware_scanner"})
 
 ReadinessResult: TypeAlias = bool | Mapping[str, bool]
-ReadinessProvider: TypeAlias = Callable[
-    [], ReadinessResult | Awaitable[ReadinessResult]
-]
+ReadinessProvider: TypeAlias = Callable[[], ReadinessResult | Awaitable[ReadinessResult]]
 
 
 class WebConfigurationError(ValueError):
@@ -151,7 +147,9 @@ def _privacy_page(contact: str) -> str:
 def _acceptance_page(contact: str, token: str) -> str:
     safe_token = html.escape(token, quote=True)
     safe_contact = html.escape(contact)
-    body = terms_inner(contact) + f"""
+    body = (
+        terms_inner(contact)
+        + f"""
 <section class="card" aria-labelledby="accept-heading">
   <h2 id="accept-heading">Accept this version</h2>
   <p>For abuse and block-evasion prevention, this submission processes your
@@ -171,6 +169,7 @@ def _acceptance_page(contact: str, token: str) -> str:
   </form>
 </section>
 """
+    )
     return _document("Review and accept Terms", body)
 
 
@@ -178,7 +177,7 @@ def _acceptance_result(title: str, message: str) -> str:
     return _document(
         title,
         f'<h1>{html.escape(title)}</h1><div class="card"><p>{html.escape(message)}</p>'
-        '<p>You can close this page and return to Discord.</p></div>',
+        "<p>You can close this page and return to Discord.</p></div>",
     )
 
 
@@ -189,9 +188,7 @@ def _html_response(content: str) -> web.Response:
 def _apply_dashboard_headers(response: web.StreamResponse) -> None:
     response.headers.setdefault("Cache-Control", "no-store")
     response.headers.setdefault("X-Robots-Tag", "noindex, nofollow")
-    response.headers.setdefault(
-        "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
-    )
+    response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     response.headers.setdefault(
         "Content-Security-Policy",
         "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
@@ -300,9 +297,7 @@ async def _security_headers(
     )
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Server"] = "owaua"
-    response.headers["Strict-Transport-Security"] = (
-        "max-age=31536000; includeSubDomains"
-    )
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     cacheable_page = (
@@ -353,11 +348,7 @@ def create_app(
     if not isinstance(privacy_contact, str):
         raise WebConfigurationError("OWAUA_PRIVACY_CONTACT must be text")
     contact = privacy_contact.strip()
-    if (
-        not contact
-        or len(contact) > 200
-        or any(not char.isprintable() for char in contact)
-    ):
+    if not contact or len(contact) > 200 or any(not char.isprintable() for char in contact):
         raise WebConfigurationError(
             "OWAUA_PRIVACY_CONTACT must be a non-empty contact up to 200 characters"
         )

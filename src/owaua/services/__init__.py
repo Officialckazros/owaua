@@ -4,6 +4,7 @@ Exposes a single reusable :class:`LLMClient` (httpx-based, OpenAI-compatible)
 plus a process-wide shared instance used by the moderation, vision, multilingual,
 tool-calling (/act) and voice (STT/TTS) features.
 """
+
 from owaua.services.llm_client import (
     LLMClient,
     LLMError,

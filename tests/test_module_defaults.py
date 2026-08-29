@@ -29,16 +29,13 @@ class ModuleDefaultTests(unittest.TestCase):
             actor_id="test",
         )
 
-        self.assertFalse(
-            db.module_config("123456789012345678", "levels")["enabled"]
-        )
-        self.assertTrue(
-            db.module_config("123456789012345678", "welcome")["enabled"]
-        )
+        self.assertFalse(db.module_config("123456789012345678", "levels")["enabled"])
+        self.assertTrue(db.module_config("123456789012345678", "welcome")["enabled"])
 
     def test_feature_switches_start_enabled(self):
         disabled_server_switches = [
-            key for key, definition in SERVER_SETTINGS.items()
+            key
+            for key, definition in SERVER_SETTINGS.items()
             if key.endswith("_enabled") and definition["default"] is not True
         ]
         disabled_module_switches = [

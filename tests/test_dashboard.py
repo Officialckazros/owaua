@@ -1,5 +1,6 @@
 import json
 import re
+import typing
 import unittest
 from unittest import mock
 from urllib.parse import parse_qs, urlsplit
@@ -103,9 +104,7 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
 
         api = await self.client.get("/dashboard/api/catalog")
         self.assertEqual(api.status, 401)
-        boosters = await self.client.get(
-            "/dashboard/api/guild/123456789012345678/boosters"
-        )
+        boosters = await self.client.get("/dashboard/api/guild/123456789012345678/boosters")
         self.assertEqual(boosters.status, 401)
 
     async def test_discord_oauth_failure_returns_to_login_instead_of_502(self):
@@ -141,7 +140,7 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
                 self.offset = 0
                 self.reads = 0
 
-            async def read(self, limit):
+            async def read(self, limit: typing.Any):
                 self.reads += 1
                 if self.offset >= len(payload):
                     return b""
@@ -155,17 +154,15 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
                 self.content = Content()
 
         response = Response()
-        guilds = await _read_provider_json(
-            response, limit=DISCORD_GUILDS_JSON_BYTES
-        )
+        guilds = await _read_provider_json(response, limit=DISCORD_GUILDS_JSON_BYTES)
 
         self.assertIsInstance(guilds, list)
-        self.assertEqual(guilds[0]["id"], "1")
+        self.assertEqual(typing.cast(typing.Any, typing.cast(typing.Any, guilds)[0])["id"], "1")
         self.assertGreater(response.content.reads, 2)
 
     async def test_provider_json_rejects_a_chunked_oversized_response(self):
         class Content:
-            async def read(self, limit):
+            async def read(self, limit: typing.Any):
                 return b"x" * limit
 
         class Response:
@@ -234,9 +231,7 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
                 headers={"Cookie": f"owaua_dashboard_session={session_cookie}"},
             )
         ).json()
-        self.assertEqual(
-            [item["id"] for item in guilds["guilds"]], ["123456789012345678"]
-        )
+        self.assertEqual([item["id"] for item in guilds["guilds"]], ["123456789012345678"])
         self.assertNotIn("members", guilds["guilds"][0])
 
         modules = await (
@@ -428,28 +423,18 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             "const collectionSchemas=", 1
         )[0]
         group_bodies = re.findall(r"keys:\[([^\]]*)\]", booster_groups)
-        grouped_keys = [
-            key
-            for body in group_bodies
-            for key in re.findall(r'"([a-z0-9_]+)"', body)
-        ]
+        grouped_keys = [key for body in group_bodies for key in re.findall(r'"([a-z0-9_]+)"', body)]
         self.assertEqual(set(grouped_keys), set(default_settings("boosters")))
         self.assertEqual(len(grouped_keys), len(set(grouped_keys)))
 
     async def test_catalog_exposes_every_module_without_paid_gates(self):
         cookie, _csrf = await self._login()
-        response = await self.client.get(
-            "/dashboard/api/catalog", headers={"Cookie": cookie}
-        )
+        response = await self.client.get("/dashboard/api/catalog", headers={"Cookie": cookie})
         payload = await response.json()
         self.assertTrue(payload["free"])
         self.assertEqual({item["id"] for item in payload["modules"]}, set(MODULES))
-        self.assertEqual(
-            {item["key"] for item in payload["server_settings"]}, set(SERVER_SETTINGS)
-        )
-        model = next(
-            item for item in payload["server_settings"] if item["key"] == "model"
-        )
+        self.assertEqual({item["key"] for item in payload["server_settings"]}, set(SERVER_SETTINGS))
+        model = next(item for item in payload["server_settings"] if item["key"] == "model")
         self.assertTrue(any(choice["value"] == "" for choice in model["choices"]))
         self.assertGreaterEqual(len(payload["modules"]), 32)
 
@@ -470,9 +455,7 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             attempts=2,
             fallbacks=1,
         )
-        denied = await self.client.get(
-            "/dashboard/api/guild/123456789012345678/ai-health"
-        )
+        denied = await self.client.get("/dashboard/api/guild/123456789012345678/ai-health")
         self.assertEqual(denied.status, 401)
         response = await self.client.get(
             "/dashboard/api/guild/123456789012345678/ai-health",
@@ -580,7 +563,10 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
         payload = await response.json()
         self.assertEqual(payload["language"], "Russian (русский)")
         self.assertEqual(payload["translations"]["Overview"], "Обзор")
-        self.assertEqual(translate.await_args.kwargs["scope_id"], "guild:123456789012345678")
+        self.assertEqual(
+            typing.cast(typing.Any, translate.await_args).kwargs["scope_id"],
+            "guild:123456789012345678",
+        )
 
         rejected = await self.client.post(
             "/dashboard/api/guild/123456789012345678/localization",
@@ -625,17 +611,13 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("<Application>", body)
         self.assertIn("style-src 'self'", page.headers["Content-Security-Policy"])
 
-        missing = await self.client.post(
-            "/forms/123456789012345678/staff", data={}
-        )
+        missing = await self.client.post("/forms/123456789012345678/staff", data={})
         self.assertEqual(missing.status, 400)
         submitted = await self.client.post(
             "/forms/123456789012345678/staff", data={"q_why": "I can help."}
         )
         self.assertEqual(submitted.status, 200)
-        records = db.community_records(
-            "form_submission", "guild:123456789012345678"
-        )
+        records = db.community_records("form_submission", "guild:123456789012345678")
         self.assertEqual(records[0]["data"]["answers"][0]["values"], ["I can help."])
 
     async def test_staff_operations_api_is_authenticated_csrf_bound_and_export_safe(self):
@@ -648,13 +630,15 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
         created = await self.client.post(
             "/dashboard/api/guild/123456789012345678/cases",
             headers=headers,
-            data=json.dumps({
-                "subject_id": "40",
-                "category": "automod bypass",
-                "reason": "Repeated separator bypass",
-                "severity": "high",
-                "evidence_links": ["https://discord.com/channels/123/20/30"],
-            }),
+            data=json.dumps(
+                {
+                    "subject_id": "40",
+                    "category": "automod bypass",
+                    "reason": "Repeated separator bypass",
+                    "severity": "high",
+                    "evidence_links": ["https://discord.com/channels/123/20/30"],
+                }
+            ),
         )
         self.assertEqual(created.status, 201, await created.text())
         case = (await created.json())["case"]
@@ -674,7 +658,9 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             data=json.dumps({"action": "note", "note": "Private staff context"}),
         )
         self.assertEqual(note.status, 200, await note.text())
-        self.assertTrue(any(item["kind"] == "note" for item in (await note.json())["case"]["timeline"]))
+        self.assertTrue(
+            any(item["kind"] == "note" for item in (await note.json())["case"]["timeline"])
+        )
 
         no_csrf = await self.client.post(
             "/dashboard/api/guild/123456789012345678/cases",

@@ -1,3 +1,4 @@
+# pyright: reportUnknownLambdaType=false
 """
 owaua — a desktop pet that lives on your screen.
 
@@ -24,6 +25,7 @@ import re
 import sys
 import tempfile
 import time
+import typing
 from collections import deque
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -94,9 +96,7 @@ ALLOWED_ENV_KEYS = frozenset(
         "INFERX_MODEL",
     }
 )
-SECRET_ENV_KEYS = frozenset(
-    {"OWAUA_AI_KEY", "GROQ_API_KEY", "DEEPSEEK_API_KEY", "INFERX_API_KEY"}
-)
+SECRET_ENV_KEYS = frozenset({"OWAUA_AI_KEY", "GROQ_API_KEY", "DEEPSEEK_API_KEY", "INFERX_API_KEY"})
 RNG = random.SystemRandom()
 
 DEFAULT_SETTINGS = {
@@ -127,9 +127,7 @@ def _migrate_legacy_user_state():
         text = env_file.read_text(encoding="utf-8")
         migrated = text.replace(old_prefix, "OWAUA_")
         if migrated != text:
-            descriptor, temporary_name = tempfile.mkstemp(
-                prefix=".env.", dir=CONFIG_DIR
-            )
+            descriptor, temporary_name = tempfile.mkstemp(prefix=".env.", dir=CONFIG_DIR)
             try:
                 os.fchmod(descriptor, 0o600)
                 with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
@@ -160,7 +158,7 @@ def _migrate_legacy_user_state():
         return
 
 
-def resource_path(name):
+def resource_path(name: typing.Any):
     """Return an approved custom or bundled sprite path.
 
     The working directory and executable directory are deliberately excluded:
@@ -189,7 +187,7 @@ def resource_path(name):
     return None
 
 
-def _ensure_private_directory(path=CONFIG_DIR):
+def _ensure_private_directory(path: typing.Any = CONFIG_DIR):
     path = Path(path)
     if path.is_symlink():
         raise OSError(f"refusing symlinked private directory: {path}")
@@ -198,7 +196,7 @@ def _ensure_private_directory(path=CONFIG_DIR):
         path.chmod(0o700)
 
 
-def _harden_private_file(path):
+def _harden_private_file(path: typing.Any):
     path = Path(path)
     if path.is_symlink() or not path.is_file():
         return False
@@ -210,16 +208,16 @@ def _harden_private_file(path):
     return True
 
 
-def load_env_file(path):
+def load_env_file(path: typing.Any):
     """Read the private owaua env file without following a symlink."""
     path = Path(path)
     if not _harden_private_file(path):
-        return {}
+        return typing.cast(typing.Any, {})
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
-        return {}
-    env = {}
+        return typing.cast(typing.Any, {})
+    env: dict[typing.Any, typing.Any] = {}
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -237,9 +235,9 @@ def load_keyring_secrets():
     try:
         import keyring
     except ImportError:
-        return {}
+        return typing.cast(typing.Any, {})
 
-    values = {}
+    values: dict[typing.Any, typing.Any] = {}
     for key in SECRET_ENV_KEYS:
         try:
             value = keyring.get_password(KEYRING_SERVICE, key)
@@ -250,7 +248,7 @@ def load_keyring_secrets():
     return values
 
 
-def store_keyring_secret(key, value):
+def store_keyring_secret(key: typing.Any, value: typing.Any):
     """Store one supported API key in the OS credential store."""
     if key not in SECRET_ENV_KEYS:
         raise ValueError("unsupported secret name")
@@ -263,26 +261,26 @@ def store_keyring_secret(key, value):
     try:
         keyring.set_password(KEYRING_SERVICE, key, value)
     except Exception as exc:
-        raise RuntimeError(
-            "the operating system credential store is unavailable"
-        ) from exc
+        raise RuntimeError("the operating system credential store is unavailable") from exc
 
 
 def get_env():
     """Load only owaua's private config, keyring, and explicit environment."""
-    env = load_keyring_secrets()
+    env: typing.Any = typing.cast(typing.Any, load_keyring_secrets())
     try:
         _ensure_private_directory(CONFIG_DIR)
     except OSError:
-        private_env = {}
+        private_env: dict[typing.Any, typing.Any] = {}
     else:
-        private_env = load_env_file(CONFIG_DIR / ".env")
-    env.update(private_env)
-    env.update({key: os.environ[key] for key in ALLOWED_ENV_KEYS if key in os.environ})
-    return env
+        private_env: typing.Any = typing.cast(typing.Any, load_env_file(CONFIG_DIR / ".env"))
+    typing.cast(typing.Any, env).update(private_env)
+    typing.cast(typing.Any, env).update(
+        {key: os.environ[key] for key in ALLOWED_ENV_KEYS if key in os.environ}
+    )
+    return typing.cast(typing.Any, env)
 
 
-def _clean_name(value):
+def _clean_name(value: typing.Any):
     if not isinstance(value, str):
         return DEFAULT_SETTINGS["name"]
     value = " ".join(value.split())
@@ -290,10 +288,12 @@ def _clean_name(value):
     return value or DEFAULT_SETTINGS["name"]
 
 
-def validate_settings(raw_settings=None, raw_mood=None):
+def validate_settings(raw_settings: typing.Any = None, raw_mood: typing.Any = None):
     """Return a bounded, schema-only settings and mood pair."""
-    raw_settings = raw_settings if isinstance(raw_settings, dict) else {}
-    raw_mood = raw_mood if isinstance(raw_mood, dict) else {}
+    raw_settings: typing.Any = typing.cast(
+        typing.Any, raw_settings if isinstance(raw_settings, dict) else {}
+    )
+    raw_mood: typing.Any = typing.cast(typing.Any, raw_mood if isinstance(raw_mood, dict) else {})
     settings = {
         "name": _clean_name(raw_settings.get("name", DEFAULT_SETTINGS["name"])),
         "pace": raw_settings.get("pace")
@@ -304,7 +304,7 @@ def validate_settings(raw_settings=None, raw_mood=None):
         value = raw_settings.get(key, DEFAULT_SETTINGS[key])
         settings[key] = value if isinstance(value, bool) else DEFAULT_SETTINGS[key]
 
-    mood = {}
+    mood: dict[typing.Any, typing.Any] = {}
     for key, default in DEFAULT_MOOD.items():
         value = raw_mood.get(key, default)
         if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -327,16 +327,20 @@ def _quarantine_corrupt_settings():
 
 
 def load_settings():
-    raw_settings = {}
-    raw_mood = {}
+    raw_settings: dict[typing.Any, typing.Any] = {}
+    raw_mood: dict[typing.Any, typing.Any] = {}
     try:
         _ensure_private_directory(CONFIG_DIR)
         if not _harden_private_file(CONFIG_FILE):
             return validate_settings()
         data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         if isinstance(data, dict):
-            raw_settings = data.get("settings", {})
-            raw_mood = data.get("mood", {})
+            raw_settings: typing.Any = typing.cast(
+                typing.Any, typing.cast(typing.Any, data).get("settings", {})
+            )
+            raw_mood: typing.Any = typing.cast(
+                typing.Any, typing.cast(typing.Any, data).get("mood", {})
+            )
     except (json.JSONDecodeError, UnicodeError):
         _quarantine_corrupt_settings()
         return validate_settings()
@@ -345,7 +349,7 @@ def load_settings():
     return validate_settings(raw_settings, raw_mood)
 
 
-def save_settings(settings, mood):
+def save_settings(settings: typing.Any, mood: typing.Any):
     """Atomically persist validated, non-secret state with private permissions."""
     settings, mood = validate_settings(settings, mood)
     temp_path = None
@@ -394,11 +398,11 @@ EMOJI_RE = re.compile(
 )
 
 
-def strip_emoji(text):
+def strip_emoji(text: typing.Any):
     return EMOJI_RE.sub("", text).strip()
 
 
-def _clean_spoken_text(text):
+def _clean_spoken_text(text: typing.Any):
     text = strip_emoji(str(text))
     text = " ".join(text.split())
     text = "".join(char for char in text if char.isprintable())
@@ -438,7 +442,7 @@ WINDOWS_TTS_SCRIPT = (
 
 
 class TTS:
-    def __init__(self, settings):
+    def __init__(self, settings: typing.Any):
         self.settings = settings
         self._process = None
 
@@ -447,7 +451,7 @@ class TTS:
             self.settings.get("pace", "Normal"), 185
         )
 
-    def speak(self, text):
+    def speak(self, text: typing.Any):
         if not self.settings.get("tts", True) or self.settings.get("muted"):
             return
         text = _clean_spoken_text(text)
@@ -456,9 +460,7 @@ class TTS:
         self._stop_current()
         try:
             if sys.platform == "darwin":
-                executable = (
-                    "/usr/bin/say" if Path("/usr/bin/say").is_file() else _which("say")
-                )
+                executable = "/usr/bin/say" if Path("/usr/bin/say").is_file() else _which("say")
                 if not executable:
                     return
                 arguments = ["-r", str(self._rate()), text]
@@ -467,9 +469,7 @@ class TTS:
                 rate = (self._rate() - 140) // 10
                 system_root = Path(os.environ.get("SYSTEMROOT", r"C:\Windows"))
                 bundled = system_root / "System32/WindowsPowerShell/v1.0/powershell.exe"
-                executable = (
-                    str(bundled) if bundled.is_file() else _which("powershell.exe")
-                )
+                executable = str(bundled) if bundled.is_file() else _which("powershell.exe")
                 if not executable:
                     return
                 arguments = [
@@ -484,11 +484,7 @@ class TTS:
                 stdin_text = text
             else:
                 executable = next(
-                    (
-                        found
-                        for name in ("espeak-ng", "espeak")
-                        if (found := _which(name))
-                    ),
+                    (found for name in ("espeak-ng", "espeak") if (found := _which(name))),
                     None,
                 )
                 if executable:
@@ -536,7 +532,7 @@ class TTS:
         self._stop_current()
 
 
-def _which(name):
+def _which(name: typing.Any):
     for d in os.environ.get("PATH", "").split(os.pathsep):
         cand = Path(d) / name
         if cand.is_file() and not cand.is_symlink() and os.access(cand, os.X_OK):
@@ -668,7 +664,7 @@ MAX_MATH_RESULT = 1_000_000_000_000_000
 MAX_MATH_EXPONENT = 10
 
 
-def _bounded_number(value):
+def _bounded_number(value: typing.Any):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError("only real numbers are supported")
     if not math.isfinite(value) or abs(value) > MAX_MATH_RESULT:
@@ -676,7 +672,7 @@ def _bounded_number(value):
     return value
 
 
-def safe_calculate(expression):
+def safe_calculate(expression: typing.Any):
     """Evaluate a small arithmetic expression without Python ``eval``."""
     if not isinstance(expression, str):
         raise TypeError("expression must be text")
@@ -694,70 +690,75 @@ def safe_calculate(expression):
     if sum(1 for _ in ast.walk(tree)) > MAX_MATH_NODES:
         raise ValueError("expression is too complex")
 
-    def visit(node, depth=0):
+    def visit(node: typing.Any, depth: int = 0):
         if depth > MAX_MATH_DEPTH:
             raise ValueError("expression is too deeply nested")
         if isinstance(node, ast.Expression):
-            return visit(node.body, depth + 1)
+            return typing.cast(typing.Any, visit(node.body, depth + 1))
         if isinstance(node, ast.Constant):
             value = _bounded_number(node.value)
             if abs(value) > MAX_MATH_LITERAL:
                 raise ValueError("numeric literal is too large")
             return value
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
-            value = visit(node.operand, depth + 1)
+            value: typing.Any = typing.cast(typing.Any, visit(node.operand, depth + 1))
             return _bounded_number(value if isinstance(node.op, ast.UAdd) else -value)
         if not isinstance(node, ast.BinOp):
             raise TypeError("unsupported operation")
 
-        left = visit(node.left, depth + 1)
-        right = visit(node.right, depth + 1)
+        left: typing.Any = typing.cast(typing.Any, visit(node.left, depth + 1))
+        right: typing.Any = typing.cast(typing.Any, visit(node.right, depth + 1))
         if isinstance(node.op, ast.Add):
-            result = left + right
+            result: typing.Any = typing.cast(typing.Any, left + right)
         elif isinstance(node.op, ast.Sub):
-            result = left - right
+            result: typing.Any = typing.cast(typing.Any, left - right)
         elif isinstance(node.op, ast.Mult):
-            result = left * right
+            result: typing.Any = typing.cast(typing.Any, left * right)
         elif isinstance(node.op, ast.Div):
             if right == 0:
                 raise ValueError("division by zero")
-            result = left / right
+            result: typing.Any = typing.cast(typing.Any, left / right)
         elif isinstance(node.op, ast.FloorDiv):
             if right == 0:
                 raise ValueError("division by zero")
-            result = left // right
+            result: typing.Any = typing.cast(typing.Any, left // right)
         elif isinstance(node.op, ast.Mod):
             if right == 0:
                 raise ValueError("division by zero")
-            result = left % right
+            result: typing.Any = typing.cast(typing.Any, left % right)
         elif isinstance(node.op, ast.Pow):
-            if not float(right).is_integer() or abs(right) > MAX_MATH_EXPONENT:
+            if (
+                not float(typing.cast(typing.Any, right)).is_integer()
+                or abs(typing.cast(typing.Any, right)) > MAX_MATH_EXPONENT
+            ):
                 raise ValueError("exponent is too large")
-            if abs(left) > 1_000_000:
+            if abs(typing.cast(typing.Any, left)) > 1_000_000:
                 raise ValueError("power base is too large")
             try:
-                result = left ** int(right)
+                result: typing.Any = typing.cast(
+                    typing.Any, left ** int(typing.cast(typing.Any, right))
+                )
             except (ArithmeticError, OverflowError) as exc:
                 raise ValueError("invalid power") from exc
         else:
             raise TypeError("unsupported operation")
         return _bounded_number(result)
 
-    return visit(tree)
+    return typing.cast(typing.Any, visit(tree))
 
 
-def _truthy(value):
+def _truthy(value: typing.Any):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _validate_model(model):
+def _validate_model(model: typing.Any):
     model = str(model or "").strip()
     if not MODEL_RE.fullmatch(model):
         raise ValueError("invalid AI model name")
     return model
 
 
-def validate_api_base_url(url, allow_insecure_local=False):
+def validate_api_base_url(url: typing.Any, allow_insecure_local: bool = False):
     """Validate a credential-free OpenAI-compatible base URL."""
     if not isinstance(url, str):
         raise TypeError("AI endpoint must be text")
@@ -790,10 +791,7 @@ def validate_api_base_url(url, allow_insecure_local=False):
         if not is_loopback and (
             len(labels) < 2
             or any(
-                not label
-                or len(label) > 63
-                or label.startswith("-")
-                or label.endswith("-")
+                not label or len(label) > 63 or label.startswith("-") or label.endswith("-")
                 for label in labels
             )
             or re.fullmatch(r"[0-9.]+", ascii_host)
@@ -815,9 +813,7 @@ def validate_api_base_url(url, allow_insecure_local=False):
         raise ValueError("local AI endpoint requires explicit development opt-in")
     if port is not None and not 1 <= port <= 65535:
         raise ValueError("invalid AI endpoint port")
-    if "\\" in parts.path or any(
-        segment in {".", ".."} for segment in parts.path.split("/")
-    ):
+    if "\\" in parts.path or any(segment in {".", ".."} for segment in parts.path.split("/")):
         raise ValueError("invalid AI endpoint path")
     return url.rstrip("/")
 
@@ -826,9 +822,9 @@ class Brain:
     """Answers questions. Uses an OpenAI-compatible API when configured,
     otherwise a friendly offline brain."""
 
-    def __init__(self, env, settings, mood=None):
+    def __init__(self, env: typing.Any, settings: typing.Any, mood: typing.Any = None):
         self.settings = settings
-        self.mood = mood if isinstance(mood, dict) else {}
+        typing.cast(typing.Any, self).mood = mood if isinstance(mood, dict) else {}
         self.configuration_error = ""
         self.last_error = ""
         try:
@@ -838,17 +834,15 @@ class Brain:
             self.api_key = ""
             self.base_url = "https://api.groq.com/openai/v1"
             self.model = "llama-3.3-70b-versatile"
-            self.configuration_error = (
-                "AI configuration is invalid; using offline mode."
-            )
+            self.configuration_error = "AI configuration is invalid; using offline mode."
         self._client = None
 
     @staticmethod
-    def _value(env, key):
+    def _value(env: typing.Any, key: typing.Any):
         return str(env.get(key) or "").strip()
 
     @classmethod
-    def _provider(cls, env):
+    def _provider(cls, env: typing.Any):
         """Keep a provider's key, endpoint, and model together.
 
         The Discord bot's shared .env can contain several provider URLs.  The
@@ -878,9 +872,7 @@ class Brain:
                 validate_api_base_url(
                     cls._value(env, "GROQ_BASE_URL") or "https://api.groq.com/openai/v1"
                 ),
-                _validate_model(
-                    cls._value(env, "GROQ_MODEL") or "llama-3.3-70b-versatile"
-                ),
+                _validate_model(cls._value(env, "GROQ_MODEL") or "llama-3.3-70b-versatile"),
             )
 
         deepseek_key = cls._value(env, "DEEPSEEK_API_KEY")
@@ -893,8 +885,7 @@ class Brain:
                 "deepseek",
                 deepseek_key,
                 validate_api_base_url(
-                    cls._value(env, "DEEPSEEK_BASE_URL")
-                    or "https://api.deepseek.com/v1"
+                    cls._value(env, "DEEPSEEK_BASE_URL") or "https://api.deepseek.com/v1"
                 ),
                 _validate_model(model),
             )
@@ -905,12 +896,9 @@ class Brain:
                 "inferx",
                 inferx_key,
                 validate_api_base_url(
-                    cls._value(env, "INFERX_BASE_URL")
-                    or "https://model.inferx.net/endpoints/v1"
+                    cls._value(env, "INFERX_BASE_URL") or "https://model.inferx.net/endpoints/v1"
                 ),
-                _validate_model(
-                    cls._value(env, "INFERX_MODEL") or "ix:deepseek-v4-flash"
-                ),
+                _validate_model(cls._value(env, "INFERX_MODEL") or "ix:deepseek-v4-flash"),
             )
 
         return (
@@ -928,9 +916,7 @@ class Brain:
         if self._client is None:
             from groq import DefaultHttpxClient, Groq
 
-            http_client = DefaultHttpxClient(
-                timeout=8.0, trust_env=False, follow_redirects=False
-            )
+            http_client = DefaultHttpxClient(timeout=8.0, trust_env=False, follow_redirects=False)
             self._client = Groq(
                 api_key=self.api_key,
                 base_url=self.base_url,
@@ -939,7 +925,7 @@ class Brain:
             )
         return self._client
 
-    def ask(self, question):
+    def ask(self, question: typing.Any):
         name = self.settings.get("name", "owaua")
         question = " ".join(str(question).split())[:MAX_QUESTION_CHARS]
         if self.available:
@@ -988,17 +974,17 @@ class Brain:
                 pass
 
     @staticmethod
-    def _has(text, *words):
+    def _has(text: typing.Any, *words: typing.Any):
         """Whole-word substring match (so 'yo' doesn't match 'you')."""
-        return any(re.search(r"\b" + re.escape(w) + r"\b", text) for w in words)
+        return any(
+            typing.cast(typing.Any, (re.search(r"\b" + re.escape(w) + r"\b", text) for w in words))
+        )
 
-    def _offline(self, q):
+    def _offline(self, q: typing.Any):
         q = q.strip().lower()
         name = self.settings.get("name", "owaua")
 
-        if self._has(
-            q, "who are you", "what are you", "what is " + name.lower(), "about you"
-        ):
+        if self._has(q, "who are you", "what are you", "what is " + name.lower(), "about you"):
             return (
                 f"I'm {name}, a desktop pet! I live on your screen, waddle around, "
                 "tell jokes and facts, do math, and answer questions. Right-click me "
@@ -1010,9 +996,7 @@ class Brain:
                 "singing, feeding me, petting me, or just chatting. I also walk, "
                 "drag, and talk out loud!"
             )
-        if self._has(
-            q, "how are you", "how's it going", "how are ya", "how do you feel"
-        ):
+        if self._has(q, "how are you", "how's it going", "how are ya", "how do you feel"):
             mood = "well" if self._mood_ok() else "a bit hungry, honestly"
             return f"I'm doing {mood}! Thanks for checking in."
         if self._has(
@@ -1082,12 +1066,12 @@ class Brain:
         return RNG.choice(FALLBACK)
 
     @staticmethod
-    def _is_math(q):
+    def _is_math(q: typing.Any):
         expr = Brain._clean_math(q)
         return bool(expr) and bool(MATH_RE.fullmatch(expr))
 
     @staticmethod
-    def _clean_math(q):
+    def _clean_math(q: typing.Any):
         return (
             q.lower()
             .replace("what is", "")
@@ -1099,27 +1083,37 @@ class Brain:
             .strip()
         )
 
-    def _math(self, q):
+    def _math(self, q: typing.Any):
         expr = self._clean_math(q)
         if not expr or not MATH_RE.fullmatch(expr):
             return "I can do simple math like 'what is 12 * 8?'"
         try:
-            result = safe_calculate(expr)
-            rendered = format(result, ".12g")
+            result: typing.Any = typing.cast(typing.Any, safe_calculate(expr))
+            rendered = format(typing.cast(typing.Any, result), ".12g")
             return f"That equals {rendered}!"
         except ValueError:
             return "Hmm, that math didn't compute. Try something like 'what is 12 * 8?'"
 
     def _mood_ok(self):
         try:
-            return float(self.mood.get("hunger", 35)) < 60
+            return (
+                float(
+                    typing.cast(
+                        typing.Any,
+                        typing.cast(typing.Any, typing.cast(typing.Any, self).mood).get(
+                            "hunger", 35
+                        ),
+                    )
+                )
+                < 60
+            )
         except (TypeError, ValueError):
             return True
 
 
-def chroma_key(img, tol=30):
+def chroma_key(img: typing.Any, tol: int = 30):
     """Remove background connected to the image borders (tolerance-based)."""
-    img = img.convertToFormat(QImage.Format_ARGB32)
+    img = img.convertToFormat(typing.cast(typing.Any, QImage).Format_ARGB32)
     w, h = img.width(), img.height()
 
     seeds = [(x, 0) for x in range(w)] + [(x, h - 1) for x in range(w)]
@@ -1163,17 +1157,17 @@ def chroma_key(img, tol=30):
     return img
 
 
-def make_fallback_sprite(size):
+def make_fallback_sprite(size: typing.Any):
     """A cute simple pet drawn at runtime if no sprite file is found."""
     pm = QPixmap(size, size)
-    pm.fill(Qt.transparent)
+    pm.fill(typing.cast(typing.Any, typing.cast(typing.Any, Qt).transparent))
     p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
+    p.setRenderHint(typing.cast(typing.Any, typing.cast(typing.Any, QPainter).Antialiasing))
     p.setBrush(QColor(255, 214, 153))
     p.setPen(QColor(120, 80, 40))
     p.drawEllipse(8, 8, size - 16, size - 16)
     p.setBrush(QColor(40, 30, 20))
-    p.setPen(Qt.NoPen)
+    p.setPen(typing.cast(typing.Any, typing.cast(typing.Any, Qt).NoPen))
     eye = max(4, size // 12)
     p.drawEllipse(size // 3 - eye // 2, size // 3 - eye // 2, eye, eye)
     p.drawEllipse(2 * size // 3 - eye // 2, size // 3 - eye // 2, eye, eye)
@@ -1183,7 +1177,7 @@ def make_fallback_sprite(size):
     return pm
 
 
-def load_sprite(target_width=200):
+def load_sprite(target_width: int = 200):
     target_width = max(32, min(512, int(target_width)))
     for name in SPRITE_NAMES:
         path = resource_path(name)
@@ -1209,13 +1203,15 @@ def load_sprite(target_width=200):
             or width * height > MAX_SPRITE_PIXELS
         ):
             continue
-        image_format = bytes(reader.format()).lower()
+        image_format = bytes(typing.cast(typing.Any, reader.format())).lower()
         if image_format not in {b"png", b"jpeg", b"jpg"}:
             continue
         img = reader.read()
         if img.isNull():
             continue
-        pm = QPixmap.fromImage(img).scaledToWidth(target_width, Qt.SmoothTransformation)
+        pm = QPixmap.fromImage(img).scaledToWidth(
+            target_width, typing.cast(typing.Any, typing.cast(typing.Any, Qt).SmoothTransformation)
+        )
         qimg = chroma_key(pm.toImage())
         return QPixmap.fromImage(qimg)
     return make_fallback_sprite(target_width)
@@ -1224,7 +1220,7 @@ def load_sprite(target_width=200):
 class AskThread(QThread):
     done = Signal(str)
 
-    def __init__(self, brain, question, parent=None):
+    def __init__(self, brain: typing.Any, question: typing.Any, parent: typing.Any = None):
         super().__init__(parent)
         self.brain = brain
         self.question = question
@@ -1233,15 +1229,13 @@ class AskThread(QThread):
         try:
             self.done.emit(self.brain.ask(self.question))
         except Exception:  # noqa: BLE001 - never leak SDK details through the UI
-            self.done.emit(
-                "My brain is unavailable right now, so I switched to offline mode."
-            )
+            self.done.emit("My brain is unavailable right now, so I switched to offline mode.")
 
 
 class PetWindow(QWidget):
     BUBBLE_H = 96
 
-    def __init__(self, settings, mood, env):
+    def __init__(self, settings: typing.Any, mood: typing.Any, env: typing.Any):
         super().__init__()
         self.settings = settings
         self.mood = mood
@@ -1252,20 +1246,38 @@ class PetWindow(QWidget):
         self._quitting = False
 
         self.setWindowTitle(APP_NAME)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setWindowFlags(
+            typing.cast(
+                typing.Any,
+                typing.cast(typing.Any, Qt).FramelessWindowHint
+                | typing.cast(typing.Any, Qt).Tool
+                | typing.cast(typing.Any, Qt).WindowStaysOnTopHint,
+            )
+        )
+        self.setAttribute(
+            typing.cast(typing.Any, typing.cast(typing.Any, Qt).WA_TranslucentBackground)
+        )
+        self.setAttribute(
+            typing.cast(typing.Any, typing.cast(typing.Any, Qt).WA_ShowWithoutActivating)
+        )
 
         self.sprite = load_sprite(200)
         self.sprite_h = self.sprite.height()
         self.sprite_w = self.sprite.width()
         self.sprite_label = QLabel(self)
         self.sprite_label.setPixmap(self.sprite)
-        self.sprite_label.setCursor(Qt.OpenHandCursor)
+        self.sprite_label.setCursor(
+            typing.cast(typing.Any, typing.cast(typing.Any, Qt).OpenHandCursor)
+        )
 
         self.bubble_label = QLabel(self)
         self.bubble_label.setWordWrap(True)
-        self.bubble_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.bubble_label.setAlignment(
+            typing.cast(
+                typing.Any,
+                typing.cast(typing.Any, Qt).AlignLeft | typing.cast(typing.Any, Qt).AlignTop,
+            )
+        )
         self.bubble_label.setStyleSheet(
             "QLabel { background: rgba(255,255,255,235); color: #222;"
             " border: 2px solid #444; border-radius: 10px; padding: 8px;"
@@ -1283,17 +1295,30 @@ class PetWindow(QWidget):
 
         self._apply_topmost()
 
-        self.screen = QGuiApplication.primaryScreen()
-        if self.screen is None:
+        self.pet_screen = QGuiApplication.primaryScreen()
+        if self.pet_screen is None:
             raise RuntimeError("no usable display was found")
-        self.geom = self.screen.availableGeometry()
-        self.screen.availableGeometryChanged.connect(self._screen_geometry_changed)
+        typing.cast(typing.Any, self).geom = typing.cast(
+            typing.Any, typing.cast(typing.Any, self).pet_screen
+        ).availableGeometry()
+        typing.cast(
+            typing.Any,
+            typing.cast(
+                typing.Any, typing.cast(typing.Any, self).pet_screen
+            ).availableGeometryChanged,
+        ).connect(self._screen_geometry_changed)
         app = QGuiApplication.instance()
         if app is not None:
-            app.screenRemoved.connect(self._screen_removed)
+            typing.cast(typing.Any, typing.cast(typing.Any, app).screenRemoved).connect(
+                self._screen_removed
+            )
 
-        self.px = self.geom.right() - self.sprite_w - 60
-        self.ground_y = self.geom.bottom() - 8
+        typing.cast(typing.Any, self).px = (
+            typing.cast(typing.Any, typing.cast(typing.Any, self).geom).right() - self.sprite_w - 60
+        )
+        typing.cast(typing.Any, self).ground_y = (
+            typing.cast(typing.Any, typing.cast(typing.Any, self).geom).bottom() - 8
+        )
         self.dir = -1
         self.speed = 2
         self.target_x = self._random_target_x()
@@ -1306,7 +1331,7 @@ class PetWindow(QWidget):
         self.bob_phase = RNG.uniform(0, math.tau)
         self.dance_until = 0.0
         self.dance_flip = 0.0
-        self.dance_ground_y = self.ground_y
+        typing.cast(typing.Any, self).dance_ground_y = typing.cast(typing.Any, self).ground_y
         self.ask_thread = None
         self._last_chatter = 0.0
         self._mood_tick = 0.0
@@ -1327,9 +1352,7 @@ class PetWindow(QWidget):
 
         QTimer.singleShot(
             1200,
-            lambda: self.say(
-                f"Hi! I'm {self.name}. Right-click me for tricks, or just say hi!"
-            ),
+            lambda: self.say(f"Hi! I'm {self.name}. Right-click me for tricks, or just say hi!"),
         )
 
     def _refresh_layout(self):
@@ -1338,9 +1361,7 @@ class PetWindow(QWidget):
             win_h = self.sprite_h + self.BUBBLE_H
             self.bubble_label.setGeometry(6, 6, win_w - 12, self.BUBBLE_H - 10)
             self.bubble_label.show()
-            self.sprite_label.setGeometry(
-                0, self.BUBBLE_H, self.sprite_w, self.sprite_h
-            )
+            self.sprite_label.setGeometry(0, self.BUBBLE_H, self.sprite_w, self.sprite_h)
         else:
             win_w = self.sprite_w
             win_h = self.sprite_h
@@ -1353,34 +1374,78 @@ class PetWindow(QWidget):
         bob = 0
         if self.state in ("idle", "walk") and not self.dragging:
             bob = int(abs(math.sin(self.bob_phase)) * 4)
-        bottom = self.ground_y - bob
-        y = bottom - win_h
-        self.move(int(self.px), int(y))
+        bottom: typing.Any = typing.cast(typing.Any, typing.cast(typing.Any, self).ground_y - bob)
+        y: typing.Any = typing.cast(typing.Any, bottom - win_h)
+        self.move(
+            int(typing.cast(typing.Any, typing.cast(typing.Any, self).px)),
+            int(typing.cast(typing.Any, y)),
+        )
 
-    def _screen_geometry_changed(self, *_args):
-        self.geom = self.screen.availableGeometry()
-        left = self.geom.left() + 4
-        right = max(left, self.geom.right() - self.sprite_w - 4)
-        self.px = max(left, min(self.px, right))
-        self.ground_y = min(self.ground_y, self.geom.bottom() - 8)
-        self.target_x = max(left, min(self.target_x, right))
+    def _screen_geometry_changed(self, *_args: typing.Any):
+        typing.cast(typing.Any, self).geom = typing.cast(
+            typing.Any, typing.cast(typing.Any, self).pet_screen
+        ).availableGeometry()
+        left: typing.Any = typing.cast(
+            typing.Any, typing.cast(typing.Any, typing.cast(typing.Any, self).geom).left() + 4
+        )
+        right: typing.Any = typing.cast(
+            typing.Any,
+            max(
+                typing.cast(typing.Any, left),
+                typing.cast(
+                    typing.Any,
+                    typing.cast(typing.Any, typing.cast(typing.Any, self).geom).right()
+                    - self.sprite_w
+                    - 4,
+                ),
+            ),
+        )
+        typing.cast(typing.Any, self).px = max(
+            typing.cast(typing.Any, left),
+            typing.cast(
+                typing.Any,
+                min(
+                    typing.cast(typing.Any, typing.cast(typing.Any, self).px),
+                    typing.cast(typing.Any, right),
+                ),
+            ),
+        )
+        typing.cast(typing.Any, self).ground_y = min(
+            typing.cast(typing.Any, typing.cast(typing.Any, self).ground_y),
+            typing.cast(
+                typing.Any, typing.cast(typing.Any, typing.cast(typing.Any, self).geom).bottom() - 8
+            ),
+        )
+        self.target_x = max(
+            typing.cast(typing.Any, left), min(self.target_x, typing.cast(typing.Any, right))
+        )
         self._apply_pos()
 
-    def _switch_screen(self, screen):
-        if screen is None or screen is self.screen:
+    def _switch_screen(self, screen: typing.Any):
+        if screen is None or screen is self.pet_screen:
             return
         try:
-            self.screen.availableGeometryChanged.disconnect(
-                self._screen_geometry_changed
-            )
+            typing.cast(
+                typing.Any,
+                typing.cast(
+                    typing.Any, typing.cast(typing.Any, self).pet_screen
+                ).availableGeometryChanged,
+            ).disconnect(self._screen_geometry_changed)
         except (RuntimeError, TypeError):
             pass
-        self.screen = screen
-        self.screen.availableGeometryChanged.connect(self._screen_geometry_changed)
-        self.geom = self.screen.availableGeometry()
+        self.pet_screen = screen
+        typing.cast(
+            typing.Any,
+            typing.cast(
+                typing.Any, typing.cast(typing.Any, self).pet_screen
+            ).availableGeometryChanged,
+        ).connect(self._screen_geometry_changed)
+        typing.cast(typing.Any, self).geom = typing.cast(
+            typing.Any, typing.cast(typing.Any, self).pet_screen
+        ).availableGeometry()
 
-    def _screen_removed(self, removed):
-        if removed is not self.screen:
+    def _screen_removed(self, removed: typing.Any):
+        if removed is not self.pet_screen:
             return
         replacement = next(
             (screen for screen in QGuiApplication.screens() if screen is not removed),
@@ -1390,7 +1455,9 @@ class PetWindow(QWidget):
             self._quit()
             return
         self._switch_screen(replacement)
-        self.ground_y = self.geom.bottom() - 8
+        typing.cast(typing.Any, self).ground_y = (
+            typing.cast(typing.Any, typing.cast(typing.Any, self).geom).bottom() - 8
+        )
         self._screen_geometry_changed()
 
     def _set_sprite_direction(self):
@@ -1399,7 +1466,7 @@ class PetWindow(QWidget):
             pixmap = self.sprite.transformed(QTransform().scale(-1, 1))
         self.sprite_label.setPixmap(pixmap)
 
-    def _flip(self, to_left):
+    def _flip(self, to_left: typing.Any):
         if to_left == (self.dir < 0):
             return
         self.dir = -1 if to_left else 1
@@ -1427,48 +1494,89 @@ class PetWindow(QWidget):
         self._apply_pos()
         self._maybe_idle_chatter(now)
 
-    def _step_walk(self, now):
+    def _step_walk(self, now: typing.Any):
         if now < self.pause_until:
-            self._flip(self.target_x < self.px)
+            self._flip(self.target_x < typing.cast(typing.Any, self).px)
             return
-        if abs(self.target_x - self.px) < 4:
+        if abs(typing.cast(typing.Any, self.target_x - typing.cast(typing.Any, self).px)) < 4:
             self.pause_until = now + RNG.uniform(1.5, 5.0)
             self.target_x = self._random_target_x()
-            self._flip(self.target_x < self.px)
+            self._flip(self.target_x < typing.cast(typing.Any, self).px)
             return
         step = self.speed if self.state == "walk" else self.speed * 0.4
         self.state = "walk"
-        if self.target_x > self.px:
-            self.px += step
+        if self.target_x > typing.cast(typing.Any, self).px:
+            typing.cast(typing.Any, self).px += step
             self._flip(False)
         else:
-            self.px -= step
+            typing.cast(typing.Any, self).px -= step
             self._flip(True)
-        self.px = max(
-            self.geom.left() + 4,
-            min(self.px, self.geom.right() - self.sprite_w - 4),
+        typing.cast(typing.Any, self).px = max(
+            typing.cast(
+                typing.Any, typing.cast(typing.Any, typing.cast(typing.Any, self).geom).left() + 4
+            ),
+            typing.cast(
+                typing.Any,
+                min(
+                    typing.cast(typing.Any, typing.cast(typing.Any, self).px),
+                    typing.cast(
+                        typing.Any,
+                        typing.cast(typing.Any, typing.cast(typing.Any, self).geom).right()
+                        - self.sprite_w
+                        - 4,
+                    ),
+                ),
+            ),
         )
 
     def _random_target_x(self):
-        lo = self.geom.left() + 4
-        hi = max(lo + 1, self.geom.right() - self.sprite_w - 4)
-        return RNG.uniform(lo, hi)
+        lo: typing.Any = typing.cast(
+            typing.Any, typing.cast(typing.Any, typing.cast(typing.Any, self).geom).left() + 4
+        )
+        hi: typing.Any = typing.cast(
+            typing.Any,
+            max(
+                typing.cast(typing.Any, lo + 1),
+                typing.cast(
+                    typing.Any,
+                    typing.cast(typing.Any, typing.cast(typing.Any, self).geom).right()
+                    - self.sprite_w
+                    - 4,
+                ),
+            ),
+        )
+        return RNG.uniform(typing.cast(typing.Any, lo), typing.cast(typing.Any, hi))
 
-    def _apply_dance(self, now):
+    def _apply_dance(self, now: typing.Any):
         if now >= self.dance_until:
             self.state = "walk"
-            self.ground_y = self.dance_ground_y
+            typing.cast(typing.Any, self).ground_y = typing.cast(typing.Any, self).dance_ground_y
             self.target_x = self._random_target_x()
             return
-        self.px += self.dir * self.speed * 4
-        self.px = max(
-            self.geom.left() + 4,
-            min(self.px, self.geom.right() - self.sprite_w - 4),
+        typing.cast(typing.Any, self).px += self.dir * self.speed * 4
+        typing.cast(typing.Any, self).px = max(
+            typing.cast(
+                typing.Any, typing.cast(typing.Any, typing.cast(typing.Any, self).geom).left() + 4
+            ),
+            typing.cast(
+                typing.Any,
+                min(
+                    typing.cast(typing.Any, typing.cast(typing.Any, self).px),
+                    typing.cast(
+                        typing.Any,
+                        typing.cast(typing.Any, typing.cast(typing.Any, self).geom).right()
+                        - self.sprite_w
+                        - 4,
+                    ),
+                ),
+            ),
         )
         if now >= self.dance_flip:
             self.dance_flip = now + RNG.uniform(0.25, 0.5)
             self._flip(RNG.random() < 0.5)
-            self.ground_y = self.dance_ground_y - RNG.randint(0, 22)
+            typing.cast(typing.Any, self).ground_y = typing.cast(
+                typing.Any, self
+            ).dance_ground_y - RNG.randint(0, 22)
 
     def _mood_decay(self):
         self.mood["hunger"] = min(100, self.mood.get("hunger", 35) + 1.5)
@@ -1478,12 +1586,8 @@ class PetWindow(QWidget):
             self.mood["energy"] = min(100, self.mood.get("energy", 80) + 5)
         save_settings(self.settings, self.mood)
 
-    def _maybe_idle_chatter(self, now):
-        if (
-            now - self._last_chatter < 45
-            or self.bubble_visible
-            or self.state == "dance"
-        ):
+    def _maybe_idle_chatter(self, now: typing.Any):
+        if now - self._last_chatter < 45 or self.bubble_visible or self.state == "dance":
             return
         if RNG.random() > 0.002:
             return
@@ -1497,7 +1601,7 @@ class PetWindow(QWidget):
         elif RNG.random() < 0.5:
             self.say(RNG.choice(HAPPY))
 
-    def say(self, text, tts=True, hold=0.0):
+    def say(self, text: typing.Any, tts: bool = True, hold: float = 0.0):
         if self._quitting:
             return
         text = str(text).strip()[:MAX_RESPONSE_CHARS]
@@ -1514,7 +1618,7 @@ class PetWindow(QWidget):
         if tts:
             QTimer.singleShot(350, lambda: self._speak_if_active(text))
 
-    def _speak_if_active(self, text):
+    def _speak_if_active(self, text: typing.Any):
         if not self._quitting:
             self.tts.speak(text)
 
@@ -1552,13 +1656,18 @@ class PetWindow(QWidget):
 
     def _wake(self):
         self.state = "walk"
-        self.ground_y = min(self.ground_y, self.geom.bottom() - 8)
+        typing.cast(typing.Any, self).ground_y = min(
+            typing.cast(typing.Any, typing.cast(typing.Any, self).ground_y),
+            typing.cast(
+                typing.Any, typing.cast(typing.Any, typing.cast(typing.Any, self).geom).bottom() - 8
+            ),
+        )
         self._set_sprite_direction()
         self._apply_topmost()
 
     def _bounce(self):
-        resting_y = self.ground_y
-        self.ground_y = resting_y - 18
+        resting_y: typing.Any = typing.cast(typing.Any, typing.cast(typing.Any, self).ground_y)
+        typing.cast(typing.Any, self).ground_y = resting_y - 18
         QTimer.singleShot(180, lambda: setattr(self, "ground_y", resting_y))
 
     def _feed(self):
@@ -1571,7 +1680,7 @@ class PetWindow(QWidget):
         self.mood["happiness"] = min(100, self.mood.get("happiness", 70) + 12)
         self.mood["energy"] = max(0, self.mood.get("energy", 80) - 10)
         self.state = "dance"
-        self.dance_ground_y = self.ground_y
+        typing.cast(typing.Any, self).dance_ground_y = typing.cast(typing.Any, self).ground_y
         self.dance_until = time.monotonic() + 6.0
         self.dance_flip = 0.0
         self.say(RNG.choice(PLAY_LINES))
@@ -1583,7 +1692,7 @@ class PetWindow(QWidget):
             return
         self.state = "sleep"
         dim = QPixmap(self.sprite.size())
-        dim.fill(Qt.transparent)
+        dim.fill(typing.cast(typing.Any, typing.cast(typing.Any, Qt).transparent))
         p = QPainter(dim)
         p.setOpacity(0.55)
         p.drawPixmap(0, 0, self.sprite)
@@ -1613,31 +1722,33 @@ class PetWindow(QWidget):
         thread.finished.connect(thread.deleteLater)
         thread.start()
 
-    def _ask_done(self, answer):
+    def _ask_done(self, answer: typing.Any):
         if self._quitting:
             return
         if self.brain.last_error:
             answer = f"{answer}\n(Offline fallback: the AI service is unavailable.)"
         self.say(answer or "Hmm, I got nothing. Ask me something else!")
 
-    def _ask_finished(self, thread):
+    def _ask_finished(self, thread: typing.Any):
         if self.ask_thread is thread:
             self.ask_thread = None
         if self._quitting:
             self._finish_shutdown()
 
-    def mousePressEvent(self, e):
-        if e.button() == Qt.RightButton:
+    def mousePressEvent(self, e: typing.Any):
+        if e.button() == typing.cast(typing.Any, Qt).RightButton:
             self._show_menu(e.globalPosition().toPoint())
             return
-        if e.button() == Qt.LeftButton:
+        if e.button() == typing.cast(typing.Any, Qt).LeftButton:
             self.dragging = True
             self.drag_dx = e.position().x()
             self.drag_dy = e.position().y()
             self.drag_start_global = e.globalPosition()
-            self.sprite_label.setCursor(Qt.ClosedHandCursor)
+            self.sprite_label.setCursor(
+                typing.cast(typing.Any, typing.cast(typing.Any, Qt).ClosedHandCursor)
+            )
 
-    def mouseMoveEvent(self, e):
+    def mouseMoveEvent(self, e: typing.Any):
         if self.dragging:
             g = e.globalPosition()
             self._switch_screen(QGuiApplication.screenAt(g.toPoint()))
@@ -1646,11 +1757,13 @@ class PetWindow(QWidget):
             self.ground_y = g.y() - self.drag_dy + win_h
             self._apply_pos()
 
-    def mouseReleaseEvent(self, e):
+    def mouseReleaseEvent(self, e: typing.Any):
         if not self.dragging:
             return
         self.dragging = False
-        self.sprite_label.setCursor(Qt.OpenHandCursor)
+        self.sprite_label.setCursor(
+            typing.cast(typing.Any, typing.cast(typing.Any, Qt).OpenHandCursor)
+        )
         if self.drag_start_global is None:
             moved = 0
         else:
@@ -1660,21 +1773,39 @@ class PetWindow(QWidget):
         if moved < 8:
             self._on_click()
 
-        self.ground_y = min(self.ground_y, self.geom.bottom() - 8)
-        self.px = max(
-            self.geom.left() + 4,
-            min(self.px, self.geom.right() - self.sprite_w - 4),
+        typing.cast(typing.Any, self).ground_y = min(
+            typing.cast(typing.Any, typing.cast(typing.Any, self).ground_y),
+            typing.cast(
+                typing.Any, typing.cast(typing.Any, typing.cast(typing.Any, self).geom).bottom() - 8
+            ),
+        )
+        typing.cast(typing.Any, self).px = max(
+            typing.cast(
+                typing.Any, typing.cast(typing.Any, typing.cast(typing.Any, self).geom).left() + 4
+            ),
+            typing.cast(
+                typing.Any,
+                min(
+                    typing.cast(typing.Any, typing.cast(typing.Any, self).px),
+                    typing.cast(
+                        typing.Any,
+                        typing.cast(typing.Any, typing.cast(typing.Any, self).geom).right()
+                        - self.sprite_w
+                        - 4,
+                    ),
+                ),
+            ),
         )
 
-    def mouseDoubleClickEvent(self, e):
-        if e.button() == Qt.LeftButton:
+    def mouseDoubleClickEvent(self, e: typing.Any):
+        if e.button() == typing.cast(typing.Any, Qt).LeftButton:
             self._on_double_click()
 
-    def _show_menu(self, pos):
+    def _show_menu(self, pos: typing.Any):
         m = QMenu(self)
         name = self.name
 
-        def add(label, fn):
+        def add(label: typing.Any, fn: typing.Any):
             a = QAction(label, m)
             a.triggered.connect(fn)
             m.addAction(a)
@@ -1701,7 +1832,7 @@ class PetWindow(QWidget):
 
     def _open_settings(self):
         dlg = SettingsDialog(self.settings, self)
-        if dlg.exec() == QDialog.Accepted:
+        if dlg.exec() == typing.cast(typing.Any, QDialog).Accepted:
             new = dlg.values()
             self.settings.update(new)
             self.name = self.settings.get("name", "owaua")
@@ -1728,10 +1859,13 @@ class PetWindow(QWidget):
         )
 
     def _apply_topmost(self):
-        flags = Qt.FramelessWindowHint | Qt.Tool
+        flags: typing.Any = typing.cast(
+            typing.Any,
+            typing.cast(typing.Any, Qt).FramelessWindowHint | typing.cast(typing.Any, Qt).Tool,
+        )
         if self.settings.get("topmost", True):
-            flags |= Qt.WindowStaysOnTopHint
-        self.setWindowFlags(flags)
+            flags |= typing.cast(typing.Any, Qt).WindowStaysOnTopHint
+        self.setWindowFlags(typing.cast(typing.Any, flags))
         self.show()
 
     def _quit(self):
@@ -1761,13 +1895,13 @@ class PetWindow(QWidget):
         if app is not None:
             app.quit()
 
-    def closeEvent(self, event):
+    def closeEvent(self, event: typing.Any):
         event.ignore()
         self._quit()
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, settings, parent=None):
+    def __init__(self, settings: typing.Any, parent: typing.Any = None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.setModal(True)
@@ -1798,7 +1932,13 @@ class SettingsDialog(QDialog):
         self.pace_combo.setCurrentText(settings.get("pace", "Normal"))
         form.addRow("Voice pace:", self.pace_combo)
 
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns = QDialogButtonBox(
+            typing.cast(
+                typing.Any,
+                typing.cast(typing.Any, QDialogButtonBox).Ok
+                | typing.cast(typing.Any, QDialogButtonBox).Cancel,
+            )
+        )
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         form.addRow(btns)
@@ -1814,15 +1954,13 @@ class SettingsDialog(QDialog):
         }
 
 
-def _handle_keyring_cli(argv):
+def _handle_keyring_cli(argv: typing.Any):
     if "--store-ai-key" not in argv:
         return None
     index = argv.index("--store-ai-key")
     key = argv[index + 1] if index + 1 < len(argv) else "OWAUA_AI_KEY"
     if key not in SECRET_ENV_KEYS:
-        print(
-            f"Unsupported key name. Choose one of: {', '.join(sorted(SECRET_ENV_KEYS))}"
-        )
+        print(f"Unsupported key name. Choose one of: {', '.join(sorted(SECRET_ENV_KEYS))}")
         return 2
     try:
         value = getpass.getpass(f"Enter {key} (input hidden): ").strip()
@@ -1846,7 +1984,7 @@ def main():
     if keyring_result is not None:
         return keyring_result
 
-    env = get_env()
+    env: typing.Any = typing.cast(typing.Any, get_env())
     settings, mood = load_settings()
 
     app = QApplication(sys.argv)
@@ -1864,9 +2002,7 @@ def main():
             tray.setToolTip(APP_NAME)
             tm = QMenu()
             show_a = QAction("Show / hide", tm)
-            show_a.triggered.connect(
-                lambda: pet.show() if pet.isHidden() else pet.hide()
-            )
+            show_a.triggered.connect(lambda: pet.show() if pet.isHidden() else pet.hide())
             feed_a = QAction("Feed", tm)
             feed_a.triggered.connect(pet._feed)
             quit_a = QAction("Quit", tm)
@@ -1877,7 +2013,17 @@ def main():
             tm.addAction(quit_a)
             tray.setContextMenu(tm)
             tray.activated.connect(
-                lambda reason: pet.show() if reason == QSystemTrayIcon.Trigger else None
+                typing.cast(
+                    typing.Callable[..., typing.Any],
+                    typing.cast(
+                        typing.Callable[[typing.Any], typing.Any],
+                        lambda reason: (
+                            pet.show()
+                            if reason == typing.cast(typing.Any, QSystemTrayIcon).Trigger
+                            else None
+                        ),
+                    ),
+                )
             )
             tray.show()
             pet.tray_available = True

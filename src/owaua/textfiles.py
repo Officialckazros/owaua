@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import typing
 from typing import List, Optional
 
 import discord
@@ -78,7 +79,11 @@ async def extract_message_text_files(
         return ""
 
     text_attachments: List[discord.Attachment] = [
-        a for a in (getattr(message, "attachments", None) or []) if is_text_attachment(a)
+        a
+        for a in typing.cast(
+            typing.Iterable[typing.Any], (getattr(message, "attachments", None) or [])
+        )
+        if is_text_attachment(a)
     ]
 
     if not text_attachments and getattr(message, "reference", None):
@@ -92,13 +97,17 @@ async def extract_message_text_files(
             and hasattr(message.channel, "fetch_message")
         ):
             try:
-                parent = await message.channel.fetch_message(ref.message_id)
+                parent = await message.channel.fetch_message(
+                    typing.cast(typing.Any, ref).message_id
+                )
                 if parent and parent.attachments:
-                    text_attachments = [
-                        a for a in parent.attachments if is_text_attachment(a)
-                    ]
+                    text_attachments = [a for a in parent.attachments if is_text_attachment(a)]
             except Exception as e:
-                log.debug("could not fetch referenced message %s: %s", ref.message_id, e)
+                log.debug(
+                    "could not fetch referenced message %s: %s",
+                    typing.cast(typing.Any, ref).message_id,
+                    e,
+                )
 
     if not text_attachments:
         return ""

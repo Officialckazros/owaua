@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import os
 import tempfile
+import typing
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,11 +22,11 @@ class _HistoryChannel:
         self.messages = messages
         self.after_ids: list[int | None] = []
 
-    async def history(self, *, limit, after, oldest_first):
+    async def history(self, *, limit: typing.Any, after: typing.Any, oldest_first: typing.Any):
         self.after_ids.append(getattr(after, "id", None))
         after_id = getattr(after, "id", 0) if after else 0
         for message in self.messages:
-            if int(message.id) > int(after_id):
+            if int(typing.cast(typing.Any, typing.cast(typing.Any, message).id)) > int(after_id):
                 yield message
 
 
@@ -103,18 +104,19 @@ class ArchiveTest(unittest.IsolatedAsyncioTestCase):
         )
         channel.messages = [text, media_only]
 
-        first = await archive.backfill_channel(guild, channel)
-        second = await archive.backfill_channel(guild, channel)
+        first = await archive.backfill_channel(typing.cast(typing.Any, guild), channel)
+        second = await archive.backfill_channel(typing.cast(typing.Any, guild), channel)
 
         self.assertEqual({"channel_id": "100", "scanned": 2, "saved": 1}, first)
         self.assertEqual({"channel_id": "100", "scanned": 0, "saved": 0}, second)
         self.assertEqual([None, 102], channel.after_ids)
-        row = db.conn().execute(
-            "SELECT user_id,content,created FROM server_messages"
-        ).fetchone()
+        row = db.conn().execute("SELECT user_id,content,created FROM server_messages").fetchone()
         self.assertEqual("42", row["user_id"])
         self.assertEqual("capybara notes", row["content"])
-        self.assertEqual(text.created_at.timestamp(), row["created"])
+        self.assertEqual(
+            typing.cast(typing.Any, typing.cast(typing.Any, text).created_at).timestamp(),
+            row["created"],
+        )
         status = db.archive_status(self.scope_id)
         self.assertEqual(1, status["stored_messages"])
         self.assertEqual(2, status["channels"][0]["messages_seen"])
@@ -230,9 +232,11 @@ class ArchiveTest(unittest.IsolatedAsyncioTestCase):
         )
 
         db.cleanup_expired_content(30)
-        rows = db.conn().execute(
-            "SELECT message_id FROM server_messages ORDER BY message_id"
-        ).fetchall()
+        rows = (
+            db.conn()
+            .execute("SELECT message_id FROM server_messages ORDER BY message_id")
+            .fetchall()
+        )
         self.assertEqual(["archive-old"], [row["message_id"] for row in rows])
 
     def test_normalization_deletes_legacy_emoji_only_rows(self) -> None:
@@ -262,9 +266,11 @@ class ArchiveTest(unittest.IsolatedAsyncioTestCase):
         )
 
         result = db.normalize_archived_message_text(self.scope_id, archive.text_only)
-        rows = db.conn().execute(
-            "SELECT message_id,content FROM server_messages ORDER BY message_id"
-        ).fetchall()
+        rows = (
+            db.conn()
+            .execute("SELECT message_id,content FROM server_messages ORDER BY message_id")
+            .fetchall()
+        )
         self.assertEqual({"updated": 1, "deleted": 1}, result)
         self.assertEqual([("legacy-mixed", "hello world")], [tuple(row) for row in rows])
 
@@ -274,11 +280,15 @@ class ArchiveTest(unittest.IsolatedAsyncioTestCase):
         original = self._message(500, "keep this", guild=guild, channel=channel)
         edited = self._message(500, "😀", guild=guild, channel=channel)
 
-        self.assertTrue(await archive.store_live_message(original))
-        self.assertFalse(await archive.store_live_message(edited, edited=True))
-        count = db.conn().execute(
-            "SELECT COUNT(*) FROM server_messages WHERE message_id='500'"
-        ).fetchone()[0]
+        self.assertTrue(await archive.store_live_message(typing.cast(typing.Any, original)))
+        self.assertFalse(
+            await archive.store_live_message(typing.cast(typing.Any, edited), edited=True)
+        )
+        count = (
+            db.conn()
+            .execute("SELECT COUNT(*) FROM server_messages WHERE message_id='500'")
+            .fetchone()[0]
+        )
         self.assertEqual(0, count)
 
 

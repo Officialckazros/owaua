@@ -15,6 +15,7 @@ blocked. The base URL / API key are configurable per call, defaulting to the
 generic ``OWAUA_LLM_BASE_URL`` / ``OWAUA_LLM_API_KEY`` env vars — point those
 at whatever inference provider actually serves the models.
 """
+
 import asyncio
 import base64
 import ipaddress
@@ -23,6 +24,7 @@ import logging
 import random
 import socket
 import time
+import typing
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlsplit
@@ -73,10 +75,10 @@ def _retry_delay(resp: httpx.Response | None, attempt: int) -> float:
                 return min(30.0, max(0.1, float(raw)))
             except ValueError:
                 pass
-    return min(30.0, (2 ** attempt) + random.uniform(0.0, 0.5))  # noqa: S311
+    return min(30.0, (2**attempt) + random.uniform(0.0, 0.5))  # noqa: S311
 
 
-def _extract_json(raw: str) -> Optional[dict]:
+def _extract_json(raw: str) -> Optional[dict[typing.Any, typing.Any]]:
     """Pull the first JSON object out of a model reply (strips code fences)."""
     if not raw:
         return None
@@ -172,7 +174,9 @@ async def _validate_download_url(url: str) -> bool:
         except socket.gaierror:
             return False
         addresses = {record[4][0] for record in records}
-        return bool(addresses) and all(_is_public_ip(address) for address in addresses)
+        return bool(addresses) and all(
+            _is_public_ip(typing.cast(typing.Any, address)) for address in addresses
+        )
     return _is_public_ip(host)
 
 
@@ -204,7 +208,6 @@ class LLMClient:
         """Close the underlying httpx client (call on bot shutdown)."""
         await self._client.aclose()
 
-
     def _resolve(self, base_url: Optional[str], api_key: Optional[str]) -> Tuple[str, str]:
         return (
             _safe_provider_base(base_url or self.base_url),
@@ -222,15 +225,17 @@ class LLMClient:
         user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """POST JSON with retries + exponential backoff on 429/5xx/timeouts."""
-        attempts = self.max_retries if retries is None else max(
-            0, min(int(retries), max(0, int(config.AI_MAX_PROVIDER_ATTEMPTS) - 1))
+        attempts = (
+            self.max_retries
+            if retries is None
+            else max(0, min(int(retries), max(0, int(config.AI_MAX_PROVIDER_ATTEMPTS) - 1)))
         )
         health_key = str(payload.get("model") or url)[:160]
         if not ai_control.provider_available(health_key):
             raise LLMError("provider circuit is temporarily open")
-        estimated_tokens = ai_control.estimate_chat_tokens(
-            "", payload.get("messages") or []
-        ) + max(0, int(payload.get("max_tokens") or 0))
+        estimated_tokens = ai_control.estimate_chat_tokens("", payload.get("messages") or []) + max(
+            0, int(payload.get("max_tokens") or 0)
+        )
         for attempt in range(attempts + 1):
             ai_control.reserve_provider_attempt(
                 scope_id=scope_id,
@@ -323,11 +328,10 @@ class LLMClient:
             scope_id=scope_id,
             user_id=user_id,
         )
-        choices = data.get("choices") or []
+        choices: typing.Any = data.get("choices") or []
         if not choices:
             raise LLMError("provider returned no completion choices")
         return choices[0].get("message") or {}
-
 
     async def chat(
         self,
@@ -405,8 +409,8 @@ class LLMClient:
         )
         text = str(msg.get("content") or "").strip()
         calls: List[Dict[str, str]] = []
-        for tc in msg.get("tool_calls") or []:
-            fn = tc.get("function") or {}
+        for tc in typing.cast(typing.Iterable[typing.Any], msg.get("tool_calls") or []):
+            fn: typing.Any = typing.cast(typing.Any, tc.get("function") or {})
             calls.append(
                 {
                     "name": str(fn.get("name") or ""),
@@ -428,7 +432,7 @@ class LLMClient:
         task: str = "workflow",
         scope_id: Optional[str] = None,
         user_id: Optional[str] = None,
-    ) -> Optional[dict]:
+    ) -> Optional[dict[typing.Any, typing.Any]]:
         """Chat completion forced to return a single JSON object."""
         sys_text = system or "Respond with ONLY a single valid JSON object, no prose."
         raw = await self.chat(
@@ -444,7 +448,6 @@ class LLMClient:
             user_id=user_id,
         )
         return _extract_json(raw)
-
 
     async def vision(
         self,
@@ -494,7 +497,7 @@ class LLMClient:
         task: str = "vision",
         scope_id: Optional[str] = None,
         user_id: Optional[str] = None,
-    ) -> Optional[dict]:
+    ) -> Optional[dict[typing.Any, typing.Any]]:
         """Vision pass that must return a JSON object (e.g. description + flag)."""
         parts = [
             {"type": "text", "text": prompt},
@@ -589,7 +592,6 @@ class LLMClient:
         result = await self.get_image(url, max_bytes=max_bytes)
         return result[0] if result else None
 
-
     async def moderate(
         self,
         model: str,
@@ -627,8 +629,14 @@ class LLMClient:
         if not result:
             return {"flagged": False, "category": "none", "reason": "", "confidence": 0.0}
         categories = {
-            "harassment", "hate", "sexual", "violence", "self_harm",
-            "illegal", "spam", "none",
+            "harassment",
+            "hate",
+            "sexual",
+            "violence",
+            "self_harm",
+            "illegal",
+            "spam",
+            "none",
         }
         category = str(result.get("category") or "none").lower()
         try:
@@ -641,7 +649,6 @@ class LLMClient:
             "reason": str(result.get("reason") or "")[:500],
             "confidence": confidence,
         }
-
 
     async def transcribe(
         self,
@@ -743,7 +750,6 @@ class LLMClient:
                 raise LLMError("TTS response exceeded the size limit")
             return resp.content
         raise LLMError("tts exhausted retries")
-
 
 
 llm = LLMClient()

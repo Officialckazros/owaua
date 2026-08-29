@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import typing
 import unittest
 
 import discord
@@ -30,10 +31,26 @@ class CommunitySlashCatalogTests(unittest.TestCase):
             }.issubset(commands)
         )
         self.assertEqual(
-            {command.name for command in commands["economy"].commands},
+            {
+                typing.cast(typing.Any, command).name
+                for command in typing.cast(
+                    typing.Iterable[typing.Any],
+                    typing.cast(typing.Any, commands["economy"]).commands,
+                )
+            },
             {"wallet", "pay", "pack", "cards", "fuse", "deck", "battle"},
         )
         self.assertTrue(
-            {"coinflip", "dice", "poll", "pokemon", "github", "distance"}
-            .issubset(command.name for command in commands["fun"].commands)
+            {"coinflip", "dice", "poll", "pokemon", "github", "distance"}.issubset(
+                typing.cast(
+                    typing.Any,
+                    (
+                        typing.cast(typing.Any, command).name
+                        for command in typing.cast(
+                            typing.Iterable[typing.Any],
+                            typing.cast(typing.Any, commands["fun"]).commands,
+                        )
+                    ),
+                )
+            )
         )

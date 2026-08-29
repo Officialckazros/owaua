@@ -12,6 +12,7 @@ import os
 import sqlite3
 import stat
 import tempfile
+import typing
 import unittest
 from pathlib import Path
 
@@ -50,7 +51,7 @@ class IsolatedDatabaseTest(unittest.TestCase):
         with tos._rate_lock:
             tos._rate_buckets.clear()
 
-    def _row_count(self, table: str, where: str = "1=1", args: tuple = ()) -> int:
+    def _row_count(self, table: str, where: str = "1=1", args: tuple[typing.Any, ...] = ()) -> int:
         # Test-only inputs are static literals defined in this module; values
         # still use SQLite parameters.
         row = (
@@ -355,7 +356,7 @@ class ScopedContentAndImportAcceptanceTest(IsolatedDatabaseTest):
         self.assertEqual(0, kb.count(guild_a))
         self.assertEqual(1, kb.count(guild_b))
 
-    def _empty_bundle(self, scope: str) -> dict:
+    def _empty_bundle(self, scope: str) -> dict[typing.Any, typing.Any]:
         return {
             "schema_version": 2,
             "scope": scope,

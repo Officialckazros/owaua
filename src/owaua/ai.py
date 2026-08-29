@@ -9,6 +9,7 @@ Model routing
 * fast   — cheap tasks: custom cmds, lurk one-liners, simple tools (MODEL_FAST)
 * vision — image understanding when attachments are present (MODEL_VISION)
 """
+
 import asyncio
 import concurrent.futures
 import http.client
@@ -18,6 +19,7 @@ import queue
 import re
 import threading
 import time
+import typing
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -29,9 +31,7 @@ from owaua import ai_control, config, db
 
 _LOG = logging.getLogger(__name__)
 
-_clients = [
-    Groq(api_key=k, timeout=40.0, max_retries=1) for k in config.GROQ_KEYS
-]
+_clients = [Groq(api_key=k, timeout=40.0, max_retries=1) for k in config.GROQ_KEYS]
 _idx_lock = threading.Lock()
 _idx = 0
 
@@ -44,24 +44,55 @@ _EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     max_workers=max(16, 4 * _pool_n), thread_name_prefix="llm"
 )
 
-_ROTATE_ON = ("rate limit", "rate_limit", "429", "too many requests",
-              "503", "502", "overloaded", "capacity", "try again")
+_ROTATE_ON = (
+    "rate limit",
+    "rate_limit",
+    "429",
+    "too many requests",
+    "503",
+    "502",
+    "overloaded",
+    "capacity",
+    "try again",
+)
 _TRANSIENT_MARKERS = _ROTATE_ON + (
-    "500", "504", "529", "empty content", "empty response", "malformed",
-    "timed out", "timeout", "temporarily", "unavailable", "connection reset",
-    "broken pipe", "remote disconnected", "eof occurred", "connection aborted",
-    "provider returned error", "overloaded",
+    "500",
+    "504",
+    "529",
+    "empty content",
+    "empty response",
+    "malformed",
+    "timed out",
+    "timeout",
+    "temporarily",
+    "unavailable",
+    "connection reset",
+    "broken pipe",
+    "remote disconnected",
+    "eof occurred",
+    "connection aborted",
+    "provider returned error",
+    "overloaded",
 )
 _FATAL_MARKERS = (
-    "401", "invalid api key", "no groq api key", "no inferx api key",
-    "no celeris api key", "no inception", "no deepseek api key",
-    "no openrouter api key", "no gemini api key", "no cerebras api key",
-    "no anthropic", "no model available",
+    "401",
+    "invalid api key",
+    "no groq api key",
+    "no inferx api key",
+    "no celeris api key",
+    "no inception",
+    "no deepseek api key",
+    "no openrouter api key",
+    "no gemini api key",
+    "no cerebras api key",
+    "no anthropic",
+    "no model available",
 )
 _SAME_MODEL_ATTEMPTS = 2
 _MAX_PROVIDER_RESPONSE_BYTES = 4_000_000
 
-ContentPart = Union[str, dict]
+ContentPart = Union[str, dict[str, typing.Any]]
+_RunResult = typing.TypeVar("_RunResult")
 
 
 def shutdown() -> None:
@@ -134,19 +165,19 @@ class HTTPSConnectionPool:
             http.client.HTTPConnection if valid_dev_http else http.client.HTTPSConnection
         )
         self.timeout = timeout
-        self.pool = queue.Queue(maxsize=max_size)
+        typing.cast(typing.Any, self).pool = queue.Queue(maxsize=max_size)
 
     def get(self) -> http.client.HTTPConnection:
         if not self.host:
             raise RuntimeError("invalid provider endpoint")
         try:
-            return self.pool.get_nowait()
+            return typing.cast(typing.Any, self).pool.get_nowait()
         except queue.Empty:
             return self.connection_type(self.host, timeout=self.timeout)
 
     def put(self, conn: http.client.HTTPConnection):
         try:
-            self.pool.put_nowait(conn)
+            typing.cast(typing.Any, self).pool.put_nowait(conn)
         except queue.Full:
             _close_connection(conn)
 
@@ -159,7 +190,7 @@ def _close_connection(conn: http.client.HTTPConnection) -> None:
         _LOG.debug("failed to close provider connection", exc_info=True)
 
 
-def _read_limited(response) -> bytes:
+def _read_limited(response: typing.Any) -> bytes:
     """Read a provider response without allowing unbounded memory growth."""
     payload = response.read(_MAX_PROVIDER_RESPONSE_BYTES + 1)
     if len(payload) > _MAX_PROVIDER_RESPONSE_BYTES:
@@ -184,7 +215,7 @@ def _http_error(exc: urllib.error.HTTPError, provider: str) -> RuntimeError:
     return RuntimeError(f"{provider} request failed ({exc.code}){extra}")
 
 
-def _choice_text(payload, provider: str) -> str:
+def _choice_text(payload: typing.Any, provider: str) -> str:
     """Pull the assistant text out of an OpenAI-style chat completion body.
 
     DeepSeek V4 (and some OpenRouter/Cerebras hosts) can return HTTP 200 with
@@ -194,29 +225,43 @@ def _choice_text(payload, provider: str) -> str:
     """
     if not isinstance(payload, dict):
         raise RuntimeError(f"{provider} returned a malformed response")
-    err = payload.get("error")
+    err: typing.Any = typing.cast(typing.Any, payload).get("error")
     if err:
         if isinstance(err, dict):
-            msg = err.get("message") or err.get("code") or json.dumps(err)[:200]
-            code = err.get("code") or err.get("status") or err.get("type") or "error"
+            msg: typing.Any = typing.cast(
+                typing.Any,
+                typing.cast(typing.Any, err).get("message")
+                or typing.cast(typing.Any, err).get("code")
+                or json.dumps(err)[:200],
+            )
+            code: typing.Any = typing.cast(
+                typing.Any,
+                typing.cast(typing.Any, err).get("code")
+                or typing.cast(typing.Any, err).get("status")
+                or typing.cast(typing.Any, err).get("type")
+                or "error",
+            )
             raise RuntimeError(f"{provider} request failed ({code}: {msg})")
         raise RuntimeError(f"{provider} request failed ({err})")
-    choices = payload.get("choices")
+    choices: typing.Any = typing.cast(typing.Any, payload).get("choices")
     if not isinstance(choices, list) or not choices:
         raise RuntimeError(f"{provider} returned a malformed response")
-    first = choices[0] if isinstance(choices[0], dict) else {}
-    msg = first.get("message") if isinstance(first.get("message"), dict) else {}
-    text = msg.get("content")
+    first: typing.Any = typing.cast(typing.Any, choices[0] if isinstance(choices[0], dict) else {})
+    msg: typing.Any = first.get("message") if isinstance(first.get("message"), dict) else {}
+    text: typing.Any = msg.get("content")
     if isinstance(text, list):
-        text = "".join(
-            str(p.get("text") or "")
-            for p in text
-            if isinstance(p, dict)
+        text: typing.Any = typing.cast(
+            typing.Any,
+            "".join(
+                str(typing.cast(typing.Any, p).get("text") or "")
+                for p in typing.cast(typing.Iterable[typing.Any], text)
+                if isinstance(p, dict)
+            ),
         )
     text = str(text or "").strip()
     if not text:
         for key in ("reasoning_content", "reasoning"):
-            alt = msg.get(key) or first.get(key)
+            alt: typing.Any = msg.get(key) or first.get(key)
             if alt and str(alt).strip():
                 text = str(alt).strip()
                 break
@@ -239,8 +284,7 @@ def _is_transient(e: Exception) -> bool:
         return False
     if isinstance(e, urllib.error.HTTPError):
         return e.code in (408, 409, 425, 429, 500, 502, 503, 504, 529)
-    if isinstance(e, (TimeoutError, ConnectionError, BrokenPipeError,
-                      ConnectionResetError)):
+    if isinstance(e, (TimeoutError, ConnectionError, BrokenPipeError, ConnectionResetError)):
         return True
     if isinstance(e, urllib.error.URLError) and not isinstance(e, urllib.error.HTTPError):
         return True
@@ -272,17 +316,23 @@ def _celeris_upstream_model(model: str) -> str:
     return m or "celeris-1"
 
 
-def _flatten_message_content(content) -> str:
+def _flatten_message_content(content: typing.Any) -> str:
     if isinstance(content, list):
         return " ".join(
-            p.get("text", "")
-            for p in content
-            if isinstance(p, dict) and p.get("type") == "text"
+            typing.cast(typing.Any, p).get("text", "")
+            for p in typing.cast(typing.Iterable[typing.Any], content)
+            if isinstance(p, dict) and typing.cast(typing.Any, p).get("type") == "text"
         )
     return str(content or "")
 
 
-def _celeris_generate(model, system, messages, max_tokens, temperature) -> str:
+def _celeris_generate(
+    model: typing.Any,
+    system: typing.Any,
+    messages: typing.Any,
+    max_tokens: typing.Any,
+    temperature: typing.Any,
+) -> str:
     """Celeris-1 (OpenAI-compatible chat completions) via Keep-Alive pool."""
     if not config.CELERIS_API_KEY:
         raise RuntimeError("no celeris api key configured")
@@ -342,7 +392,13 @@ def _celeris_generate(model, system, messages, max_tokens, temperature) -> str:
     return _choice_text(d, "celeris")
 
 
-def _mercury_generate(model, system, messages, max_tokens, temperature) -> str:
+def _mercury_generate(
+    model: typing.Any,
+    system: typing.Any,
+    messages: typing.Any,
+    max_tokens: typing.Any,
+    temperature: typing.Any,
+) -> str:
     """Inception Labs Mercury (OpenAI-compatible chat completions) with ultra-fast Keep-Alive pooling."""
     if not config.INCEPTION_API_KEY:
         raise RuntimeError("no inception/mercury api key configured")
@@ -352,9 +408,9 @@ def _mercury_generate(model, system, messages, max_tokens, temperature) -> str:
             "role": m.get("role", "user"),
             "content": (
                 " ".join(
-                    p.get("text", "")
+                    typing.cast(typing.Any, p).get("text", "")
                     for p in m.get("content")
-                    if isinstance(p, dict) and p.get("type") == "text"
+                    if isinstance(p, dict) and typing.cast(typing.Any, p).get("type") == "text"
                 )
                 if isinstance(m.get("content"), list)
                 else m.get("content")
@@ -411,7 +467,13 @@ def _mercury_generate(model, system, messages, max_tokens, temperature) -> str:
     return _choice_text(d, "mercury")
 
 
-def _groq_generate(model, system, messages, max_tokens, temperature) -> str:
+def _groq_generate(
+    model: typing.Any,
+    system: typing.Any,
+    messages: typing.Any,
+    max_tokens: typing.Any,
+    temperature: typing.Any,
+) -> str:
     """Groq call, rotating across keys (separate orgs = separate quotas)."""
     if not _clients:
         raise RuntimeError("no groq api key configured")
@@ -422,8 +484,10 @@ def _groq_generate(model, system, messages, max_tokens, temperature) -> str:
     for attempt in range(n):
         try:
             resp = _clients[(start + attempt) % n].chat.completions.create(
-                model=model, max_tokens=max_tokens,
-                temperature=temperature, messages=full,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                messages=full,
             )
             msg = resp.choices[0].message
             text = (msg.content or "").strip()
@@ -438,24 +502,34 @@ def _groq_generate(model, system, messages, max_tokens, temperature) -> str:
             if _is_rate_limited(e):
                 continue
             raise
-    raise last
+    if last is not None:
+        raise last
+    raise RuntimeError("groq: no provider attempt completed")
 
 
-def _gemini_parts_from_content(c) -> list:
+def _gemini_parts_from_content(c: typing.Any) -> list[typing.Any]:
     """Convert OpenAI-style content (str or multimodal parts) to Gemini parts."""
     if not isinstance(c, list):
         return [{"text": str(c)}]
-    parts = []
-    for p in c:
+    parts: list[typing.Any] = []
+    for p in typing.cast(typing.Iterable[typing.Any], c):
         if not isinstance(p, dict):
             continue
-        if p.get("type") == "text":
-            parts.append({"text": p.get("text", "")})
-        elif p.get("type") == "image_url":
-            url = (p.get("image_url") or {}).get("url") or ""
+        if typing.cast(typing.Any, p).get("type") == "text":
+            parts.append({"text": typing.cast(typing.Any, p).get("text", "")})
+        elif typing.cast(typing.Any, p).get("type") == "image_url":
+            url: typing.Any = typing.cast(
+                typing.Any,
+                typing.cast(typing.Any, (typing.cast(typing.Any, p).get("image_url") or {})).get(
+                    "url"
+                )
+                or "",
+            )
             if url.startswith("data:") and ";base64," in url:
                 header, b64 = url.split(";base64,", 1)
-                mime = header[5:] if header.startswith("data:") else "image/png"
+                mime: typing.Any = typing.cast(
+                    typing.Any, header[5:] if header.startswith("data:") else "image/png"
+                )
                 parts.append({"inline_data": {"mime_type": mime, "data": b64}})
             elif url:
                 mime = "image/jpeg"
@@ -467,17 +541,25 @@ def _gemini_parts_from_content(c) -> list:
     return parts or [{"text": ""}]
 
 
-def _gemini_generate(model, system, messages, max_tokens, temperature) -> str:
+def _gemini_generate(
+    model: typing.Any,
+    system: typing.Any,
+    messages: typing.Any,
+    max_tokens: typing.Any,
+    temperature: typing.Any,
+) -> str:
     """Google Gemini call (different API shape: system is separate, roles differ)."""
     if not config.GEMINI_KEYS:
         raise RuntimeError("no gemini api key configured")
 
-    contents = []
+    contents: list[typing.Any] = []
     for m in messages:
-        contents.append({
-            "role": "model" if m.get("role") == "assistant" else "user",
-            "parts": _gemini_parts_from_content(m.get("content")),
-        })
+        contents.append(
+            {
+                "role": "model" if m.get("role") == "assistant" else "user",
+                "parts": _gemini_parts_from_content(m.get("content")),
+            }
+        )
 
     _gemini_off = [
         {"category": cat, "threshold": "BLOCK_NONE"}
@@ -508,13 +590,21 @@ def _gemini_generate(model, system, messages, max_tokens, temperature) -> str:
         )
         try:
             req = urllib.request.Request(  # noqa: S310 -- fixed HTTPS provider host
-                url, data=data, headers={"Content-Type": "application/json"})
+                url, data=data, headers={"Content-Type": "application/json"}
+            )
             # The host and scheme above are fixed; only encoded path/query values vary.
             with urllib.request.urlopen(req, timeout=20) as r:  # noqa: S310
                 d = json.loads(_read_limited(r))
-            for cand in d.get("candidates") or []:
-                parts = cand.get("content", {}).get("parts", []) or []
-                text = "".join(p.get("text", "") for p in parts).strip()
+            for cand in typing.cast(typing.Iterable[typing.Any], d.get("candidates") or []):
+                parts: typing.Any = typing.cast(
+                    typing.Any, cand.get("content", {}).get("parts", []) or []
+                )
+                text: typing.Any = typing.cast(
+                    typing.Any,
+                    "".join(
+                        p.get("text", "") for p in typing.cast(typing.Iterable[typing.Any], parts)
+                    ).strip(),
+                )
                 if text:
                     return text
             last = RuntimeError("gemini: empty content")
@@ -527,14 +617,22 @@ def _gemini_generate(model, system, messages, max_tokens, temperature) -> str:
         except Exception as e:
             last = e
             continue
-    raise last
+    if last is not None:
+        raise last
+    raise RuntimeError("gemini: no provider attempt completed")
 
 
 def _is_cerebras(model: str) -> bool:
     return str(model).startswith("cb:")
 
 
-def _cerebras_generate(model, system, messages, max_tokens, temperature) -> str:
+def _cerebras_generate(
+    model: typing.Any,
+    system: typing.Any,
+    messages: typing.Any,
+    max_tokens: typing.Any,
+    temperature: typing.Any,
+) -> str:
     """Cerebras (OpenAI-compatible, very fast).
 
     Two quirks worth keeping: a User-Agent header is REQUIRED (Cloudflare
@@ -546,20 +644,31 @@ def _cerebras_generate(model, system, messages, max_tokens, temperature) -> str:
         raise RuntimeError("no cerebras api key configured")
 
     full = ([{"role": "system", "content": system}] if system else []) + [
-        {"role": m.get("role", "user"),
-         "content": (" ".join(p.get("text", "") for p in m["content"]
-                              if isinstance(p, dict) and p.get("type") == "text")
-                     if isinstance(m.get("content"), list) else str(m.get("content")))}
+        {
+            "role": m.get("role", "user"),
+            "content": (
+                " ".join(
+                    typing.cast(typing.Any, p).get("text", "")
+                    for p in m["content"]
+                    if isinstance(p, dict) and typing.cast(typing.Any, p).get("type") == "text"
+                )
+                if isinstance(m.get("content"), list)
+                else str(m.get("content"))
+            ),
+        }
         for m in messages
     ]
-    body = json.dumps({
-        "model": model[3:],
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "messages": full,
-    }).encode()
+    body = json.dumps(
+        {
+            "model": model[3:],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": full,
+        }
+    ).encode()
     req = urllib.request.Request(  # noqa: S310 -- fixed HTTPS provider endpoint
-        "https://api.cerebras.ai/v1/chat/completions", data=body,
+        "https://api.cerebras.ai/v1/chat/completions",
+        data=body,
         headers={
             "Authorization": f"Bearer {config.CEREBRAS_API_KEY}",
             "Content-Type": "application/json",
@@ -589,14 +698,20 @@ def _openrouter_key(model: str) -> str:
     return config.OPENROUTER_API_KEY
 
 
-def _openrouter_content(c):
+def _openrouter_content(c: typing.Any):
     """Keep multimodal content parts intact (vision). Flatten only if needed."""
     if isinstance(c, list):
-        return c
+        return typing.cast(typing.Any, c)
     return str(c)
 
 
-def _openrouter_generate(model, system, messages, max_tokens, temperature) -> str:
+def _openrouter_generate(
+    model: typing.Any,
+    system: typing.Any,
+    messages: typing.Any,
+    max_tokens: typing.Any,
+    temperature: typing.Any,
+) -> str:
     """OpenRouter (free tier), OpenAI-compatible.
 
     Free models share upstream capacity and fail intermittently. Critically,
@@ -611,26 +726,31 @@ def _openrouter_generate(model, system, messages, max_tokens, temperature) -> st
         raise RuntimeError("no openrouter api key configured")
 
     full = ([{"role": "system", "content": system}] if system else []) + [
-        {"role": m.get("role", "user"),
-         "content": _openrouter_content(m.get("content"))}
+        {"role": m.get("role", "user"), "content": _openrouter_content(m.get("content"))}
         for m in messages
     ]
     has_images = any(
         isinstance(m.get("content"), list)
-        and any(isinstance(p, dict) and p.get("type") == "image_url" for p in m["content"])
+        and any(
+            isinstance(p, dict) and typing.cast(typing.Any, p).get("type") == "image_url"
+            for p in m["content"]
+        )
         for m in messages
     )
     timeout = 60 if has_images else 25
-    body = json.dumps({
-        "model": model[3:],
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "messages": full,
-        "provider": {"require_parameters": False},
-        "route": "fallback",
-    }).encode()
+    body = json.dumps(
+        {
+            "model": model[3:],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": full,
+            "provider": {"require_parameters": False},
+            "route": "fallback",
+        }
+    ).encode()
     req = urllib.request.Request(  # noqa: S310 -- fixed HTTPS provider endpoint
-        "https://openrouter.ai/api/v1/chat/completions", data=body,
+        "https://openrouter.ai/api/v1/chat/completions",
+        data=body,
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -652,15 +772,15 @@ def _is_deepseek(model: str) -> bool:
     return str(model).strip().lower().startswith("deepseek")
 
 
-def _openai_messages(system, messages) -> list:
+def _openai_messages(system: typing.Any, messages: typing.Any) -> list[typing.Any]:
     return ([{"role": "system", "content": system}] if system else []) + [
         {
             "role": m.get("role", "user"),
             "content": (
                 " ".join(
-                    p.get("text", "")
+                    typing.cast(typing.Any, p).get("text", "")
                     for p in m["content"]
-                    if isinstance(p, dict) and p.get("type") == "text"
+                    if isinstance(p, dict) and typing.cast(typing.Any, p).get("type") == "text"
                 )
                 if isinstance(m.get("content"), list)
                 else str(m.get("content"))
@@ -670,10 +790,18 @@ def _openai_messages(system, messages) -> list:
     ]
 
 
-def _post_json(url: str, headers: dict, payload: dict, timeout: float, provider: str) -> dict:
+def _post_json(
+    url: str,
+    headers: dict[typing.Any, typing.Any],
+    payload: dict[typing.Any, typing.Any],
+    timeout: float,
+    provider: str,
+) -> dict[typing.Any, typing.Any]:
     data = json.dumps(payload).encode()
     req = urllib.request.Request(  # noqa: S310 -- caller passes a validated HTTPS provider URL
-        url, data=data, headers=headers,
+        url,
+        data=data,
+        headers=headers,
     )
     try:
         # Host is a configured provider base, not user input.
@@ -689,12 +817,12 @@ def _post_json(url: str, headers: dict, payload: dict, timeout: float, provider:
 
 def _chat_without_thinking(
     url: str,
-    headers: dict,
+    headers: dict[typing.Any, typing.Any],
     model: str,
-    system,
-    messages,
-    max_tokens,
-    temperature,
+    system: typing.Any,
+    messages: typing.Any,
+    max_tokens: typing.Any,
+    temperature: typing.Any,
     provider: str,
     timeout: float = 45,
 ) -> str:
@@ -721,7 +849,13 @@ def _chat_without_thinking(
         return _choice_text(_post_json(url, headers, payload, timeout, provider), provider)
 
 
-def _deepseek_generate(model, system, messages, max_tokens, temperature) -> str:
+def _deepseek_generate(
+    model: typing.Any,
+    system: typing.Any,
+    messages: typing.Any,
+    max_tokens: typing.Any,
+    temperature: typing.Any,
+) -> str:
     """Call DeepSeek's official OpenAI-compatible API."""
     if not config.DEEPSEEK_API_KEY:
         raise RuntimeError("no deepseek api key configured")
@@ -755,7 +889,13 @@ def _inferx_upstream_model(model: str) -> str:
     return value
 
 
-def _inferx_generate(model, system, messages, max_tokens, temperature) -> str:
+def _inferx_generate(
+    model: typing.Any,
+    system: typing.Any,
+    messages: typing.Any,
+    max_tokens: typing.Any,
+    temperature: typing.Any,
+) -> str:
     """Call InferX's OpenAI-compatible DeepSeek endpoint."""
     if not config.INFERX_API_KEY:
         raise RuntimeError("no inferx api key configured")
@@ -787,7 +927,13 @@ def _is_anthropic(model: str) -> bool:
 _anthropic_client = None
 
 
-def _anthropic_generate(model, system, messages, max_tokens, temperature) -> str:
+def _anthropic_generate(
+    model: typing.Any,
+    system: typing.Any,
+    messages: typing.Any,
+    max_tokens: typing.Any,
+    temperature: typing.Any,
+) -> str:
     """Anthropic call (paid — expert tier only). Uses the official SDK.
 
     Note: Opus 4.8 rejects `temperature`/`top_p`/`top_k` with a 400, so the
@@ -799,18 +945,24 @@ def _anthropic_generate(model, system, messages, max_tokens, temperature) -> str
         raise RuntimeError("no anthropic api key configured")
     if _anthropic_client is None:
         import anthropic
+
         _anthropic_client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
-    msgs = []
+    msgs: list[typing.Any] = []
     for m in messages:
         c = m.get("content")
         if isinstance(c, list):
-            c = " ".join(p.get("text", "") for p in c
-                         if isinstance(p, dict) and p.get("type") == "text")
-        msgs.append({
-            "role": "assistant" if m.get("role") == "assistant" else "user",
-            "content": str(c),
-        })
+            c = " ".join(
+                typing.cast(typing.Any, p).get("text", "")
+                for p in typing.cast(typing.Iterable[typing.Any], c)
+                if isinstance(p, dict) and typing.cast(typing.Any, p).get("type") == "text"
+            )
+        msgs.append(
+            {
+                "role": "assistant" if m.get("role") == "assistant" else "user",
+                "content": str(c),
+            }
+        )
 
     resp = _anthropic_client.messages.create(
         model=model,
@@ -825,17 +977,17 @@ def _anthropic_generate(model, system, messages, max_tokens, temperature) -> str
 
 
 def _generate(
-    requested,
-    system,
-    messages,
-    max_tokens,
-    temperature,
-    fallbacks=None,
-    trace=None,
+    requested: typing.Any,
+    system: typing.Any,
+    messages: typing.Any,
+    max_tokens: typing.Any,
+    temperature: typing.Any,
+    fallbacks: typing.Any = None,
+    trace: typing.Any = None,
     *,
-    scope_id=None,
-    user_id=None,
-    estimated_tokens=1,
+    scope_id: typing.Any = None,
+    user_id: typing.Any = None,
+    estimated_tokens: int = 1,
 ) -> str:
     """Run the request down a fallback chain.
 
@@ -940,8 +1092,11 @@ def _generate(
                 )
                 _LOG.warning(
                     "provider %s attempt %s/%s failed (%s): %s",
-                    model, attempt + 1, _SAME_MODEL_ATTEMPTS,
-                    type(e).__name__, str(e)[:240],
+                    model,
+                    attempt + 1,
+                    _SAME_MODEL_ATTEMPTS,
+                    type(e).__name__,
+                    str(e)[:240],
                 )
                 if _is_transient(e) and attempt < model_attempts - 1:
                     time.sleep(0.4 * (attempt + 1))
@@ -965,7 +1120,9 @@ def friendly_error(e: Exception) -> str:
         wait = f" try again in {m.group(1)}." if m else " give it a few minutes."
         return f"i'm out of tokens for now -{wait}"
     if "credit balance is too low" in sl:
-        return "the paid model's out of credit. add credits at console.anthropic.com/settings/billing"
+        return (
+            "the paid model's out of credit. add credits at console.anthropic.com/settings/billing"
+        )
     if "401" in s or "invalid api key" in sl:
         return "my api key got rejected. someone check the AI keys (Mercury/Celeris/Groq)."
     if "mercury" in sl and ("402" in s or "credit" in sl or "quota" in sl):
@@ -981,7 +1138,7 @@ def friendly_error(e: Exception) -> str:
     return "my brain hiccuped. try again in a moment"
 
 
-async def _run(fn):
+async def _run(fn: typing.Callable[[], _RunResult]) -> _RunResult:
     """Run a blocking call on the dedicated pool."""
     return await asyncio.get_running_loop().run_in_executor(_EXECUTOR, fn)
 
@@ -1011,7 +1168,7 @@ def _resolve_model(tier: str) -> str:
 
 async def chat(
     system: str,
-    messages: List[dict],
+    messages: List[dict[typing.Any, typing.Any]],
     max_tokens: int = 600,
     temperature: float = 0.7,
     model: Optional[str] = None,
@@ -1047,12 +1204,10 @@ async def chat(
         elif tier == "big":
             fallbacks = config.MODEL_BIG_FALLBACKS
     if tier == "vision" and fallbacks is None:
-        fallbacks = []
+        fallbacks: list[typing.Any] = []
 
     ai_control.check_request_budget(scope_id, decision.task, user_id=user_id)
-    estimated_tokens = (
-        ai_control.estimate_chat_tokens(system, messages) + max_tokens
-    )
+    estimated_tokens = ai_control.estimate_chat_tokens(system, messages) + max_tokens
     trace = ai_control.begin_trace(
         task=decision.task,
         scope_id=scope_id,
@@ -1090,7 +1245,7 @@ async def chat(
 
 async def structured(
     system: str,
-    messages: List[dict],
+    messages: List[dict[typing.Any, typing.Any]],
     max_tokens: int = 2000,
     temperature: float = 0.8,
     tier: str = "smart",
@@ -1101,7 +1256,7 @@ async def structured(
     scope_id: Optional[str] = None,
     user_id: Optional[str] = None,
     prompt_version: Optional[str] = None,
-) -> Optional[dict]:
+) -> Optional[dict[typing.Any, typing.Any]]:
     """Multi-turn chat that must return a single JSON object (the brain's reply)."""
     raw = await chat(
         system=system,
@@ -1151,7 +1306,7 @@ async def json_call(
     scope_id: Optional[str] = None,
     user_id: Optional[str] = None,
     prompt_version: Optional[str] = None,
-) -> Optional[dict]:
+) -> Optional[dict[typing.Any, typing.Any]]:
     """Ask the model for a single JSON object and parse it."""
     system = system + "\n\nRespond with ONLY a single valid JSON object, no prose."
     raw = await chat(
@@ -1226,14 +1381,14 @@ async def describe_images(
     if not prepared:
         return ""
 
-    parts: List[dict] = []
+    parts: List[dict[typing.Any, typing.Any]] = []
     text = caption.strip() or "Describe what you see in these image(s), briefly and bluntly."
     parts.append({"type": "text", "text": text})
     for url in prepared:
         parts.append({"type": "image_url", "image_url": {"url": url}})
 
     vision_fallbacks = [config.MODEL_VISION] + list(config.MODEL_VISION_FALLBACKS or [])
-    seen = set()
+    seen: typing.Any = typing.cast(typing.Any, set())
     vision_fallbacks = [m for m in vision_fallbacks if m and not (m in seen or seen.add(m))]
 
     for i, model in enumerate(vision_fallbacks):
@@ -1266,20 +1421,28 @@ async def describe_images(
     return "(vision failed: provider unavailable)"
 
 
-def _ddg_results(query: str, k: int) -> List[dict]:
+def _ddg_results(query: str, k: int) -> List[dict[typing.Any, typing.Any]]:
     """DuckDuckGo (keyless). Retries across backends since DDG rate-limits bursts."""
     try:
-        from ddgs import DDGS
+        from ddgs import DDGS as _DDGS  # pyright: ignore[reportUnknownVariableType]
     except ImportError:
-        from duckduckgo_search import DDGS
-    errors = []
+        from duckduckgo_search import DDGS as _DDGS  # pyright: ignore[reportUnknownVariableType]
+    DDGS: typing.Any = typing.cast(typing.Any, _DDGS)
+    errors: list[typing.Any] = []
     for backend in ("auto", "lite", "html"):
         try:
             with DDGS() as d:
                 try:
-                    r = list(d.text(query, max_results=k, backend=backend))
+                    r: typing.Any = typing.cast(
+                        typing.Any,
+                        list(
+                            typing.cast(typing.Any, d).text(query, max_results=k, backend=backend)
+                        ),
+                    )
                 except TypeError:
-                    r = list(d.text(query, max_results=k))
+                    r: typing.Any = typing.cast(
+                        typing.Any, list(typing.cast(typing.Any, d).text(query, max_results=k))
+                    )
             if r:
                 return r
         except Exception as e:
@@ -1289,14 +1452,19 @@ def _ddg_results(query: str, k: int) -> List[dict]:
     return []
 
 
-def _tavily_results(query: str, k: int) -> List[dict]:
+def _tavily_results(query: str, k: int) -> List[dict[typing.Any, typing.Any]]:
     """Tavily search API (reliable from cloud IPs). Used when TAVILY_API_KEY is set."""
-    body = json.dumps({
-        "api_key": config.TAVILY_API_KEY, "query": query,
-        "max_results": k, "search_depth": "basic",
-    }).encode()
+    body = json.dumps(
+        {
+            "api_key": config.TAVILY_API_KEY,
+            "query": query,
+            "max_results": k,
+            "search_depth": "basic",
+        }
+    ).encode()
     req = urllib.request.Request(
-        "https://api.tavily.com/search", data=body,
+        "https://api.tavily.com/search",
+        data=body,
         headers={"Content-Type": "application/json"},
     )
     # The request URL is a fixed HTTPS provider endpoint.
@@ -1308,7 +1476,7 @@ def _tavily_results(query: str, k: int) -> List[dict]:
     ]
 
 
-def _search_backend(query: str, k: int) -> List[dict]:
+def _search_backend(query: str, k: int) -> List[dict[typing.Any, typing.Any]]:
     """Prefer Tavily if configured (reliable), else keyless DuckDuckGo."""
     if config.TAVILY_API_KEY:
         try:
@@ -1320,13 +1488,16 @@ def _search_backend(query: str, k: int) -> List[dict]:
     return _ddg_results(query, k)
 
 
-async def search_context(query: str, k: int = 5):
+async def search_context(
+    query: str, k: int = 5
+) -> tuple[str, list[dict[str, typing.Any]], str | None]:
     """Raw keyless web search. Returns (context_str, sources, error_or_None).
 
     context_str is a compact block of the top results for feeding to a model;
     sources is [{"title","url"}...] taken straight from the engine.
     """
-    def _fetch():
+
+    def _fetch() -> tuple[list[dict[typing.Any, typing.Any]], str | None]:
         try:
             return _search_backend(query, k), None
         except Exception as e:
@@ -1335,12 +1506,15 @@ async def search_context(query: str, k: int = 5):
     results, err = await _run(_fetch)
     if err or not results:
         return "", [], err
-    sources = [
-        {"title": (r.get("title") or r.get("href"))[:200], "url": r.get("href")}
-        for r in results if r.get("href")
-    ][:5]
+    sources: list[dict[str, typing.Any]] = []
+    for result in results:
+        href = str(result.get("href") or "")
+        if href:
+            sources.append({"title": str(result.get("title") or href)[:200], "url": href})
+        if len(sources) >= 5:
+            break
     ctx = "\n\n".join(
-        f"[{i}] {r.get('title','')}\n{r.get('href','')}\n{(r.get('body') or '')[:400]}"
+        f"[{i}] {r.get('title', '')}\n{r.get('href', '')}\n{(r.get('body') or '')[:400]}"
         for i, r in enumerate(results, 1)
     )
     return ctx, sources, None
@@ -1352,7 +1526,7 @@ async def web_search(
     *,
     user_id: Optional[str] = None,
     scope_id: Optional[str] = None,
-) -> dict:
+) -> dict[typing.Any, typing.Any]:
     """Keyless web search that returns a self-contained {answer, sources}.
 
     Used by the explicit /search and !search commands. Sources come straight
@@ -1385,14 +1559,14 @@ async def web_search(
     return {"answer": answer, "sources": sources}
 
 
-def _extract_json(text: str) -> Optional[dict]:
+def _extract_json(text: str) -> Optional[dict[typing.Any, typing.Any]]:
     if not text or not str(text).strip():
         return None
     text = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
     try:
         parsed = json.loads(text)
         if isinstance(parsed, dict):
-            return parsed
+            return typing.cast(typing.Any, parsed)
     except json.JSONDecodeError:
         pass
     match = re.search(r"\{.*\}", text, re.DOTALL)
@@ -1400,7 +1574,7 @@ def _extract_json(text: str) -> Optional[dict]:
         try:
             parsed = json.loads(match.group(0))
             if isinstance(parsed, dict):
-                return parsed
+                return typing.cast(typing.Any, parsed)
         except json.JSONDecodeError:
             pass
     # Truncated JSON from a token cap: salvage the chat reply if present.

@@ -5,20 +5,62 @@ spec* — a name, a description, and a behavior prompt. The spec is stored and
 becomes instantly invocable as <prefix><name>. Crucially, the generated command
 is DATA (a prompt), never executable code.
 """
+
 import re
 from typing import Optional, Tuple
 
 from owaua import ai, brain, ckazros, config, db, multilingual
 
 RESERVED = {
-    "help", "teach", "forget", "memory", "memories", "about", "request",
-    "commands", "stats", "level", "reflect", "unlearn", "delcmd", "vibecheck",
-    "mood", "persona", "lurk", "config", "bond", "relationship", "rivalries",
-    "recap", "quote", "quotes", "export", "import", "ship", "8ball",
-    "roastbattle", "trivia", "whoami", "lessons", "resetconvo",
-    "search", "google", "cybersec", "sec",
-    "infosec", "ask", "assistant", "assist", "kb", "knowledge",
-    "ckazros", "language", "lang", "mode", "model", "models",
+    "help",
+    "teach",
+    "forget",
+    "memory",
+    "memories",
+    "about",
+    "request",
+    "commands",
+    "stats",
+    "level",
+    "reflect",
+    "unlearn",
+    "delcmd",
+    "vibecheck",
+    "mood",
+    "persona",
+    "lurk",
+    "config",
+    "bond",
+    "relationship",
+    "rivalries",
+    "recap",
+    "quote",
+    "quotes",
+    "export",
+    "import",
+    "ship",
+    "8ball",
+    "roastbattle",
+    "trivia",
+    "whoami",
+    "lessons",
+    "resetconvo",
+    "search",
+    "google",
+    "cybersec",
+    "sec",
+    "infosec",
+    "ask",
+    "assistant",
+    "assist",
+    "kb",
+    "knowledge",
+    "ckazros",
+    "language",
+    "lang",
+    "mode",
+    "model",
+    "models",
 }
 _NAME_OK = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
 
@@ -68,15 +110,17 @@ async def create_command(
     if not behavior:
         return False, "I couldn't figure out how the command should behave."
     if brain.any_prompt_leaked(behavior, desc, name):
-        return False, "that command looked like it was trying to stash my internals. try another idea."
+        return (
+            False,
+            "that command looked like it was trying to stash my internals. try another idea.",
+        )
 
     existed = db.get_command(name, guild_id) is not None
     db.add_command(name, desc, behavior, author, guild_id)
     verb = "Updated" if existed else "Created"
     command_prefix = prefix or config.PREFIX
     return True, (
-        f"{verb} **{command_prefix}{name}** — {desc}\n"
-        f"Try it: `{command_prefix}{name} <your input>`"
+        f"{verb} **{command_prefix}{name}** — {desc}\nTry it: `{command_prefix}{name} <your input>`"
     )
 
 

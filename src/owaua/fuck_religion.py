@@ -15,6 +15,7 @@ persona (config.PERSONA) is opinionated *against* religion; the KB is wired to
 be authoritative for ACCURACY regardless of tone, but if you want the bot to
 discuss religion respectfully, also soften that persona line.
 """
+
 import argparse
 import os
 
@@ -328,9 +329,7 @@ existence of God, the problem of evil, faith and reason, and religious language.
 def seed_corpus(scope_id: str) -> int:
     total = 0
     for topic, text in CORPUS.items():
-        n = kb.ingest(
-            text, topic=topic, title=topic, source="starter-corpus", scope_id=scope_id
-        )
+        n = kb.ingest(text, topic=topic, title=topic, source="starter-corpus", scope_id=scope_id)
         print(f"  + {topic}: {n} passage(s)")
         total += n
     return total
@@ -351,9 +350,7 @@ def seed_folder(path: str, scope_id: str) -> int:
                 print(f"  ! skip {fp}: {e}")
                 continue
             topic = os.path.splitext(fn)[0]
-            n = kb.ingest(
-                text, topic=topic, title=topic, source=f"file:{fp}", scope_id=scope_id
-            )
+            n = kb.ingest(text, topic=topic, title=topic, source=f"file:{fp}", scope_id=scope_id)
             print(f"  + {fp} → topic '{topic}': {n} passage(s)")
             total += n
     return total
@@ -380,10 +377,7 @@ def main() -> None:
         else:
             print(f"\n! {folder!r} is not a directory — skipping folder ingest.")
 
-    print(
-        f"\ndone. added {total} passage(s); knowledge base now has "
-        f"{kb.count(scope_id)}."
-    )
+    print(f"\ndone. added {total} passage(s); knowledge base now has {kb.count(scope_id)}.")
     print("topics:")
     for t in kb.topics(scope_id):
         print(f"  - {t['topic']}: {t['passages']}")

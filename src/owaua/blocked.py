@@ -12,6 +12,7 @@ import json
 import os
 import stat
 import time
+import typing
 import warnings
 from pathlib import Path
 
@@ -27,7 +28,7 @@ _MAX_LEGACY_USERS = 100_000
 _warned_invalid_legacy = False
 
 
-def normalize_user_id(user_id) -> str:
+def normalize_user_id(user_id: typing.Any) -> str:
     """Strip whitespace / mention wrappers; return a bounded numeric id."""
     raw = str(user_id or "").strip()
     if raw.startswith("<@") and raw.endswith(">"):
@@ -111,7 +112,7 @@ def _evidence(value: object) -> str:
 def _timestamp(value: object, default: float | None = None) -> float:
     fallback = time.time() if default is None else float(default)
     try:
-        parsed = float(value)
+        parsed = float(typing.cast(typing.Any, value))
     except (TypeError, ValueError, OverflowError):
         return fallback
     if not (0 <= parsed <= time.time() + 86_400):
@@ -119,8 +120,8 @@ def _timestamp(value: object, default: float | None = None) -> float:
     return parsed
 
 
-def _history_event(raw: object) -> dict:
-    item = raw if isinstance(raw, dict) else {}
+def _history_event(raw: object) -> dict[typing.Any, typing.Any]:
+    item: typing.Any = typing.cast(typing.Any, raw if isinstance(raw, dict) else {})
     return {
         "timestamp": _timestamp(item.get("timestamp")),
         "reason": _text(item.get("reason"), 500),
@@ -135,7 +136,7 @@ def _history_event(raw: object) -> dict:
     }
 
 
-def _source_for(meta: dict) -> str:
+def _source_for(meta: dict[typing.Any, typing.Any]) -> str:
     explicit = _text(meta.get("source") or meta.get("block_source"), 16).lower()
     if explicit in {"manual", "tos", "other"}:
         return explicit
@@ -148,14 +149,20 @@ def _source_for(meta: dict) -> str:
     return "manual"
 
 
-def _clean_metadata(raw: object) -> dict:
-    meta = raw if isinstance(raw, dict) else {}
+def _clean_metadata(raw: object) -> dict[typing.Any, typing.Any]:
+    meta: typing.Any = typing.cast(typing.Any, raw if isinstance(raw, dict) else {})
     blocked_at = _timestamp(meta.get("blocked_at"))
     updated_at = _timestamp(meta.get("updated_at"), blocked_at)
-    history = meta.get("history")
-    events = []
+    history: typing.Any = meta.get("history")
+    events: list[typing.Any] = []
     if isinstance(history, list):
-        events = [_history_event(item) for item in history[-10:]]
+        events: typing.Any = typing.cast(
+            typing.Any,
+            [
+                _history_event(item)
+                for item in typing.cast(typing.Iterable[typing.Any], history[-10:])
+            ],
+        )
     return {
         "blocked_at": blocked_at,
         "updated_at": updated_at,
@@ -172,17 +179,23 @@ def _clean_metadata(raw: object) -> dict:
     }
 
 
-def _legacy_users(value: object) -> dict:
+def _legacy_users(value: object) -> dict[typing.Any, typing.Any]:
     if isinstance(value, list):
-        return {str(user_id): {} for user_id in value}
+        return typing.cast(
+            typing.Any,
+            {str(user_id): {} for user_id in typing.cast(typing.Iterable[typing.Any], value)},
+        )
     if not isinstance(value, dict):
         return {}
-    users = value.get("users")
+    users: typing.Any = typing.cast(typing.Any, value).get("users")
     if isinstance(users, dict):
-        return users
-    blocked_ids = value.get("blocked")
+        return typing.cast(typing.Any, users)
+    blocked_ids: typing.Any = typing.cast(typing.Any, value).get("blocked")
     if isinstance(blocked_ids, list):
-        return {str(user_id): {} for user_id in blocked_ids}
+        return typing.cast(
+            typing.Any,
+            {str(user_id): {} for user_id in typing.cast(typing.Iterable[typing.Any], blocked_ids)},
+        )
     return {}
 
 
@@ -203,14 +216,16 @@ def _migrate_legacy() -> None:
             _warned_invalid_legacy = True
         return
 
-    records: list[tuple[str, str, dict]] = []
+    records: list[tuple[str, str, dict[typing.Any, typing.Any]]] = []
     for raw_uid, raw_meta in list(_legacy_users(decoded).items())[:_MAX_LEGACY_USERS]:
         try:
             uid = normalize_user_id(raw_uid)
         except ValueError:
             continue
         metadata = _clean_metadata(raw_meta)
-        source = _source_for(raw_meta if isinstance(raw_meta, dict) else {})
+        source = _source_for(
+            typing.cast(typing.Any, raw_meta if isinstance(raw_meta, dict) else {})
+        )
         metadata["source"] = source
         records.append((uid, source, metadata))
     db.import_legacy_dynamic_blocks(migration, records)
@@ -222,7 +237,7 @@ def dynamic_blocked_ids() -> set[str]:
     return set(db.dynamic_blocks_all())
 
 
-def is_dynamically_blocked(user_id) -> bool:
+def is_dynamically_blocked(user_id: typing.Any) -> bool:
     try:
         uid = normalize_user_id(user_id)
     except ValueError:
@@ -232,7 +247,7 @@ def is_dynamically_blocked(user_id) -> bool:
 
 
 def block_user(
-    user_id,
+    user_id: typing.Any,
     reason: str = "",
     *,
     category: str = "",
@@ -284,7 +299,7 @@ def block_user(
     )
 
 
-def unblock_user(user_id, *, expected_source: str | None = None) -> bool:
+def unblock_user(user_id: typing.Any, *, expected_source: str | None = None) -> bool:
     """Remove a block atomically, optionally requiring its current source."""
     uid = normalize_user_id(user_id)
     _migrate_legacy()
@@ -292,7 +307,7 @@ def unblock_user(user_id, *, expected_source: str | None = None) -> bool:
     return db.dynamic_block_remove(uid, expected_sources=expected)
 
 
-def get_blocked_user(user_id) -> dict | None:
+def get_blocked_user(user_id: typing.Any) -> dict[typing.Any, typing.Any] | None:
     """Return a detached metadata mapping, or ``None`` if not blocked."""
     try:
         uid = normalize_user_id(user_id)
@@ -303,7 +318,7 @@ def get_blocked_user(user_id) -> dict | None:
     return dict(metadata) if metadata is not None else None
 
 
-def list_blocked() -> dict[str, dict]:
+def list_blocked() -> dict[str, dict[typing.Any, typing.Any]]:
     """Return a detached ``{user_id: metadata}`` snapshot."""
     _migrate_legacy()
     return {uid: dict(metadata) for uid, metadata in db.dynamic_blocks_all().items()}

@@ -1,4 +1,5 @@
 """Owner !ckazros command: standing orders persist and inject into the brain."""
+
 from __future__ import annotations
 
 import os
@@ -53,15 +54,20 @@ class CkazrosTest(unittest.TestCase):
         self.assertEqual(result.op, "sticky")
         self.assertEqual(ckazros.list_directives(), ["speak in hebrew from now"])
 
-        prompt = brain.build_system(
-            "2", "rando", "hey", Scope.guild(1).key, server_name="lab"
-        )
+        prompt = brain.build_system("2", "rando", "hey", Scope.guild(1).key, server_name="lab")
         self.assertIn("OWNER STANDING ORDERS", prompt)
         self.assertIn("speak in hebrew from now", prompt)
-        self.assertIn(ckazros.OWNER_TURN, brain.build_system(
-            config.OWNER_ID, "op", "hey", Scope.guild(1).key,
-            server_name="lab", owner_command=True,
-        ))
+        self.assertIn(
+            ckazros.OWNER_TURN,
+            brain.build_system(
+                config.OWNER_ID,
+                "op",
+                "hey",
+                Scope.guild(1).key,
+                server_name="lab",
+                owner_command=True,
+            ),
+        )
 
         wrapped = ckazros.apply("persona here")
         self.assertIn("speak in hebrew from now", wrapped)
@@ -101,9 +107,7 @@ class CkazrosTest(unittest.TestCase):
 
     def test_prompt_block_is_empty_without_orders(self) -> None:
         self.assertEqual(ckazros.prompt_block(), "")
-        prompt = brain.build_system(
-            "1", "tester", "hi", Scope.guild(1).key, server_name="lab"
-        )
+        prompt = brain.build_system("1", "tester", "hi", Scope.guild(1).key, server_name="lab")
         self.assertNotIn("OWNER STANDING ORDERS", prompt)
 
 

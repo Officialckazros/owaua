@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import typing
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -34,7 +35,7 @@ class Rule34ValidationTests(unittest.TestCase):
         self.assertEqual(rule34.validate_amount(10), 10)
         for value in (0, 11, "many"):
             with self.subTest(value=value), self.assertRaises(rule34.Rule34Error):
-                rule34.validate_amount(value)
+                rule34.validate_amount(typing.cast(typing.Any, value))
 
     def test_parse_posts_accepts_only_rule34_image_urls_and_safe_tags(self) -> None:
         payload = [
@@ -112,7 +113,7 @@ class Rule34ConfigurationTests(unittest.IsolatedAsyncioTestCase):
             async def __aenter__(self):
                 return self
 
-            async def __aexit__(self, *_args) -> None:
+            async def __aexit__(self, *_args: typing.Any) -> None:
                 return None
 
         class Session:
@@ -122,10 +123,10 @@ class Rule34ConfigurationTests(unittest.IsolatedAsyncioTestCase):
             async def __aenter__(self):
                 return self
 
-            async def __aexit__(self, *_args) -> None:
+            async def __aexit__(self, *_args: typing.Any) -> None:
                 return None
 
-            def get(self, *_args, **_kwargs):
+            def get(self, *_args: typing.Any, **_kwargs: typing.Any):
                 return Response(next(self.responses))
 
         session = Session()

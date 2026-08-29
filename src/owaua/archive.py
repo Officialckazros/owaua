@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import typing
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -33,7 +34,7 @@ def text_only(content: str) -> str:
     return value.strip()[:2000].rstrip()
 
 
-def _record(message: discord.Message, content: str) -> dict:
+def _record(message: discord.Message, content: str) -> dict[typing.Any, typing.Any]:
     author = message.author
     created = getattr(message, "created_at", None)
     return {
@@ -42,8 +43,7 @@ def _record(message: discord.Message, content: str) -> dict:
         "user_id": str(author.id),
         "username": str(getattr(author, "name", author.id)),
         "display_name": str(
-            getattr(author, "display_name", None)
-            or getattr(author, "name", author.id)
+            getattr(author, "display_name", None) or getattr(author, "name", author.id)
         ),
         "content": content,
         "created_at": created.timestamp() if created is not None else None,
@@ -127,7 +127,7 @@ async def backfill_channel(guild: discord.Guild, channel: Any) -> dict[str, int 
     if cursor and str(cursor.get("last_message_id") or "").isdigit():
         after = discord.Object(id=int(cursor["last_message_id"]))
 
-    records: list[dict] = []
+    records: list[dict[typing.Any, typing.Any]] = []
     seen_in_batch = 0
     last_message_id: str | None = None
     saved = 0
@@ -150,9 +150,7 @@ async def backfill_channel(guild: discord.Guild, channel: Any) -> dict[str, int 
         seen_in_batch = 0
 
     try:
-        async for message in channel.history(
-            limit=None, after=after, oldest_first=True
-        ):
+        async for message in channel.history(limit=None, after=after, oldest_first=True):
             scanned += 1
             seen_in_batch += 1
             last_message_id = str(message.id)

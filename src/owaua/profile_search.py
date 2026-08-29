@@ -60,9 +60,7 @@ vietnamese,wales,welsh,yemen,yemeni,zambia,zambian,zimbabwe,zimbabwean
 
 PROFILE_TERMS = tuple(
     dict.fromkeys(
-        value.strip()
-        for value in _PROFILE_TERMS_TEXT.replace("\n", "").split(",")
-        if value.strip()
+        value.strip() for value in _PROFILE_TERMS_TEXT.replace("\n", "").split(",") if value.strip()
     )
 )
 _TERM_PATTERN = "|".join(
