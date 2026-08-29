@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Owaua is a Discord bot with chat, memory, community tools, moderation helpers, games, music links, privacy controls, and more." />
+  <title>Owaua — Discord Bot</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d0f14;
+      --panel: #151820;
+      --panel-2: #1b1f29;
+      --text: #f4f5f7;
+      --muted: #a9afbd;
+      --accent: #5865f2;
+      --border: #292e3b;
+      --code: #10131a;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at top, #171b25 0, var(--bg) 38%);
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    a { color: inherit; }
+
+    .wrap {
+      width: min(1080px, calc(100% - 32px));
+      margin: 0 auto;
+    }
+
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      backdrop-filter: blur(14px);
+      background: rgba(13, 15, 20, 0.78);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .nav-inner {
+      min-height: 68px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+
+    .brand {
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      font-size: 1.2rem;
+      text-decoration: none;
+    }
+
+    .nav-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .nav-links a {
+      text-decoration: none;
+    }
+
+    .nav-links a:hover { color: var(--text); }
+
+    header {
+      padding: 96px 0 72px;
+      text-align: center;
+    }
+
+    .eyebrow {
+      display: inline-block;
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.03);
+      color: var(--muted);
+      font-size: 0.85rem;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      font-size: clamp(3rem, 10vw, 6rem);
+      line-height: 0.95;
+      letter-spacing: -0.065em;
+      margin: 0;
+    }
+
+    .hero-copy {
+      max-width: 720px;
+      margin: 24px auto 0;
+      color: var(--muted);
+      font-size: clamp(1rem, 2vw, 1.2rem);
+    }
+
+    .hero-actions {
+      margin-top: 30px;
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      padding: 0 18px;
+      border-radius: 10px;
+      background: var(--accent);
+      color: white;
+      text-decoration: none;
+      font-weight: 700;
+    }
+
+    .button.secondary {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+    }
+
+    section { padding: 42px 0; }
+
+    .section-title {
+      margin-bottom: 20px;
+    }
+
+    .section-title h2 {
+      margin: 0 0 8px;
+      font-size: clamp(1.8rem, 4vw, 2.5rem);
+      letter-spacing: -0.04em;
+    }
+
+    .section-title p {
+      margin: 0;
+      color: var(--muted);
+      max-width: 720px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+
+    .card {
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 22px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.01));
+    }
+
+    .card h3 {
+      margin: 0 0 8px;
+      font-size: 1.08rem;
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .steps {
+      display: grid;
+      gap: 12px;
+      counter-reset: step;
+    }
+
+    .step {
+      counter-increment: step;
+      display: grid;
+      grid-template-columns: 46px 1fr;
+      gap: 16px;
+      align-items: start;
+      padding: 18px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+    }
+
+    .step::before {
+      content: counter(step);
+      display: grid;
+      place-items: center;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--accent);
+      font-weight: 800;
+    }
+
+    .step h3 { margin: 1px 0 4px; }
+    .step p { margin: 0; color: var(--muted); }
+
+    .commands {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .command {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 14px 16px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--panel);
+    }
+
+    code {
+      background: var(--code);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 2px 7px;
+      color: #d9dcff;
+      white-space: nowrap;
+    }
+
+    .command span { color: var(--muted); }
+
+    .note {
+      border-left: 3px solid var(--accent);
+      padding: 16px 18px;
+      background: var(--panel);
+      color: var(--muted);
+      border-radius: 0 12px 12px 0;
+    }
+
+    footer {
+      padding: 60px 0 80px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    @media (max-width: 800px) {
+      .grid { grid-template-columns: 1fr; }
+      .commands { grid-template-columns: 1fr; }
+      .nav-inner { align-items: flex-start; padding: 16px 0; flex-direction: column; }
+      header { padding-top: 72px; }
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="wrap nav-inner">
+      <a class="brand" href="#top">owaua</a>
+      <div class="nav-links">
+        <a href="#how">How it works</a>
+        <a href="#features">Features</a>
+        <a href="#commands">Commands</a>
+        <a href="#privacy">Privacy</a>
+      </div>
+    </div>
+  </nav>
+
+  <main id="top">
+    <header class="wrap">
+      <div class="eyebrow">Discord bot</div>
+      <h1>owaua</h1>
+      <p class="hero-copy">
+        A Discord bot built for actual server life: chat, memory, community tools,
+        moderation helpers, games, music links, custom commands, privacy controls,
+        and a personality that does not sound like a corporate help desk.
+      </p>
+      <div class="hero-actions">
+        <a class="button" href="#commands">See commands</a>
+        <a class="button secondary" href="#how">How it works</a>
+      </div>
+    </header>
+
+    <section id="how">
+      <div class="wrap">
+        <div class="section-title">
+          <h2>How it works</h2>
+          <p>Talking to Owaua is deliberately simple. You do not need to memorize a command for normal conversation.</p>
+        </div>
+        <div class="steps">
+          <div class="step">
+            <div>
+              <h3>Mention it in a server</h3>
+              <p>Send <code>@owaua your message</code>. In DMs, just type normally.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <h3>Give it context when you want</h3>
+              <p>It can work with image attachments and text files, and it can remember useful facts when memory is enabled for you.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <h3>Use commands for specific jobs</h3>
+              <p>Commands cover recaps, quotes, games, moderation, privacy, community features, server configuration, and more.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <h3>Confirm actions that change Discord</h3>
+              <p>Tool-style actions such as moderation or role changes are permission checked and require confirmation before they run.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="features">
+      <div class="wrap">
+        <div class="section-title">
+          <h2>What it can do</h2>
+          <p>Owaua is more than a chat box bolted onto Discord.</p>
+        </div>
+        <div class="grid">
+          <article class="card">
+            <h3>Conversation + memory</h3>
+            <p>Chat through mentions or DMs, keep scoped memories, track relationships, and clear conversation state when you want a reset.</p>
+          </article>
+          <article class="card">
+            <h3>Community tools</h3>
+            <p>AFK, reminders, highlights, tags, polls, ranks, giveaways, tickets, quotes, recaps, custom commands, and other server utilities.</p>
+          </article>
+          <article class="card">
+            <h3>Games + extras</h3>
+            <p>Coin flips, dice, rock-paper-scissors, trivia, shipping, roast battles, cards, deck battles, animal media, Pokémon info, and more.</p>
+          </article>
+          <article class="card">
+            <h3>Moderation helpers</h3>
+            <p>Cases, configured assistant actions, cleanup tools, role controls, server settings, and permission-aware confirmations.</p>
+          </article>
+          <article class="card">
+            <h3>Files, images + links</h3>
+            <p>Read attached text files, understand attached images, and return useful links for things such as music and GitHub repositories.</p>
+          </article>
+          <article class="card">
+            <h3>Language + server personality</h3>
+            <p>Set personal or server reply languages and configure the server persona without changing the rest of the bot.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="commands">
+      <div class="wrap">
+        <div class="section-title">
+          <h2>Useful commands</h2>
+          <p>The default prefix is <code>!</code>. This is only a short starter list.</p>
+        </div>
+        <div class="commands">
+          <div class="command"><code>!help</code><span>Show the command map.</span></div>
+          <div class="command"><code>!recap day</code><span>Recap recent channel activity.</span></div>
+          <div class="command"><code>!memory</code><span>View saved memories.</span></div>
+          <div class="command"><code>!bond</code><span>Check your relationship with Owaua.</span></div>
+          <div class="command"><code>!quote</code><span>Save, list, or pull server quotes.</span></div>
+          <div class="command"><code>!remind 30m text</code><span>Set a personal reminder.</span></div>
+          <div class="command"><code>!poll Question | A | B</code><span>Create a reaction poll.</span></div>
+          <div class="command"><code>!music song name</code><span>Get a validated YouTube link.</span></div>
+          <div class="command"><code>!language es</code><span>Change the language used for your replies.</span></div>
+          <div class="command"><code>!privacy</code><span>Open privacy controls.</span></div>
+          <div class="command"><code>!assistant request</code><span>Use the one-shot practical helper mode.</span></div>
+          <div class="command"><code>!commands</code><span>List community-created commands.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="privacy">
+      <div class="wrap">
+        <div class="section-title">
+          <h2>Privacy and permissions</h2>
+          <p>The bot separates normal conversation from actions that can change a server.</p>
+        </div>
+        <div class="grid">
+          <article class="card">
+            <h3>History is opt-in</h3>
+            <p>Raw conversation history is off by default. Server context is only read when the relevant history setting is enabled and users have opted in.</p>
+          </article>
+          <article class="card">
+            <h3>Normal chat does not run tools</h3>
+            <p>Mentions and DMs are for conversation. State-changing Discord actions go through dedicated, confirmation-gated flows.</p>
+          </article>
+          <article class="card">
+            <h3>You have controls</h3>
+            <p>Privacy, memory, conversation reset, DM opt-out, Terms controls, export tools, and server configuration are exposed through commands.</p>
+          </article>
+        </div>
+        <p class="note" style="margin-top:16px;">
+          Server owners can enable or disable modules, so some commands may not be available in every server.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">owaua · made for Discord, not a pitch deck</div>
+  </footer>
+</body>
+</html>
