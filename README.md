@@ -229,6 +229,8 @@ All bot code lives in `src/owaua/` (run with `PYTHONPATH=src python -m owaua.bot
 
 Run `deploy owaua` (or `./scripts/deploy owaua`) to run pre-deployment checks, sync files, and restart the service on Daki. Startup applies versioned migrations, purges legacy raw history, and enforces the configured retention ceiling before readiness is reported.
 
+To commit and push all repository changes to GitHub, run `deploy owaua github "your commit message"`.
+
 ## Verification
 
 The regression suite uses only Python's standard-library test runner:

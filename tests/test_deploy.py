@@ -182,6 +182,37 @@ class DeploymentValidationTests(unittest.TestCase):
         self.assertEqual(args.project, "websites")
         self.assertTrue(args.dry_run)
 
+    def test_github_action_accepts_a_commit_message(self) -> None:
+        with mock.patch.object(
+            deploy_script.sys,
+            "argv",
+            ["deploy", "owaua", "github", "add release command"],
+        ):
+            args = deploy_script.parse_args()
+        self.assertEqual(args.action, "github")
+        self.assertEqual(args.commit_message, "add release command")
+
+    def test_github_commit_stages_commits_and_pushes_current_branch(self) -> None:
+        branch = types.SimpleNamespace(returncode=0, stdout="main\n")
+        staged = types.SimpleNamespace(returncode=1)
+        with mock.patch.object(
+            deploy_script.subprocess,
+            "run",
+            side_effect=[branch, None, staged, None, None],
+        ) as run, mock.patch.object(
+            deploy_script.shutil, "which", return_value="/usr/bin/git"
+        ) as git:
+            deploy_script.github_commit("release command")
+        git.assert_called_once_with("git")
+        self.assertEqual(run.call_args_list[0].args[0], ["/usr/bin/git", "symbolic-ref", "--quiet", "--short", "HEAD"])
+        self.assertEqual(run.call_args_list[1].args[0], ["/usr/bin/git", "add", "--all"])
+        self.assertEqual(run.call_args_list[3].args[0], ["/usr/bin/git", "commit", "-m", "release command"])
+        self.assertEqual(run.call_args_list[4].args[0], ["/usr/bin/git", "push", "origin", "main"])
+
+    def test_github_commit_rejects_multiline_message(self) -> None:
+        with self.assertRaises(deploy_script.DeployError):
+            deploy_script.github_commit("bad\nmessage")
+
     def test_assemble_sites_flattens_kozzyx_pages_and_promotes_wearegays_index(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             website = Path(directory) / "website"

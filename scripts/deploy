@@ -673,6 +673,46 @@ def print_plan(changed, deleted):
         print("No deployable changes found.")
 
 
+def github_commit(commit_message):
+    """Commit all repository changes and push the current branch to origin."""
+    if (
+        not isinstance(commit_message, str)
+        or not commit_message.strip()
+        or _CONTROL_RE.search(commit_message)
+    ):
+        raise DeployError("GitHub commit message must be a non-empty single-line message")
+    git = shutil.which("git")
+    if not git:
+        raise DeployError("git is required for the github action")
+
+    branch_result = subprocess.run(  # noqa: S603 - git executable is resolved from PATH
+        [git, "symbolic-ref", "--quiet", "--short", "HEAD"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    branch = branch_result.stdout.strip()
+    if branch_result.returncode != 0 or not branch:
+        raise DeployError("Cannot push from a detached HEAD; check out a branch first")
+
+    subprocess.run([git, "add", "--all"], cwd=ROOT, check=True)  # noqa: S603
+    staged = subprocess.run(  # noqa: S603 - git executable is resolved from PATH
+        [git, "diff", "--cached", "--quiet"], cwd=ROOT, check=False
+    )  # noqa: S603
+    if staged.returncode == 0:
+        print("No changes to commit.")
+        return
+    if staged.returncode != 1:
+        raise DeployError("Could not inspect staged Git changes")
+
+    subprocess.run(  # noqa: S603 - fixed git subcommand; message is an argument, not shell input
+        [git, "commit", "-m", commit_message.strip()], cwd=ROOT, check=True
+    )
+    subprocess.run([git, "push", "origin", branch], cwd=ROOT, check=True)  # noqa: S603
+    print(f"Committed and pushed to origin/{branch}.")
+
+
 def confirm_deployment(config, changed, deleted, restart, assume_yes=False):
     server_id = str(config.get("server_id", ""))
     if not _SERVER_ID_RE.fullmatch(server_id):
@@ -870,6 +910,9 @@ def deploy_websites(args):
 
 
 def deploy(args):
+    if getattr(args, "action", None) == "github":
+        github_commit(args.commit_message)
+        return
     if getattr(args, "project", "owaua").lower() == "websites":
         deploy_websites(args)
         return
@@ -963,6 +1006,8 @@ def deploy(args):
 def parse_args():
     parser = argparse.ArgumentParser(prog="deploy")
     parser.add_argument("project")
+    parser.add_argument("action", nargs="?", choices=("github",))
+    parser.add_argument("commit_message", nargs="?")
     parser.add_argument("--setup", action="store_true")
     parser.add_argument("--full", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -982,6 +1027,12 @@ def parse_args():
     args = parser.parse_args()
     if args.project.lower() not in {"owaua", "websites"}:
         parser.error(f"unknown project: {args.project}")
+    if args.action == "github" and not args.commit_message:
+        parser.error("deploy owaua github requires a commit message")
+    if args.action is None and args.commit_message is not None:
+        parser.error("a commit message is only valid with the github action")
+    if args.action == "github" and args.project.lower() != "owaua":
+        parser.error("the github action is only available for owaua")
     if args.no_restart and args.restart:
         parser.error("--no-restart and --restart cannot be combined")
     if args.skip_checks and not args.yes:
