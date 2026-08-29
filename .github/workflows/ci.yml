@@ -38,7 +38,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip==26.2.1
           python -m pip install --require-hashes -r requirements.lock
-          python -m pip install ruff==0.16.3 mypy==2.3.1 pyright==1.1.413 pip-audit==2.10.1
+          python -m pip install ruff==0.16.3 mypy==2.3.1 pyright==1.1.411 pip-audit==2.10.1
 
       - name: Compile source
         run: python -m compileall -q src desktoppet/pet.py scripts/deploy
@@ -92,6 +92,11 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: desktoppet/requirements.lock
+
+      - name: Install headless Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libegl1
 
       - name: Install desktop and audit dependencies
         run: |
