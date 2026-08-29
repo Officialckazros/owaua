@@ -5,8 +5,8 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from sefbot import ai_workflows
-from sefbot.module_catalog import merge_server_settings
+from owaua import ai_workflows
+from owaua.module_catalog import merge_server_settings
 
 
 class WorkflowCatalogTest(unittest.TestCase):

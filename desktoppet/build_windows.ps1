@@ -10,9 +10,9 @@ if (-not $NoInstall) {
 python -m PyInstaller --noconfirm --clean `
     --onefile `
     --windowed `
-    --name SefPet `
+    --name owaua `
     --add-data "desktoppet.jpg;." `
     pet.py
 
 Write-Host ""
-Write-Host "Done: dist\SefPet.exe"
+Write-Host "Done: dist\owaua.exe"

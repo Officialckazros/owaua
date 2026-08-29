@@ -1,5 +1,5 @@
 {
-  "name": "opsef-cloudflare-worker",
+  "name": "owaua-cloudflare-worker",
   "private": true,
   "type": "module",
   "scripts": {

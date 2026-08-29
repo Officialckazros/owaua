@@ -2,7 +2,7 @@
 
 Every test redirects the process-wide repository connection to a temporary
 database before first use.  ``PYTHON_DOTENV_DISABLED`` is set before importing
-SefBot so the test process does not read or modify a developer's real ``.env``.
+owaua so the test process does not read or modify a developer's real ``.env``.
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ from pathlib import Path
 os.environ.setdefault("PYTHON_DOTENV_DISABLED", "1")
 os.environ.setdefault("DISCORD_TOKEN", "test-token")
 
-from sefbot import config, db, kb, tos
-from sefbot.scope import Scope, scope_key
+from owaua import config, db, kb, tos
+from owaua.scope import Scope, scope_key
 
 
 class IsolatedDatabaseTest(unittest.TestCase):

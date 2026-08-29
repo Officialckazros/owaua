@@ -1,8 +1,8 @@
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
-from sefbot import config, db, swearjar
-from sefbot.module_catalog import public_server_settings
+from owaua import config, db, swearjar
+from owaua.module_catalog import public_server_settings
 
 
 class SwearJarTests(unittest.TestCase):

@@ -10,7 +10,7 @@ from unittest import mock
 
 DEPLOY_PATH = Path(__file__).resolve().parents[1] / "scripts" / "deploy"
 LOADER = importlib.machinery.SourceFileLoader(
-    "opsef_deploy_test_module", str(DEPLOY_PATH)
+    "owaua_deploy_test_module", str(DEPLOY_PATH)
 )
 SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
 if SPEC is None:  # pragma: no cover - importlib invariant
@@ -20,6 +20,36 @@ LOADER.exec_module(deploy_script)
 
 
 class DeploymentValidationTests(unittest.TestCase):
+    def test_legacy_private_deployment_state_is_moved_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy = root / "legacy"
+            canonical = root / "owaua"
+            legacy.mkdir()
+            (legacy / "config.json").write_text("{}", encoding="utf-8")
+            with (
+                mock.patch.object(deploy_script, "LEGACY_CONFIG_DIR", legacy),
+                mock.patch.object(deploy_script, "CONFIG_DIR", canonical),
+            ):
+                deploy_script.migrate_legacy_config_dir()
+            self.assertFalse(legacy.exists())
+            self.assertEqual(
+                (canonical / "config.json").read_text(encoding="utf-8"), "{}"
+            )
+
+    def test_rebrand_server_operations_are_narrowly_allowlisted(self) -> None:
+        client = deploy_script.DakiClient(
+            "https://portal.daki.cc", "ptlc_test", "server_123"
+        )
+        with mock.patch.object(client, "request") as request:
+            client.update_startup_variable("SECOND_CMD", "PYTHONPATH=src python -m owaua.bot")
+            client.rename_server("owaua")
+        self.assertEqual(request.call_count, 2)
+        with self.assertRaises(deploy_script.DeployError):
+            client.update_startup_variable("TOKEN", "unsafe")
+        with self.assertRaises(deploy_script.DeployError):
+            client.rename_server("unexpected")
+
     def test_panel_must_be_https_and_cannot_contain_credentials(self) -> None:
         normalized, server_id, key = deploy_script.normalize_panel(
             "https://portal.daki.cc/server/server_123",
@@ -55,8 +85,8 @@ class DeploymentValidationTests(unittest.TestCase):
 
     def test_remote_file_allowlist_cannot_be_broadened_by_saved_state(self) -> None:
         self.assertEqual(
-            deploy_script.validate_deployable_path("src/sefbot/web.py"),
-            "src/sefbot/web.py",
+            deploy_script.validate_deployable_path("src/owaua/web.py"),
+            "src/owaua/web.py",
         )
         self.assertEqual(
             deploy_script.validate_deployable_path("requirements.txt"),
@@ -69,8 +99,8 @@ class DeploymentValidationTests(unittest.TestCase):
         for value in (
             ".env",
             "README.md",
-            "src/sefbot/token.txt",
-            "src//sefbot/web.py",
+            "src/owaua/token.txt",
+            "src//owaua/web.py",
             "../outside.py",
         ):
             with self.subTest(value=value), self.assertRaises(
@@ -159,7 +189,7 @@ class DeploymentValidationTests(unittest.TestCase):
             (website / "kozzyx.org" / "css").mkdir()
             (website / "kirmy.org").mkdir()
             (website / "wearegays.net").mkdir()
-            (website / "wearegays.net" / "opsef").mkdir()
+            (website / "wearegays.net" / "owaua").mkdir()
             (website / "wearedevsstatus").mkdir()
             (website / "social").mkdir()
             (website / "kozzyx.org" / "pages" / "index.html").write_text(
@@ -172,8 +202,8 @@ class DeploymentValidationTests(unittest.TestCase):
             (website / "wearegays.net" / "multi.html").write_text(
                 "wag", encoding="utf-8"
             )
-            (website / "wearegays.net" / "opsef" / "index.html").write_text(
-                "opsef guide", encoding="utf-8"
+            (website / "wearegays.net" / "owaua" / "index.html").write_text(
+                "owaua guide", encoding="utf-8"
             )
             (website / "wearegays.net" / "femsec").mkdir()
             (website / "wearegays.net" / "femsec" / "index.html").write_text(
@@ -193,7 +223,7 @@ class DeploymentValidationTests(unittest.TestCase):
             self.assertTrue((assembled / "kozzyx" / "css" / "theme.css").is_file())
             self.assertEqual(
                 (assembled / "wearegays" / "index.html").read_text(encoding="utf-8"),
-                "opsef guide",
+                "owaua guide",
             )
             self.assertTrue((assembled / "wearegays" / "status" / "index.html").is_file())
             self.assertTrue((assembled / "kirmy" / "social" / "index.html").is_file())

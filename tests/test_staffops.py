@@ -1,7 +1,7 @@
 import time
 import unittest
 
-from sefbot import actions, config, db, rules, staffops
+from owaua import actions, config, db, rules, staffops
 
 
 class StaffOperationsTests(unittest.TestCase):

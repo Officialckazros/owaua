@@ -1,4 +1,4 @@
-# SefBot
+# owaua
 
 A privacy-first Discord assistant with scoped memory, human-approved administration tools, and optional moderation, vision, and voice features. Raw message history is off by default and ordinary chat cannot execute Discord actions.
 
@@ -41,14 +41,14 @@ Community-made commands via `!request` are prompt specs, not code. Discord-acces
 
 1. Make a bot at [discord.com/developers/applications](https://discord.com/developers/applications) → New Application → Bot → Reset Token. Under Privileged Gateway Intents turn on **Message Content Intent** (required) and **Server Members Intent** (recommended — makes `/act` moderation and user lookups more reliable; without it the bot falls back to REST fetches). **Voice States Intent** is on by default via `Intents.default()` — no action needed unless you changed the defaults.
 2. Invite it: OAuth2 → URL Generator → scope `bot`, permissions Send Messages / Read Message History / Add Reactions, plus Kick/Ban/Manage Roles if you want moderation to work. For voice, also tick **Connect** and **Speak**.
-3. Use Python 3.12–3.14, copy `.env.example` to `.env`, set `DISCORD_TOKEN`, `SEFBOT_PRIVACY_CONTACT`, and credentials for the AI providers you actually use. Restrict the file before starting:
+3. Use Python 3.12–3.14, copy `.env.example` to `.env`, set `DISCORD_TOKEN`, `OWAUA_PRIVACY_CONTACT`, and credentials for the AI providers you actually use. Restrict the file before starting:
 
 ```bash
 cp .env.example .env
 chmod 600 .env
 python3 -m venv .venv && source .venv/bin/activate
 pip install --require-hashes -r requirements.lock
-PYTHONPATH=src python -m sefbot.bot
+PYTHONPATH=src python -m owaua.bot
 ```
 
 ## Commands
@@ -59,7 +59,7 @@ First use is locked behind `/tos`: Discord issues a single-use 15-minute link,
 the user reads and accepts the current Terms on the public page, then returns to
 Discord. The web form discloses its abuse-prevention processing and stores only
 a keyed network token for at most 30 days, never the raw client IP. Configure
-separate `SEFBOT_TOS_ACCEPTANCE_SECRET` and `SEFBOT_TOS_PROXY_SECRET` values;
+separate `OWAUA_TOS_ACCEPTANCE_SECRET` and `OWAUA_TOS_PROXY_SECRET` values;
 the latter must match the secret header set by the trusted Cloudflare Worker.
 
 ## Web dashboard and community modules
@@ -74,9 +74,9 @@ In the Discord Developer Portal, add this OAuth2 redirect URI:
 
 `https://wearegays.net/dashboard/auth/discord/callback`
 
-Set `SEFBOT_DASHBOARD_PUBLIC_URL`, a separate random
-`SEFBOT_DASHBOARD_SESSION_SECRET`, and `SEFBOT_DISCORD_CLIENT_ID` /
-`SEFBOT_DISCORD_CLIENT_SECRET`; see `.env.example` for the exact names. Discord
+Set `OWAUA_DASHBOARD_PUBLIC_URL`, a separate random
+`OWAUA_DASHBOARD_SESSION_SECRET`, and `OWAUA_DISCORD_CLIENT_ID` /
+`OWAUA_DISCORD_CLIENT_SECRET`; see `.env.example` for the exact names. Discord
 OAuth is exchanged for a signed, HttpOnly, SameSite session. Dashboard writes
 require a CSRF token and every module change is recorded in the server's
 dashboard audit trail.
@@ -120,7 +120,7 @@ builder. The same page shows live current/all-time statistics and individual
 records, and lets authorized server managers import/synchronize boosters, send
 a test greeting, and apply audited `+N`/`-N` corrections.
 
-There are no SefBot paid tiers or artificial item limits. Every dashboard
+There are no owaua paid tiers or artificial item limits. Every dashboard
 module is enabled by default, and server managers can disable any module later.
 Modules that need rules, channels, roles, forms, or subscriptions remain inert
 until those settings are configured. Structured settings use bounded JSON
@@ -139,23 +139,23 @@ web forms and submission automation, Reddit/YouTube public feeds, voice-text
 links and utility/fun commands. Existing confirmed administration actions,
 custom commands, moderation review, economy, Booster Perks and localization remain integrated.
 Third-party networks may still require their own free developer credentials or
-impose upstream quotas; SefBot itself does not charge to unlock them.
+impose upstream quotas; owaua itself does not charge to unlock them.
 
 Reddit and YouTube polling use public feeds. Twitch and Kick use official app
-access tokens generated from `SEFBOT_TWITCH_CLIENT_ID` /
-`SEFBOT_TWITCH_CLIENT_SECRET` and `SEFBOT_KICK_CLIENT_ID` /
-`SEFBOT_KICK_CLIENT_SECRET`. TikTok's official Display API requires the creator
+access tokens generated from `OWAUA_TWITCH_CLIENT_ID` /
+`OWAUA_TWITCH_CLIENT_SECRET` and `OWAUA_KICK_CLIENT_ID` /
+`OWAUA_KICK_CLIENT_SECRET`. TikTok's official Display API requires the creator
 to authorize `video.list`; put that access token in
-`SEFBOT_TIKTOK_ACCESS_TOKEN`. Credentials remain environment-only and are never
+`OWAUA_TIKTOK_ACCESS_TOKEN`. Credentials remain environment-only and are never
 returned through the dashboard.
 
 ## Privacy, legal pages, and service health
 
-- Terms: [wearegays.net/sefbot/terms](https://wearegays.net/sefbot/terms)
-- Privacy: [wearegays.net/sefbot/privacy](https://wearegays.net/sefbot/privacy)
+- Terms: [wearegays.net/owaua/terms](https://wearegays.net/owaua/terms)
+- Privacy: [wearegays.net/owaua/privacy](https://wearegays.net/owaua/privacy)
 - `/privacy status|opt-in|opt-out|export|delete` remains private and available without accepting the ToS. ToS acceptance is not raw-history consent.
 - Moderation, server rules, raw history, and voice transcription are disabled by default. Voice transcription additionally requires participant consent in the exact guild.
-- The built-in HTTP service exposes `/healthz` for liveness and `/readyz` for sanitized Discord/database readiness. `SEFBOT_PRIVACY_CONTACT` defaults to `ckazros@kozzyx.org`; `PORT` defaults to `8080`.
+- The built-in HTTP service exposes `/healthz` for liveness and `/readyz` for sanitized Discord/database readiness. `OWAUA_PRIVACY_CONTACT` defaults to `ckazros@kozzyx.org`; `PORT` defaults to `8080`.
 - The authenticated dashboard is at `/dashboard`. Public forms are under
   `/forms/<server-id>/<form-slug>` and are available only when that exact form
   and the Forms module are enabled.
@@ -163,31 +163,31 @@ returned through the dashboard.
 
 ## Modular AI features
 
-A second, self-contained model layer (`services/llm_client.py`) that talks to an OpenAI-compatible endpoint over `httpx`. Point `SEFBOT_LLM_BASE_URL` / `SEFBOT_LLM_API_KEY` at your inference provider and set the model ids in `.env` (see `.env.example`).
+A second, self-contained model layer (`services/llm_client.py`) that talks to an OpenAI-compatible endpoint over `httpx`. Point `OWAUA_LLM_BASE_URL` / `OWAUA_LLM_API_KEY` at your inference provider and set the model ids in `.env` (see `.env.example`).
 
 - **AI control plane** — every primary chat request goes through task policies, fast/balanced/reasoning routing, typed capability limits, rolling provider health, circuit breakers, bounded request/context budgets, prompt versions, strict structured-output validation, one safe repair attempt, and metadata-only tracing. `/mode ai-fast|ai-balanced|ai-reasoning` selects a personal route without exposing provider credentials or weakening feature policy.
 - **AI workflow toolkit** — `/ask workflow:<type>` uses searchable autocomplete and `!ai <type> [text]` exposes 41 read-only workflows. Alongside writing, summarization, study, extraction and grounded fact checking, it includes timelines, requirements, risk registers, root-cause analysis, decision briefs, counterarguments, comparisons, prioritization, research/test plans, release notes, incident reports, privacy/security/accessibility reviews, rubrics, flashcards, Socratic questions, user stories and executive briefs. Prefix workflows can use explicit text, a replied message, or a bounded text attachment. Model output links are defanged; fact-check links come only from validated search results.
 - **Long-conversation continuity** — opted-in history is incrementally compressed into an exact-user/exact-scope continuity summary while recent raw turns remain available. Summaries never replace durable memories, are treated as untrusted context, follow retention/export/deletion controls, and are erased by conversation reset.
 - **Channel/thread intelligence** — `/recap mode:<type>` and `!aichannel <type>` analyze only recent messages from members who opted in, and only while server history is enabled. Available modes include summaries, action items, meeting notes, decisions, sentiment, and advisory staff triage. The message `Apps` menu also provides private summarize, explain, action-item, and fact-check shortcuts.
-- **`/ask <question> [mode=reasoning|fast]`** — one-shot Q&A. `reasoning` uses the configured best model (`SEFBOT_CHAT_MODEL`); `fast` uses the configured Groq fast model (`SEFBOT_FAST_MODEL`). Cooldown-protected.
+- **`/ask <question> [mode=reasoning|fast]`** — one-shot Q&A. `reasoning` uses the configured best model (`OWAUA_CHAT_MODEL`); `fast` uses the configured Groq fast model (`OWAUA_FAST_MODEL`). Cooldown-protected.
 - **`/act <natural language>`** — moderators can ask for one typed action such as a timeout or ban. The bot shows an ephemeral, mention-safe preview bound to that invoker; only a confirmation within two minutes can proceed. The executor then re-resolves the target and rechecks the exact permission, bot capability, and role hierarchy. Schemas live in `function_registry.py`.
-- **Passive moderation** — disabled until `SEFBOT_SAFETY_ENABLED=1` and an administrator enables it for the guild. Safety GPT is a bounded classifier only: high-confidence flags go to a private staff review with **Delete message** / **Dismiss** controls. The model cannot delete content, warn users, or globally block anyone by itself.
+- **Passive moderation** — disabled until `OWAUA_SAFETY_ENABLED=1` and an administrator enables it for the guild. Safety GPT is a bounded classifier only: high-confidence flags go to a private staff review with **Delete message** / **Dismiss** controls. The model cannot delete content, warn users, or globally block anyone by itself.
 - **Malware scanner** — enabled by default for every non-media attachment and backed by a required local ClamAV installation. Media exclusions require matching MIME, extension, and binary magic. Confirmed signatures delete/report/block immediately; unavailable, oversized, or timed-out scans remove the message without blocking its sender. Files are owner-only temporary data and are never uploaded to an antivirus vendor.
-- **Vision** — `/describe [image] [url] [prompt]` and the right-click **Describe image** message context menu. Uses Qwen vision (`SEFBOT_VISION_MODEL`); one call returns both a description and a moderation flag. Remote URLs must resolve to a public HTTP(S) endpoint, redirects are revalidated, and downloads are streamed under `SEFBOT_VISION_MAX_IMAGE_BYTES`. PNG, JPEG, GIF, and WebP are supported. Cooldown-protected.
-- **Age-restricted images** — `/nsfw character:<tag> amount:<1-10>` (or `!nsfw <tag> [amount]`) uses the Rule34 API only in server channels Discord marks age-restricted. Set `SEFBOT_RULE34_USER_ID` and `SEFBOT_RULE34_API_KEY` to enable it; credentials stay host-side.
-- **Multilingual** — `!language` / `/language` sets the language the bot replies in (per user, with an optional server default). Non-English messages are also detected with `langdetect` (cheap, never the LLM). In a channel listed in `SEFBOT_MULTILINGUAL_CHANNELS`, and when no language is set, Llama 3.3 70B replies in the message's own language; elsewhere the message is translated for the brain as before.
+- **Vision** — `/describe [image] [url] [prompt]` and the right-click **Describe image** message context menu. Uses Qwen vision (`OWAUA_VISION_MODEL`); one call returns both a description and a moderation flag. Remote URLs must resolve to a public HTTP(S) endpoint, redirects are revalidated, and downloads are streamed under `OWAUA_VISION_MAX_IMAGE_BYTES`. PNG, JPEG, GIF, and WebP are supported. Cooldown-protected.
+- **Age-restricted images** — `/nsfw character:<tag> amount:<1-10>` (or `!nsfw <tag> [amount]`) uses the Rule34 API only in server channels Discord marks age-restricted. Set `OWAUA_RULE34_USER_ID` and `OWAUA_RULE34_API_KEY` to enable it; credentials stay host-side.
+- **Multilingual** — `!language` / `/language` sets the language the bot replies in (per user, with an optional server default). Non-English messages are also detected with `langdetect` (cheap, never the LLM). In a channel listed in `OWAUA_MULTILINGUAL_CHANNELS`, and when no language is set, Llama 3.3 70B replies in the message's own language; elsewhere the message is translated for the brain as before.
 - **Voice** — `/join`, `/leave`, and `/say <text>` provide playback/TTS. Live `/stt` is off by default and requires `manage_channels`, guild enablement, and consent from every non-bot participant; the session stops when its controller leaves or consent/channel visibility changes. The released `discord-ext-voice-recv` packages still require a vulnerable PyNaCl version, so the base install keeps PyNaCl ≥ 1.6.2 and safely leaves live receive unavailable until a compatible upstream release exists. Do not downgrade PyNaCl to enable it.
 - **Server rules (approval-gated)** — a server manager enables the preset and selects a private approval channel in the dashboard. Findings go only to that private review channel. Approval rechecks the action-specific permission (`ban_members`, `kick_members`, `moderate_members`, or `manage_messages`) and bot hierarchy before doing anything; denial, timeout, or restart takes no action. Optional LLM confirmation still depends on the host's provider configuration.
 - **Swear jar** — disabled by default. Server managers can enable it in Dashboard → Settings or with confirmed `/config swearjar on`. Each message with locally detected profanity gets a reply with that member's server total; only the aggregate number is stored. Use `/swears [user]` or `!swears [@user]` to check it.
-- **Dedicated text archive** — guild `1535083112709496903` is the deployment-level archival scope. On startup and every six hours, SefBot resumes a channel/thread backfill from durable cursors, then indexes new and edited messages live. It stores message text and author IDs only: attachments, embeds, stickers, Unicode emoji, custom Discord emoji, and emoji-only messages are omitted. Archived raw text is exempt from the normal 30-day cleanup. Managers can inspect coverage with `/archive-status`; `user` questions retrieve relevant messages from the full indexed history.
+- **Dedicated text archive** — guild `1535083112709496903` is the deployment-level archival scope. On startup and every six hours, owaua resumes a channel/thread backfill from durable cursors, then indexes new and edited messages live. It stores message text and author IDs only: attachments, embeds, stickers, Unicode emoji, custom Discord emoji, and emoji-only messages are omitted. Archived raw text is exempt from the normal 30-day cleanup. Managers can inspect coverage with `/archive-status`; `user` questions retrieve relevant messages from the full indexed history.
 
 ## Knowledge base
 
 Separate from the memory system, this is a scoped retrieval store (SQLite FTS5, BM25 ranked). Upload size, row count, chunk length, and prompt retrieval are bounded. Retrieved text is delimited as untrusted reference data and cannot authorize actions.
 
-`PYTHONPATH=src python -m sefbot.fuck_religion --guild-id 123456789` loads the built-in starter corpus into one exact guild scope. Add a folder argument to ingest its bounded `.md`/`.txt` files into that same scope.
+`PYTHONPATH=src python -m owaua.fuck_religion --guild-id 123456789` loads the built-in starter corpus into one exact guild scope. Add a folder argument to ingest its bounded `.md`/`.txt` files into that same scope.
 
-In Discord, mods can do `!kb add <topic> | <text>` or attach a file to `!kb add`. Anyone can run `!kb search <query>` or just `!kb` for stats. `SEFBOT_KB_TOPK` controls how many chunks get injected per message (default 6).
+In Discord, mods can do `!kb add <topic> | <text>` or attach a file to `!kb add`. Anyone can run `!kb search <query>` or just `!kb` for stats. `OWAUA_KB_TOPK` controls how many chunks get injected per message (default 6).
 
 ## Top.gg / listing notes
 
@@ -199,7 +199,7 @@ Check [TOPGG.md](./TOPGG.md) for the full checklist. Worth knowing up front:
 
 ## Where things live
 
-All bot code lives in `src/sefbot/` (run with `PYTHONPATH=src python -m sefbot.bot`).
+All bot code lives in `src/owaua/` (run with `PYTHONPATH=src python -m owaua.bot`).
 
 - `bot.py` — Discord glue: chat, embeds, reaction feedback, commands, the reflection loop
 - `brain.py` — system prompt construction, memory retrieval, leveling, reflection
@@ -227,7 +227,7 @@ All bot code lives in `src/sefbot/` (run with `PYTHONPATH=src python -m sefbot.b
 
 ## Deployment
 
-Run `deploy opsef` (or `./scripts/deploy opsef`) to run pre-deployment checks, sync files, and restart the service on Daki. Startup applies versioned migrations, purges legacy raw history, and enforces the configured retention ceiling before readiness is reported.
+Run `deploy owaua` (or `./scripts/deploy owaua`) to run pre-deployment checks, sync files, and restart the service on Daki. Startup applies versioned migrations, purges legacy raw history, and enforces the configured retention ceiling before readiness is reported.
 
 ## Verification
 

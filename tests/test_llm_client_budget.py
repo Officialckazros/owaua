@@ -3,8 +3,8 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
-from sefbot import ai_control, config, db
-from sefbot.services.llm_client import LLMClient
+from owaua import ai_control, config, db
+from owaua.services.llm_client import LLMClient
 
 
 class LLMClientBudgetTest(unittest.IsolatedAsyncioTestCase):

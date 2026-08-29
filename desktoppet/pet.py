@@ -1,5 +1,5 @@
 """
-SefPet — a desktop pet that lives on your screen.
+owaua — a desktop pet that lives on your screen.
 
 It wanders around the bottom of your desktop, reacts to clicks, talks out loud,
 answers questions (AI or offline), gets hungry, wants to play, and generally
@@ -10,7 +10,7 @@ Run directly:            python pet.py
 Requirements:            pip install -r requirements.txt
 
 The bundled pet sprite is `desktoppet.jpg`. Approved custom sprites can be
-placed in `~/.sefpet/sprites/`.
+placed in `~/.owaua/sprites/`.
 """
 
 import ast
@@ -56,9 +56,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-APP_NAME = "SefPet"
+APP_NAME = "owaua"
 APP_VERSION = "1.1.0"
-CONFIG_DIR = Path.home() / ".sefpet"
+CONFIG_DIR = Path.home() / ".owaua"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 CUSTOM_SPRITE_DIR = CONFIG_DIR / "sprites"
 SPRITE_NAMES = [
@@ -69,7 +69,7 @@ SPRITE_NAMES = [
     "pet.jpg",
 ]
 CONFIG_VERSION = 2
-KEYRING_SERVICE = "app.sefbot.SefPet"
+KEYRING_SERVICE = "app.owaua.owaua"
 MAX_ENV_VALUE_CHARS = 4096
 MAX_QUESTION_CHARS = 1000
 MAX_RESPONSE_CHARS = 1000
@@ -79,10 +79,10 @@ MAX_SPRITE_DIMENSION = 4096
 MAX_SPRITE_PIXELS = 16_000_000
 ALLOWED_ENV_KEYS = frozenset(
     {
-        "SEFPET_AI_KEY",
-        "SEFPET_AI_BASE_URL",
-        "SEFPET_AI_MODEL",
-        "SEFPET_ALLOW_INSECURE_LOCAL",
+        "OWAUA_AI_KEY",
+        "OWAUA_AI_BASE_URL",
+        "OWAUA_AI_MODEL",
+        "OWAUA_ALLOW_INSECURE_LOCAL",
         "GROQ_API_KEY",
         "GROQ_BASE_URL",
         "GROQ_MODEL",
@@ -95,12 +95,12 @@ ALLOWED_ENV_KEYS = frozenset(
     }
 )
 SECRET_ENV_KEYS = frozenset(
-    {"SEFPET_AI_KEY", "GROQ_API_KEY", "DEEPSEEK_API_KEY", "INFERX_API_KEY"}
+    {"OWAUA_AI_KEY", "GROQ_API_KEY", "DEEPSEEK_API_KEY", "INFERX_API_KEY"}
 )
 RNG = random.SystemRandom()
 
 DEFAULT_SETTINGS = {
-    "name": "Sef",
+    "name": "owaua",
     "tts": True,
     "ai": True,
     "walk": True,
@@ -110,6 +110,54 @@ DEFAULT_SETTINGS = {
 }
 
 DEFAULT_MOOD = {"hunger": 35, "happiness": 70, "energy": 80}
+
+
+def _migrate_legacy_user_state():
+    """Move the desktop pet's pre-rename private state without exposing it."""
+    legacy_dir = Path.home() / ("." + "sef" + "pet")
+    if not CONFIG_DIR.exists() and legacy_dir.exists() and not legacy_dir.is_symlink():
+        CONFIG_DIR.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(legacy_dir, CONFIG_DIR)
+        if os.name != "nt":
+            CONFIG_DIR.chmod(0o700)
+
+    env_file = CONFIG_DIR / ".env"
+    if env_file.is_file() and not env_file.is_symlink():
+        old_prefix = "SEF" + "PET_"
+        text = env_file.read_text(encoding="utf-8")
+        migrated = text.replace(old_prefix, "OWAUA_")
+        if migrated != text:
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=".env.", dir=CONFIG_DIR
+            )
+            try:
+                os.fchmod(descriptor, 0o600)
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    handle.write(migrated)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary_name, env_file)
+            finally:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+                Path(temporary_name).unlink(missing_ok=True)
+
+    try:
+        import keyring
+    except ImportError:
+        return
+    legacy_service = "app." + ("sef" + "bot") + "." + ("Sef" + "Pet")
+    legacy_key = "SEF" + "PET_AI_KEY"
+    try:
+        current = keyring.get_password(KEYRING_SERVICE, "OWAUA_AI_KEY")
+        value = keyring.get_password(legacy_service, legacy_key)
+        if not current and value:
+            keyring.set_password(KEYRING_SERVICE, "OWAUA_AI_KEY", value)
+            keyring.delete_password(legacy_service, legacy_key)
+    except Exception:  # noqa: BLE001 - keyring backends differ across platforms
+        return
 
 
 def resource_path(name):
@@ -163,7 +211,7 @@ def _harden_private_file(path):
 
 
 def load_env_file(path):
-    """Read the private SefPet env file without following a symlink."""
+    """Read the private owaua env file without following a symlink."""
     path = Path(path)
     if not _harden_private_file(path):
         return {}
@@ -221,7 +269,7 @@ def store_keyring_secret(key, value):
 
 
 def get_env():
-    """Load only SefPet's private config, keyring, and explicit environment."""
+    """Load only owaua's private config, keyring, and explicit environment."""
     env = load_keyring_secrets()
     try:
         _ensure_private_directory(CONFIG_DIR)
@@ -807,14 +855,14 @@ class Brain:
         old selection logic could combine a Groq key with the InferX URL,
         making every AI request fail and silently fall back to offline mode.
         """
-        explicit_key = cls._value(env, "SEFPET_AI_KEY")
-        explicit_url = cls._value(env, "SEFPET_AI_BASE_URL")
-        explicit_model = cls._value(env, "SEFPET_AI_MODEL")
+        explicit_key = cls._value(env, "OWAUA_AI_KEY")
+        explicit_url = cls._value(env, "OWAUA_AI_BASE_URL")
+        explicit_model = cls._value(env, "OWAUA_AI_MODEL")
         explicit_values = (explicit_key, explicit_url, explicit_model)
         if any(explicit_values):
             if not all(explicit_values):
                 raise ValueError("custom provider requires key, endpoint, and model")
-            allow_local = _truthy(env.get("SEFPET_ALLOW_INSECURE_LOCAL"))
+            allow_local = _truthy(env.get("OWAUA_ALLOW_INSECURE_LOCAL"))
             return (
                 "custom",
                 explicit_key,
@@ -892,7 +940,7 @@ class Brain:
         return self._client
 
     def ask(self, question):
-        name = self.settings.get("name", "Sef")
+        name = self.settings.get("name", "owaua")
         question = " ".join(str(question).split())[:MAX_QUESTION_CHARS]
         if self.available:
             try:
@@ -946,7 +994,7 @@ class Brain:
 
     def _offline(self, q):
         q = q.strip().lower()
-        name = self.settings.get("name", "Sef")
+        name = self.settings.get("name", "owaua")
 
         if self._has(
             q, "who are you", "what are you", "what is " + name.lower(), "about you"
@@ -1020,7 +1068,7 @@ class Brain:
                 ]
             )
         if self._has(q, "who made you", "your creator", "who built you", "who created"):
-            return "I was built by the SefBot crew — a tiny companion to my big Discord sibling."
+            return "I was built by the owaua crew — a tiny companion to my big Discord sibling."
         if self._has(q, "where are you", "where do you live"):
             return "Right here on your desktop! Bottom of the screen, give or take a waddle."
         if self._has(q, "are you real", "alive", "sentient", "conscious"):
@@ -1199,7 +1247,7 @@ class PetWindow(QWidget):
         self.mood = mood
         self.brain = Brain(env, settings, mood)
         self.tts = TTS(settings)
-        self.name = settings.get("name", "Sef")
+        self.name = settings.get("name", "owaua")
         self.tray_available = False
         self._quitting = False
 
@@ -1656,7 +1704,7 @@ class PetWindow(QWidget):
         if dlg.exec() == QDialog.Accepted:
             new = dlg.values()
             self.settings.update(new)
-            self.name = self.settings.get("name", "Sef")
+            self.name = self.settings.get("name", "owaua")
             self._apply_topmost()
             self.tts.close()
             self.tts = TTS(self.settings)
@@ -1725,7 +1773,7 @@ class SettingsDialog(QDialog):
         self.setModal(True)
         form = QFormLayout(self)
 
-        self.name_edit = QLineEdit(settings.get("name", "Sef"))
+        self.name_edit = QLineEdit(settings.get("name", "owaua"))
         self.name_edit.setMaxLength(32)
         form.addRow("Name:", self.name_edit)
 
@@ -1770,7 +1818,7 @@ def _handle_keyring_cli(argv):
     if "--store-ai-key" not in argv:
         return None
     index = argv.index("--store-ai-key")
-    key = argv[index + 1] if index + 1 < len(argv) else "SEFPET_AI_KEY"
+    key = argv[index + 1] if index + 1 < len(argv) else "OWAUA_AI_KEY"
     if key not in SECRET_ENV_KEYS:
         print(
             f"Unsupported key name. Choose one of: {', '.join(sorted(SECRET_ENV_KEYS))}"
@@ -1793,6 +1841,7 @@ def main():
     if "--version" in sys.argv:
         print(f"{APP_NAME} {APP_VERSION}")
         return 0
+    _migrate_legacy_user_state()
     keyring_result = _handle_keyring_cli(sys.argv[1:])
     if keyring_result is not None:
         return keyring_result

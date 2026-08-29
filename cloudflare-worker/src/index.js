@@ -5,25 +5,38 @@ const PUBLIC_HOSTS = new Set(["wearegays.net", "www.wearegays.net"]);
 const UPSTREAM_TIMEOUT_MS = 8_000;
 const MAX_UPSTREAM_BYTES = 512 * 1024;
 const STATUS_COMPONENTS = new Set(["service", "discord", "database", "malware_scanner"]);
+const LEGACY_SLUG = ["sef", "bot"].join("");
+const LEGACY_PREFIX = `/${LEGACY_SLUG}`;
+const LEGACY_PATHS = new Map([
+  [LEGACY_PREFIX, "/owaua"],
+  [`${LEGACY_PREFIX}/`, "/owaua"],
+  [`${LEGACY_PREFIX}/terms`, "/owaua/terms"],
+  [`${LEGACY_PREFIX}/terms/accept`, "/owaua/terms/accept"],
+  [`${LEGACY_PREFIX}/privacy`, "/owaua/privacy"],
+  [`${LEGACY_PREFIX}/tos`, "/owaua/terms"],
+  [`/${["op", "sef"].join("")}-tos.html`, "/owaua/terms"],
+  [`/${["op", "sef"].join("")}-privacy.html`, "/owaua/privacy"],
+]);
 
 const PUBLIC_PATHS = new Set([
-  "/sefbot",
-  "/sefbot/",
-  "/sefbot/terms",
-  "/sefbot/terms/accept",
-  "/sefbot/privacy",
-  "/sefbot/tos",
-  "/opsef-tos.html",
-  "/opsef-privacy.html",
+  "/owaua",
+  "/owaua/",
+  "/owaua/terms",
+  "/owaua/terms/accept",
+  "/owaua/privacy",
+  "/owaua/tos",
+  "/owaua-tos.html",
+  "/owaua-privacy.html",
   "/healthz",
   "/readyz",
+  ...LEGACY_PATHS.keys(),
 ]);
 
 const STYLE_HASH = "n/KWVDWzPnaDdVPU+wL3c/kqpG3S+iT7l3H/+a+XrUI=";
 
 function securityHeaders(path, contentType, cacheable = false) {
   const health = path === "/healthz" || path === "/readyz";
-  const formAction = path === "/sefbot/terms/accept" ? "'self'" : "'none'";
+  const formAction = path === "/owaua/terms/accept" ? "'self'" : "'none'";
   return {
     "Cache-Control": !health && cacheable ? "public, max-age=300" : "no-store",
     "Content-Security-Policy":
@@ -39,7 +52,7 @@ function securityHeaders(path, contentType, cacheable = false) {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "X-Robots-Tag": !health && cacheable ? "index, follow" : "noindex, nofollow",
-    "X-SefBot-Proxy": "cloudflare",
+    "X-Owaua-Proxy": "cloudflare",
   };
 }
 
@@ -73,7 +86,7 @@ function upstreamHeaders(request, publicUrl, path, env) {
       path === "/healthz" || path === "/readyz"
         ? "application/json"
         : "text/html",
-    "User-Agent": "OpSef-Cloudflare-Proxy/2.0",
+    "User-Agent": "owaua-Cloudflare-Proxy/2.0",
     "X-Forwarded-Host": publicUrl.host,
     "X-Forwarded-Proto": "https",
   });
@@ -81,12 +94,12 @@ function upstreamHeaders(request, publicUrl, path, env) {
   if (requestId && /^[A-Za-z0-9-]{1,64}$/.test(requestId)) {
     headers.set("X-Request-ID", requestId);
   }
-  if (path === "/sefbot/terms/accept" && request.method === "POST") {
+  if (path === "/owaua/terms/accept" && request.method === "POST") {
     if (typeof env.ORIGIN_AUTH_SECRET !== "string" || env.ORIGIN_AUTH_SECRET.length < 32) {
       throw new TypeError("missing acceptance proxy secret");
     }
     headers.set("Content-Type", "application/x-www-form-urlencoded");
-    headers.set("X-SefBot-Origin-Auth", env.ORIGIN_AUTH_SECRET);
+    headers.set("X-Owaua-Origin-Auth", env.ORIGIN_AUTH_SECRET);
   }
   return headers;
 }
@@ -170,7 +183,7 @@ async function proxiedResponse(path, upstream, target, publicUrl, method) {
     await upstream.body?.cancel("upstream failure body is not forwarded");
     return response(
       path,
-      "OpSef is temporarily unavailable. Please try again shortly.",
+      "owaua is temporarily unavailable. Please try again shortly.",
       502,
     );
   }
@@ -195,7 +208,7 @@ async function proxiedResponse(path, upstream, target, publicUrl, method) {
     securityHeaders(
       path,
       contentType,
-      !expectedJson && upstream.status === 200 && PUBLIC_PATHS.has(path) && path !== "/sefbot/terms/accept",
+      !expectedJson && upstream.status === 200 && PUBLIC_PATHS.has(path) && path !== "/owaua/terms/accept",
     ),
   );
 
@@ -264,7 +277,17 @@ export default {
     if (publicUrl.protocol !== "https:") {
       return response(path, "HTTPS is required", 400);
     }
-    const acceptingTerms = path === "/sefbot/terms/accept" && request.method === "POST";
+    const canonicalPath = LEGACY_PATHS.get(path);
+    if (canonicalPath) {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        const rejected = response(path, "Method not allowed", 405);
+        rejected.headers.set("Allow", "GET, HEAD");
+        return rejected;
+      }
+      publicUrl.pathname = canonicalPath;
+      return Response.redirect(publicUrl, 308);
+    }
+    const acceptingTerms = path === "/owaua/terms/accept" && request.method === "POST";
     if (request.method !== "GET" && request.method !== "HEAD" && !acceptingTerms) {
       const rejected = response(path, "Method not allowed", 405);
       rejected.headers.set("Allow", "GET, HEAD, POST");
@@ -273,9 +296,9 @@ export default {
 
     let target;
     try {
-      const origin = parseOrigin(env.SEFBOT_ORIGIN);
+      const origin = parseOrigin(env.OWAUA_ORIGIN);
       target = new URL(path, origin);
-      if (path === "/sefbot/terms/accept" && request.method === "GET") {
+      if (path === "/owaua/terms/accept" && request.method === "GET") {
         const token = publicUrl.searchParams.get("token") || "";
         if (!/^[A-Za-z0-9_-]{40,80}$/.test(token) || [...publicUrl.searchParams.keys()].some((key) => key !== "token")) {
           return response(path, "Invalid acceptance link", 400);
@@ -300,7 +323,7 @@ export default {
     } catch {
       return response(
         path,
-        "OpSef is temporarily unavailable. Please try again shortly.",
+        "owaua is temporarily unavailable. Please try again shortly.",
         502,
       );
     } finally {

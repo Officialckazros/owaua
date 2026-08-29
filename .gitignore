@@ -27,5 +27,5 @@ dist/
 *.tar
 *.tar.gz
 *.tgz
-sefbot-user-*.json
-sefbot-user-*.json.gz
+owaua-user-*.json
+owaua-user-*.json.gz

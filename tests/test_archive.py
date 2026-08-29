@@ -10,8 +10,8 @@ from types import SimpleNamespace
 os.environ.setdefault("PYTHON_DOTENV_DISABLED", "1")
 os.environ.setdefault("DISCORD_TOKEN", "test-token")
 
-from sefbot import archive, config, db
-from sefbot.scope import Scope
+from owaua import archive, config, db
+from owaua.scope import Scope
 
 
 class _HistoryChannel:

@@ -8,7 +8,7 @@ from unittest import mock
 
 import discord
 
-from sefbot import bot, config, slash
+from owaua import bot, config, slash
 
 
 class BlockedPrivacyAccessTest(unittest.IsolatedAsyncioTestCase):

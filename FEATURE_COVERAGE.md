@@ -1,4 +1,4 @@
-# SefBot community feature coverage
+# owaua community feature coverage
 
 This is the release truth table for the dashboard catalog. **Core live** means
 the primary workflow runs end to end in Discord. It does not mean exact Dyno
@@ -41,5 +41,5 @@ scanner failures fail closed without blocking the sender.
 | Server Management / Bot Controls | Partial | Existing safe actions, module toggles and global role/channel/command gates. Full dashboard CRUD for every Discord object is not. |
 | Localization | Core live | Bot reply language and server default are integrated; the dashboard UI itself is English-only. |
 
-There are no paid SefBot gates or artificial free-plan limits. External APIs,
+There are no paid owaua gates or artificial free-plan limits. External APIs,
 Discord limits, hosting resources and abuse-prevention bounds still apply.

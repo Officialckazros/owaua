@@ -12,7 +12,7 @@ os.environ.setdefault("DISCORD_TOKEN", "test-token")
 import tempfile
 from pathlib import Path
 
-from sefbot import brain, config, db, kb, textfiles
+from owaua import brain, config, db, kb, textfiles
 
 
 class DummyAttachment:

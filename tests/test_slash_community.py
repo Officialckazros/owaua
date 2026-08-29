@@ -4,7 +4,7 @@ import unittest
 
 import discord
 
-from sefbot import slash
+from owaua import slash
 
 
 class CommunitySlashCatalogTests(unittest.TestCase):

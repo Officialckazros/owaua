@@ -6,15 +6,15 @@ from urllib.parse import parse_qs, urlsplit
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from sefbot import config, db
-from sefbot.dashboard import (
+from owaua import config, db
+from owaua.dashboard import (
     _JS,
     DISCORD_GUILDS_JSON_BYTES,
     DashboardAuthConfig,
     _read_provider_json,
 )
-from sefbot.module_catalog import MODULES, SERVER_SETTINGS, default_settings, merge_settings
-from sefbot.web import create_app
+from owaua.module_catalog import MODULES, SERVER_SETTINGS, default_settings, merge_settings
+from owaua.web import create_app
 
 
 class DashboardTests(unittest.IsolatedAsyncioTestCase):
@@ -57,9 +57,9 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
         start = await self.client.get("/dashboard/auth/discord", allow_redirects=False)
         self.assertEqual(start.status, 303)
         state = parse_qs(urlsplit(start.headers["Location"]).query)["state"][0]
-        nonce = start.cookies["sefbot_dashboard_auth_nonce"].value
+        nonce = start.cookies["owaua_dashboard_auth_nonce"].value
         with mock.patch(
-            "sefbot.dashboard._discord_identity",
+            "owaua.dashboard._discord_identity",
             new=mock.AsyncMock(
                 return_value=(
                     {"id": "555555555555555555"},
@@ -70,12 +70,12 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.get(
                 "/dashboard/auth/discord/callback",
                 params={"code": "c" * 20, "state": state},
-                headers={"Cookie": f"sefbot_dashboard_auth_nonce={nonce}"},
+                headers={"Cookie": f"owaua_dashboard_auth_nonce={nonce}"},
                 allow_redirects=False,
             )
         self.assertEqual(response.status, 303, await response.text())
-        cookie = response.cookies["sefbot_dashboard_session"].value
-        headers = {"Cookie": f"sefbot_dashboard_session={cookie}"}
+        cookie = response.cookies["owaua_dashboard_session"].value
+        headers = {"Cookie": f"owaua_dashboard_session={cookie}"}
         session_response = await self.client.get("/dashboard/api/session", headers=headers)
         self.assertEqual(session_response.status, 200)
         csrf = (await session_response.json())["csrf"]
@@ -112,22 +112,22 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
         start = await self.client.get("/dashboard/auth/discord", allow_redirects=False)
         self.assertEqual(start.status, 303)
         state = parse_qs(urlsplit(start.headers["Location"]).query)["state"][0]
-        nonce = start.cookies["sefbot_dashboard_auth_nonce"].value
+        nonce = start.cookies["owaua_dashboard_auth_nonce"].value
 
         with mock.patch(
-            "sefbot.dashboard._discord_identity",
+            "owaua.dashboard._discord_identity",
             new=mock.AsyncMock(return_value=None),
         ):
             callback = await self.client.get(
                 "/dashboard/auth/discord/callback",
                 params={"code": "c" * 20, "state": state},
-                headers={"Cookie": f"sefbot_dashboard_auth_nonce={nonce}"},
+                headers={"Cookie": f"owaua_dashboard_auth_nonce={nonce}"},
                 allow_redirects=False,
             )
 
         self.assertEqual(callback.status, 303, await callback.text())
         self.assertEqual(callback.headers["Location"], "/dashboard?auth=discord_failed")
-        self.assertEqual(callback.cookies["sefbot_dashboard_auth_nonce"]["max-age"], "0")
+        self.assertEqual(callback.cookies["owaua_dashboard_auth_nonce"]["max-age"], "0")
 
         login = await self.client.get("/dashboard?auth=discord_failed")
         self.assertEqual(login.status, 200)
@@ -199,9 +199,9 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
         start = await client.get("/dashboard/auth/discord", allow_redirects=False)
         self.assertEqual(start.status, 303)
         state = parse_qs(urlsplit(start.headers["Location"]).query)["state"][0]
-        nonce = start.cookies["sefbot_dashboard_auth_nonce"].value
+        nonce = start.cookies["owaua_dashboard_auth_nonce"].value
         with mock.patch(
-            "sefbot.dashboard._discord_identity",
+            "owaua.dashboard._discord_identity",
             new=mock.AsyncMock(
                 return_value=(
                     {"id": "555555555555555555"},
@@ -223,15 +223,15 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             callback = await client.get(
                 "/dashboard/auth/discord/callback",
                 params={"code": "c" * 20, "state": state},
-                headers={"Cookie": f"sefbot_dashboard_auth_nonce={nonce}"},
+                headers={"Cookie": f"owaua_dashboard_auth_nonce={nonce}"},
                 allow_redirects=False,
             )
         self.assertEqual(callback.status, 303, await callback.text())
-        session_cookie = callback.cookies["sefbot_dashboard_session"].value
+        session_cookie = callback.cookies["owaua_dashboard_session"].value
         guilds = await (
             await client.get(
                 "/dashboard/api/guilds",
-                headers={"Cookie": f"sefbot_dashboard_session={session_cookie}"},
+                headers={"Cookie": f"owaua_dashboard_session={session_cookie}"},
             )
         ).json()
         self.assertEqual(
@@ -242,13 +242,13 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
         modules = await (
             await client.get(
                 "/dashboard/api/guild/123456789012345678/modules",
-                headers={"Cookie": f"sefbot_dashboard_session={session_cookie}"},
+                headers={"Cookie": f"owaua_dashboard_session={session_cookie}"},
             )
         ).json()
         settings = await (
             await client.get(
                 "/dashboard/api/guild/123456789012345678/settings",
-                headers={"Cookie": f"sefbot_dashboard_session={session_cookie}"},
+                headers={"Cookie": f"owaua_dashboard_session={session_cookie}"},
             )
         ).json()
         self.assertNotIn("members", modules["guild"])
@@ -568,7 +568,7 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved.status, 200, await saved.text())
 
         with mock.patch(
-            "sefbot.dashboard.multilingual.translate_many",
+            "owaua.dashboard.multilingual.translate_many",
             new=mock.AsyncMock(return_value=["Обзор", "Настройки"]),
         ) as translate:
             response = await self.client.post(

@@ -1,4 +1,4 @@
-name: Release SefPet
+name: Release owaua
 
 on:
   push:
@@ -26,10 +26,10 @@ jobs:
         include:
           - os: windows-2025
             label: Windows
-            output: SefPet-Windows.exe
+            output: owaua-Windows.exe
           - os: macos-15-intel
             label: macOS
-            output: SefPet-macOS.zip
+            output: owaua-macOS.zip
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -59,8 +59,8 @@ jobs:
         working-directory: desktoppet
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name SefPet --add-data "desktoppet.jpg;." pet.py
-          Copy-Item dist\SefPet.exe SefPet-Windows.exe
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name owaua --add-data "desktoppet.jpg;." pet.py
+          Copy-Item dist\owaua.exe owaua-Windows.exe
 
       - name: Sign Windows application when configured
         if: runner.os == 'Windows' && env.SIGNING_CERTIFICATE != ''
@@ -70,14 +70,14 @@ jobs:
           SIGNING_CERTIFICATE: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
           SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
         run: |
-          $certificate = Join-Path $env:RUNNER_TEMP "opsef-signing.pfx"
+          $certificate = Join-Path $env:RUNNER_TEMP "owaua-signing.pfx"
           try {
             [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:SIGNING_CERTIFICATE))
             $signTool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter signtool.exe -Recurse | Sort-Object FullName -Descending | Select-Object -First 1
             if (-not $signTool) { throw "signtool.exe was not found" }
-            & $signTool.FullName sign /fd SHA256 /td SHA256 /tr https://timestamp.digicert.com /f $certificate /p $env:SIGNING_PASSWORD SefPet-Windows.exe
+            & $signTool.FullName sign /fd SHA256 /td SHA256 /tr https://timestamp.digicert.com /f $certificate /p $env:SIGNING_PASSWORD owaua-Windows.exe
             if ($LASTEXITCODE -ne 0) { throw "signtool.exe failed" }
-            & $signTool.FullName verify /pa /v SefPet-Windows.exe
+            & $signTool.FullName verify /pa /v owaua-Windows.exe
             if ($LASTEXITCODE -ne 0) { throw "signature verification failed" }
           } finally {
             Remove-Item $certificate -Force -ErrorAction SilentlyContinue
@@ -86,14 +86,14 @@ jobs:
       - name: Build macOS application
         if: runner.os == 'macOS'
         working-directory: desktoppet
-        run: python -m PyInstaller --noconfirm --clean --windowed --name SefPet --add-data "desktoppet.jpg:." pet.py
+        run: python -m PyInstaller --noconfirm --clean --windowed --name owaua --add-data "desktoppet.jpg:." pet.py
 
       - name: Normalize unsigned macOS bundle timestamps
         if: runner.os == 'macOS'
         working-directory: desktoppet
         run: >-
           python -c "import os, pathlib;
-          root = pathlib.Path('dist/SefPet.app'); epoch = int(os.environ['SOURCE_DATE_EPOCH']);
+          root = pathlib.Path('dist/owaua.app'); epoch = int(os.environ['SOURCE_DATE_EPOCH']);
           paths = sorted(root.rglob('*'), key=lambda path: len(path.parts), reverse=True);
           [os.utime(path, (epoch, epoch), follow_symlinks=False) for path in paths];
           os.utime(root, (epoch, epoch))"
@@ -114,12 +114,12 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-          CERTIFICATE_PATH: ${{ runner.temp }}/opsef-signing.p12
+          CERTIFICATE_PATH: ${{ runner.temp }}/owaua-signing.p12
         run: |
           set -euo pipefail
-          keychain="$RUNNER_TEMP/opsef-signing.keychain-db"
-          certificate="$RUNNER_TEMP/opsef-signing.p12"
-          trap 'security delete-keychain "$keychain" >/dev/null 2>&1 || true; rm -f "$certificate" "$RUNNER_TEMP/SefPet-notarize.zip"' EXIT
+          keychain="$RUNNER_TEMP/owaua-signing.keychain-db"
+          certificate="$RUNNER_TEMP/owaua-signing.p12"
+          trap 'security delete-keychain "$keychain" >/dev/null 2>&1 || true; rm -f "$certificate" "$RUNNER_TEMP/owaua-notarize.zip"' EXIT
           python -c 'import base64, os, pathlib; pathlib.Path(os.environ["CERTIFICATE_PATH"]).write_bytes(base64.b64decode(os.environ["SIGNING_CERTIFICATE"], validate=True))'
           security create-keychain -p temporary "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
@@ -127,17 +127,17 @@ jobs:
           security import "$certificate" -P "$SIGNING_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
           security list-keychains -d user -s "$keychain" login.keychain-db
           security set-key-partition-list -S apple-tool:,apple: -s -k temporary "$keychain"
-          codesign --force --deep --options runtime --timestamp --sign "$SIGNING_IDENTITY" dist/SefPet.app
-          ditto -c -k --keepParent dist/SefPet.app "$RUNNER_TEMP/SefPet-notarize.zip"
-          xcrun notarytool submit "$RUNNER_TEMP/SefPet-notarize.zip" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
-          xcrun stapler staple dist/SefPet.app
-          codesign --verify --deep --strict --verbose=2 dist/SefPet.app
-          xcrun stapler validate dist/SefPet.app
+          codesign --force --deep --options runtime --timestamp --sign "$SIGNING_IDENTITY" dist/owaua.app
+          ditto -c -k --keepParent dist/owaua.app "$RUNNER_TEMP/owaua-notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/owaua-notarize.zip" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple dist/owaua.app
+          codesign --verify --deep --strict --verbose=2 dist/owaua.app
+          xcrun stapler validate dist/owaua.app
 
       - name: Package macOS application
         if: runner.os == 'macOS'
         working-directory: desktoppet
-        run: ditto -c -k --keepParent dist/SefPet.app SefPet-macOS.zip
+        run: ditto -c -k --keepParent dist/owaua.app owaua-macOS.zip
 
       - name: Record signing status
         working-directory: desktoppet
@@ -158,7 +158,7 @@ jobs:
       - name: Generate dependency SBOM
         working-directory: desktoppet
         env:
-          SBOM_FILE: SefPet-${{ matrix.label }}.cdx.json
+          SBOM_FILE: owaua-${{ matrix.label }}.cdx.json
         run: |
           python -m pip install cyclonedx-bom==7.3.1
           python -c "import os, subprocess; subprocess.run(['cyclonedx-py','requirements','requirements.lock','--output-reproducible','--of','JSON','-o',os.environ['SBOM_FILE']], check=True)"
@@ -167,9 +167,9 @@ jobs:
         working-directory: desktoppet
         env:
           RELEASE_FILE: ${{ matrix.output }}
-          SBOM_FILE: SefPet-${{ matrix.label }}.cdx.json
+          SBOM_FILE: owaua-${{ matrix.label }}.cdx.json
           SIGNING_REPORT: SIGNING-${{ matrix.label }}.txt
-          CHECKSUM_FILE: SefPet-${{ matrix.label }}-SHA256SUMS.txt
+          CHECKSUM_FILE: owaua-${{ matrix.label }}-SHA256SUMS.txt
         run: >-
           python -c "import hashlib, os, pathlib;
           paths = [pathlib.Path(os.environ[name]) for name in ('RELEASE_FILE','SBOM_FILE','SIGNING_REPORT')];
@@ -179,13 +179,13 @@ jobs:
       - name: Upload verified build artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sefpet-${{ matrix.label }}
+          name: owaua-${{ matrix.label }}
           if-no-files-found: error
           retention-days: 14
           path: |
             desktoppet/${{ matrix.output }}
-            desktoppet/SefPet-${{ matrix.label }}.cdx.json
-            desktoppet/SefPet-${{ matrix.label }}-SHA256SUMS.txt
+            desktoppet/owaua-${{ matrix.label }}.cdx.json
+            desktoppet/owaua-${{ matrix.label }}-SHA256SUMS.txt
             desktoppet/SIGNING-${{ matrix.label }}.txt
 
   publish:

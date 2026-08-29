@@ -11,8 +11,8 @@ from unittest import mock
 os.environ.setdefault("PYTHON_DOTENV_DISABLED", "1")
 os.environ.setdefault("DISCORD_TOKEN", "test-token")
 
-from sefbot import brain, config, db, kb
-from sefbot.scope import Scope
+from owaua import brain, config, db, kb
+from owaua.scope import Scope
 
 
 class FreakyModeTest(unittest.TestCase):
@@ -48,7 +48,7 @@ class FreakyModeTest(unittest.TestCase):
         db.add_memory(
             "owner likes to be called sweetie", uid, guild, subject=uid, importance=0.6
         )
-        db.add_memory("owner of sefbot", uid, guild, subject=uid, importance=0.8)
+        db.add_memory("owner of owaua", uid, guild, subject=uid, importance=0.8)
         db.convo_add(uid, guild, "bot", "hey sweetie, miss me?")
         brain.set_freaky_mode(uid, True)
         self.assertTrue(brain.freaky_enabled(uid))
@@ -59,7 +59,7 @@ class FreakyModeTest(unittest.TestCase):
         self.assertIsNone(db.relationship_get(uid, guild).get("nickname"))
         facts = [row["content"] for row in db.memories_for_subject(uid)]
         self.assertNotIn("owner likes to be called sweetie", facts)
-        self.assertIn("owner of sefbot", facts)
+        self.assertIn("owner of owaua", facts)
         self.assertEqual([], db.convo_get(uid, guild))
 
     def test_off_prompt_hides_pet_nickname_and_blocks_relearn(self) -> None:

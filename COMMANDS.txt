@@ -1,12 +1,12 @@
 ==============================================================================
- SefBot — COMPLETE COMMAND REFERENCE
- Default prefix: !   (change with SEFBOT_PREFIX)
+ owaua — COMPLETE COMMAND REFERENCE
+ Default prefix: !   (change with OWAUA_PREFIX)
 ==============================================================================
 
 ------------------------------------------------------------------------------
  TALKING TO IT (no prefix)
 ------------------------------------------------------------------------------
-@SefBot <message>        Chat with it in a server (mention it).
+@owaua <message>        Chat with it in a server (mention it).
 <message>  (in a DM)     Chat with it in a direct message.
 Attach image + mention   Vision model describes the image; brain uses it.
 Attach .txt + mention    Model reads, analyzes, or summarizes the text file.
@@ -138,7 +138,7 @@ Dashboard-enabled community commands (available only when their module is on):
                          `!ckazros` / `status` lists orders; `undo` pops last.
                          (also: slash `/ckazros`)
 
-Normal @mentions / DMs stay full chaotic SefBot. Only the !assistant command
+Normal @mentions / DMs stay full chaotic owaua. Only the !assistant command
 drops the savage tone and answers as a clear, compliant helper for THAT reply
 (roles, timeouts, nicknames, channels, factual answers, etc.). There is no
 sticky on/off — the next @mention is chaotic again. Assistant actions render
@@ -196,7 +196,7 @@ tos break unblock <id>   Unblock one user + DM them access restored.
 tos break unblock all    Unblock all ToS blocks (confirm) + DM each.
                          Pass --no-dm to skip the notify.
 
-(Also: `PYTHONPATH=src python -m sefbot.block_cli access <user_id>` / `PYTHONPATH=src python -m sefbot.tos_cli break`
+(Also: `PYTHONPATH=src python -m owaua.block_cli access <user_id>` / `PYTHONPATH=src python -m owaua.tos_cli break`
  from the project dir.)
 
 ==============================================================================

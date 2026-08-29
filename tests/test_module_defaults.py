@@ -1,7 +1,7 @@
 import unittest
 
-from sefbot import config, db
-from sefbot.module_catalog import MODULES
+from owaua import config, db
+from owaua.module_catalog import MODULES
 
 
 class ModuleDefaultTests(unittest.TestCase):

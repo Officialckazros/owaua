@@ -13,8 +13,8 @@ import discord
 os.environ.setdefault("PYTHON_DOTENV_DISABLED", "1")
 os.environ.setdefault("DISCORD_TOKEN", "test-token")
 
-from sefbot import brain, config, customcmds, db, kb, multilingual
-from sefbot.scope import Scope
+from owaua import brain, config, customcmds, db, kb, multilingual
+from owaua.scope import Scope
 
 
 class IsolatedDatabaseTest(unittest.TestCase):
@@ -144,7 +144,7 @@ class LanguagePreferenceTest(IsolatedDatabaseTest):
             async def translate(values, *_args, **_kwargs):
                 return [f"ru:{value}" for value in values]
 
-            with mock.patch("sefbot.multilingual.translate_many", side_effect=translate):
+            with mock.patch("owaua.multilingual.translate_many", side_effect=translate):
                 content, localized, _embeds, localized_view = (
                     await multilingual.localize_discord_payload(
                         guild_id="9", content="Done", embed=embed, view=view

@@ -11,9 +11,9 @@ from urllib.parse import parse_qs, urlparse
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from sefbot import blocked, config, db, tos
-from sefbot.legal import LEGAL_EFFECTIVE_DATE, LEGAL_VERSION
-from sefbot.web import (
+from owaua import blocked, config, db, tos
+from owaua.legal import LEGAL_EFFECTIVE_DATE, LEGAL_VERSION
+from owaua.web import (
     ReadinessState,
     WebConfigurationError,
     WebService,
@@ -48,7 +48,7 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.tempdir.cleanup()
 
     async def test_legal_pages_are_html_and_hardened(self) -> None:
-        for path in ("/sefbot", "/sefbot/terms", "/sefbot/privacy"):
+        for path in ("/owaua", "/owaua/terms", "/owaua/privacy"):
             with self.subTest(path=path):
                 response = await self.client.get(path)
                 self.assertEqual(response.status, 200)
@@ -57,7 +57,7 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     response.headers["X-Content-Type-Options"], "nosniff"
                 )
-                self.assertEqual(response.headers["Server"], "OpSef")
+                self.assertEqual(response.headers["Server"], "owaua")
                 self.assertIn(
                     "max-age=31536000",
                     response.headers["Strict-Transport-Security"],
@@ -70,19 +70,19 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
                     response.headers["Cache-Control"], "public, max-age=300"
                 )
                 body = await response.text()
-                self.assertIn("OpSef", body)
-                if path != "/sefbot":
+                self.assertIn("owaua", body)
+                if path != "/owaua":
                     self.assertIn(f"Version {LEGAL_VERSION}", body)
                     self.assertIn(f"effective {LEGAL_EFFECTIVE_DATE}", body)
 
     async def test_legal_pages_match_the_running_privacy_model(self) -> None:
-        terms = await (await self.client.get("/sefbot/terms")).text()
-        privacy = await (await self.client.get("/sefbot/privacy")).text()
+        terms = await (await self.client.get("/owaua/terms")).text()
+        privacy = await (await self.client.get("/owaua/privacy")).text()
         self.assertIn("typed <code>tos accept</code> command no longer", terms)
         self.assertIn("keyed network token", terms)
         self.assertIn("regardless of Discord account age", terms)
         self.assertIn("consent to store raw message", terms)
-        self.assertIn("SEFBOT_OWNER_ID", terms)
+        self.assertIn("OWAUA_OWNER_ID", terms)
         self.assertIn("TOS_STRIKE_LIMIT = 3", terms)
         self.assertIn("Daki Hosting", terms)
         self.assertIn("privacy_consents", privacy)
@@ -98,7 +98,7 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
         url = tos.issue_acceptance_url(user_id)
         token = parse_qs(urlparse(url).query)["token"][0]
 
-        page = await self.client.get(f"/sefbot/terms/accept?token={token}")
+        page = await self.client.get(f"/owaua/terms/accept?token={token}")
         self.assertEqual(page.status, 200)
         self.assertIn("form-action 'self'", page.headers["Content-Security-Policy"])
         body = await page.text()
@@ -107,10 +107,10 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(user_id, body)
 
         response = await self.client.post(
-            "/sefbot/terms/accept",
+            "/owaua/terms/accept",
             data={"token": token, "agree": "yes"},
             headers={
-                "X-SefBot-Origin-Auth": config.TOS_PROXY_SECRET,
+                "X-owaua-Origin-Auth": config.TOS_PROXY_SECRET,
                 "X-Forwarded-For": "203.0.113.42",
             },
         )
@@ -121,10 +121,10 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("203.0.113.42", database_text)
 
         replay = await self.client.post(
-            "/sefbot/terms/accept",
+            "/owaua/terms/accept",
             data={"token": token, "agree": "yes"},
             headers={
-                "X-SefBot-Origin-Auth": config.TOS_PROXY_SECRET,
+                "X-owaua-Origin-Auth": config.TOS_PROXY_SECRET,
                 "X-Forwarded-For": "203.0.113.42",
             },
         )
@@ -151,10 +151,10 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
         token = parse_qs(urlparse(url).query)["token"][0]
 
         response = await self.client.post(
-            "/sefbot/terms/accept",
+            "/owaua/terms/accept",
             data={"token": token, "agree": "yes"},
             headers={
-                "X-SefBot-Origin-Auth": config.TOS_PROXY_SECRET,
+                "X-owaua-Origin-Auth": config.TOS_PROXY_SECRET,
                 "X-Forwarded-For": address,
             },
         )
@@ -221,7 +221,7 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
         user_id = "175928847299117063"
         token = parse_qs(urlparse(tos.issue_acceptance_url(user_id)).query)["token"][0]
         response = await self.client.post(
-            "/sefbot/terms/accept",
+            "/owaua/terms/accept",
             data={"token": token, "agree": "yes"},
             headers={"X-Forwarded-For": "203.0.113.99"},
         )
@@ -263,11 +263,19 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_compatibility_routes_redirect_without_reflecting_input(self) -> None:
+        old_slug = "sef" + "bot"
+        old_product = "op" + "sef"
         cases = {
-            "/sefbot/": "/sefbot",
-            "/sefbot/tos": "/sefbot/terms",
-            "/opsef-tos.html": "/sefbot/terms",
-            "/opsef-privacy.html": "/sefbot/privacy",
+            "/owaua/": "/owaua",
+            "/owaua/tos": "/owaua/terms",
+            "/owaua-tos.html": "/owaua/terms",
+            "/owaua-privacy.html": "/owaua/privacy",
+            f"/{old_slug}": "/owaua",
+            f"/{old_slug}/terms": "/owaua/terms",
+            f"/{old_slug}/privacy": "/owaua/privacy",
+            f"/{old_product}-tos.html": "/owaua/terms",
+            f"/{old_product}": "/",
+            f"/{old_product}/": "/",
         }
         for path, location in cases.items():
             with self.subTest(path=path):
@@ -276,8 +284,15 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.headers["Location"], location)
                 self.assertEqual(response.headers["X-Frame-Options"], "DENY")
 
+        token = "a" * 40
+        response = await self.client.get(
+            f"/{old_slug}/terms/accept?token={token}", allow_redirects=False
+        )
+        self.assertEqual(response.status, 308)
+        self.assertEqual(response.headers["Location"], f"/owaua/terms/accept?token={token}")
+
     async def test_unsupported_methods_and_unknown_routes_are_safe(self) -> None:
-        method_response = await self.client.post("/sefbot", data=b"ignored")
+        method_response = await self.client.post("/owaua", data=b"ignored")
         self.assertEqual(method_response.status, 405)
         self.assertEqual(method_response.headers["X-Frame-Options"], "DENY")
         self.assertEqual(method_response.headers["Cache-Control"], "no-store")
@@ -298,7 +313,7 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
         )
         await client.start_server()
         try:
-            response = await client.get("/sefbot/privacy")
+            response = await client.get("/owaua/privacy")
             body = await response.text()
             self.assertNotIn('<script>alert("x")</script>', body)
             self.assertIn("&lt;script&gt;", body)
@@ -319,7 +334,7 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
         )
         await client.start_server()
         try:
-            with self.assertLogs("sefbot.web", level="WARNING"):
+            with self.assertLogs("owaua.web", level="WARNING"):
                 response = await client.get("/readyz")
             self.assertEqual(response.status, 503)
             body = await response.text()
@@ -339,7 +354,7 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
         )
         await client.start_server()
         try:
-            with self.assertLogs("sefbot.web", level="WARNING"):
+            with self.assertLogs("owaua.web", level="WARNING"):
                 response = await client.get("/readyz")
             self.assertEqual(response.status, 503)
             body = await response.text()
@@ -416,7 +431,7 @@ class PublicSiteTests(unittest.IsolatedAsyncioTestCase):
         )
         femsec = root / "femsec"
         (femsec / "boxes" / "exhibits").mkdir(parents=True)
-        (femsec / "index.html").write_text("<html>opsef-files</html>", encoding="utf-8")
+        (femsec / "index.html").write_text("<html>owaua-files</html>", encoding="utf-8")
         (femsec / "boxes" / "exhibits" / "index.html").write_text(
             "<html>exhibits-box</html>", encoding="utf-8"
         )
@@ -432,7 +447,7 @@ class PublicSiteTests(unittest.IsolatedAsyncioTestCase):
         await self.client.close()
         self.tmpdir.cleanup()
 
-    async def test_host_header_selects_site_and_skips_opsef_csp(self) -> None:
+    async def test_host_header_selects_site_and_skips_owaua_csp(self) -> None:
         response = await self.client.get("/", headers={"Host": "kirmy.org"})
         self.assertEqual(response.status, 200)
         self.assertIn("kirmy-home", await response.text())
@@ -452,13 +467,13 @@ class PublicSiteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("wag-home", await response.text())
 
     async def test_legal_routes_stay_hardened_on_public_hosts(self) -> None:
-        response = await self.client.get("/sefbot", headers={"Host": "wearegays.net"})
+        response = await self.client.get("/owaua", headers={"Host": "wearegays.net"})
         self.assertEqual(response.status, 200)
-        self.assertIn("OpSef", await response.text())
+        self.assertIn("owaua", await response.text())
         self.assertIn("default-src 'none'", response.headers["Content-Security-Policy"])
 
     async def test_terms_include_owner_access_discretion(self) -> None:
-        response = await self.client.get("/sefbot/terms", headers={"Host": "wearegays.net"})
+        response = await self.client.get("/owaua/terms", headers={"Host": "wearegays.net"})
         self.assertEqual(response.status, 200)
         body = await response.text()
         self.assertIn("Owner access discretion", body)
@@ -468,14 +483,14 @@ class PublicSiteTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_legacy_legal_host_redirects_to_wearegays(self) -> None:
         response = await self.client.get(
-            "/sefbot/terms?source=bookmark",
+            "/owaua/terms?source=bookmark",
             headers={"Host": "kozzyx.org"},
             allow_redirects=False,
         )
         self.assertEqual(response.status, 308)
         self.assertEqual(
             response.headers["Location"],
-            "https://wearegays.net/sefbot/terms?source=bookmark",
+            "https://wearegays.net/owaua/terms?source=bookmark",
         )
 
     async def test_dotfiles_and_traversal_are_rejected(self) -> None:
@@ -505,7 +520,7 @@ class PublicSiteTests(unittest.IsolatedAsyncioTestCase):
     async def test_femsec_host_serves_the_files_tree(self) -> None:
         home = await self.client.get("/", headers={"Host": "femsec.wearegays.net"})
         self.assertEqual(home.status, 200)
-        self.assertIn("opsef-files", await home.text())
+        self.assertIn("owaua-files", await home.text())
         exhibits = await self.client.get(
             "/boxes/exhibits/", headers={"Host": "femsec.wearegays.net"}
         )

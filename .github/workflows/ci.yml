@@ -47,19 +47,19 @@ jobs:
         env:
           DISCORD_TOKEN: test-token
           PYTHONPATH: src
-          SEFBOT_DB: ${{ runner.temp }}/sefbot-tests.db
-          SEFBOT_OWNER_ID: ""
-          SEFBOT_PRIVACY_CONTACT: privacy@example.invalid
-          SEFBOT_RULES_ENABLED: "0"
-          SEFBOT_RULES_GUILD: ""
-          SEFBOT_RULES_LLM_ENABLED: "0"
-          SEFBOT_SAFETY_ENABLED: "0"
-          SEFBOT_STT_ENABLED: "0"
-          SEFBOT_SYNC_COMMANDS: "0"
+          OWAUA_DB: ${{ runner.temp }}/owaua-tests.db
+          OWAUA_OWNER_ID: ""
+          OWAUA_PRIVACY_CONTACT: privacy@example.invalid
+          OWAUA_RULES_ENABLED: "0"
+          OWAUA_RULES_GUILD: ""
+          OWAUA_RULES_LLM_ENABLED: "0"
+          OWAUA_SAFETY_ENABLED: "0"
+          OWAUA_STT_ENABLED: "0"
+          OWAUA_SYNC_COMMANDS: "0"
         run: python -m unittest discover -s tests -v
 
       - name: Validate deployment manifest without remote access
-        run: python scripts/deploy opsef --dry-run
+        run: python scripts/deploy owaua --dry-run
 
       - name: Lint repository
         if: matrix.python-version == '3.12'
@@ -67,7 +67,7 @@ jobs:
 
       - name: Type-check public web service
         if: matrix.python-version == '3.12'
-        run: mypy --ignore-missing-imports --follow-imports=skip src/sefbot/web.py
+        run: mypy --ignore-missing-imports --follow-imports=skip src/owaua/web.py
 
       - name: Audit Python dependencies
         if: matrix.python-version == '3.12'

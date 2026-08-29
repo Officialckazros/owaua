@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "opsef"
+name = "owaua"
 version = "2.0.0"
 description = "Privacy-first Discord assistant and companion desktop pet"
 readme = "README.md"

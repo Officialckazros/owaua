@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from unittest import mock
 
-from sefbot import boosters, config, db
+from owaua import boosters, config, db
 
 
 class BoosterLedgerTests(unittest.TestCase):
@@ -32,7 +32,7 @@ class BoosterLedgerTests(unittest.TestCase):
             {"current_boosts": 2, "all_time_boosts": 2, "current_boosters": 1, "all_time_boosters": 1},
         )
 
-    @mock.patch("sefbot.db.now", return_value=1000.0)
+    @mock.patch("owaua.db.now", return_value=1000.0)
     def test_member_transition_and_matching_system_message_count_once(self, _now):
         imported, started = db.booster_record_sync(
             "guild:1", "42", boosted_since=900.0, source="member"
@@ -99,7 +99,7 @@ class BoosterLedgerTests(unittest.TestCase):
         client = mock.Mock(guilds=[guild])
 
         with mock.patch(
-            "sefbot.boosters.sync_guild", new=mock.AsyncMock(return_value=3)
+            "owaua.boosters.sync_guild", new=mock.AsyncMock(return_value=3)
         ) as sync:
             asyncio.run(boosters._dashboard_actions_tick(client))
 

@@ -15,7 +15,7 @@ from urllib.error import HTTPError, URLError
 
 os.environ.setdefault("DISCORD_TOKEN", "test-token")
 
-from sefbot import ai, config
+from owaua import ai, config
 
 
 def _http_error(code: int, body: bytes = b"") -> HTTPError:
@@ -73,6 +73,45 @@ class DeepseekModelTest(unittest.TestCase):
             config.OFFICIAL_DEEPSEEK_MODEL_VERSION, "DeepSeek-V4-Flash-0731"
         )
         self.assertIn("0731", config.model_display(config.DEFAULT_MODEL))
+
+
+class InferxModelTest(unittest.TestCase):
+    def test_alias_maps_to_inferx_catalog_id(self) -> None:
+        self.assertEqual(
+            ai._inferx_upstream_model("ix:deepseek-v4-flash"),
+            "deepseek-v4-flash-0731",
+        )
+
+    def test_inferx_generate_uses_inferx_endpoint_and_key(self) -> None:
+        captured = {}
+
+        def fake_urlopen(request, timeout):
+            captured["url"] = request.full_url
+            captured["headers"] = dict(request.headers)
+            captured["body"] = json.loads(request.data)
+            return mock.MagicMock(
+                __enter__=lambda self: self,
+                __exit__=mock.Mock(return_value=False),
+                read=lambda n=-1: b'{"choices":[{"message":{"content":"ok"}}]}',
+            )
+
+        with mock.patch("owaua.ai.urllib.request.urlopen", fake_urlopen), \
+             mock.patch.object(config, "INFERX_API_KEY", "test-key"):
+            self.assertEqual(
+                ai._inferx_generate(
+                    "ix:deepseek-v4-flash",
+                    "sys",
+                    [{"role": "user", "content": "hi"}],
+                    120,
+                    0.4,
+                ),
+                "ok",
+            )
+        self.assertEqual(
+            captured["url"], "https://model.inferx.net/endpoints/v1/chat/completions"
+        )
+        self.assertEqual(captured["body"]["model"], "deepseek-v4-flash-0731")
+        self.assertEqual(captured["headers"]["Authorization"], "Bearer test-key")
 
 
 class ExtractJsonTest(unittest.TestCase):
@@ -209,7 +248,7 @@ class OfficialDeepseekChatTest(unittest.TestCase):
                 read=lambda n=-1: payload,
             )
 
-        with mock.patch("sefbot.ai.urllib.request.urlopen", fake_urlopen), \
+        with mock.patch("owaua.ai.urllib.request.urlopen", fake_urlopen), \
              mock.patch.object(config, "DEEPSEEK_API_KEY", "test-key"):
             text = ai._deepseek_generate(
                 "deepseek-v4-flash",
@@ -241,7 +280,7 @@ class OfficialDeepseekChatTest(unittest.TestCase):
                 read=lambda n=-1: payload,
             )
 
-        with mock.patch("sefbot.ai.urllib.request.urlopen", fake_urlopen), \
+        with mock.patch("owaua.ai.urllib.request.urlopen", fake_urlopen), \
              mock.patch.object(config, "DEEPSEEK_API_KEY", "test-key"):
             text = ai._deepseek_generate(
                 "deepseek-v4-flash",

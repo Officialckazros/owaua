@@ -7,7 +7,7 @@ from pathlib import Path
 
 os.environ.setdefault("DISCORD_TOKEN", "eval-token")
 
-from sefbot import ai_control, brain, config, db  # noqa: E402
+from owaua import ai_control, brain, config, db  # noqa: E402
 
 
 def main() -> int:

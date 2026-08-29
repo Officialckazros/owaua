@@ -10,7 +10,7 @@ from unittest import mock
 
 import discord
 
-from sefbot import blocked, bot, config, db, tos
+from owaua import blocked, bot, config, db, tos
 
 
 class TosDiscordUnblockTest(unittest.IsolatedAsyncioTestCase):
@@ -166,7 +166,7 @@ class TosDiscordUnblockTest(unittest.IsolatedAsyncioTestCase):
 
         message.author.send.assert_awaited_once()
         sent = message.author.send.await_args.kwargs
-        self.assertEqual("sefbot-tos-break-list.txt", sent["file"].filename)
+        self.assertEqual("owaua-tos-break-list.txt", sent["file"].filename)
         self.assertIn("complete global ToS-break review (40 blocked)", sent["embed"].description)
 
 

@@ -9,8 +9,8 @@ from pathlib import Path
 os.environ.setdefault("PYTHON_DOTENV_DISABLED", "1")
 os.environ.setdefault("DISCORD_TOKEN", "test-token")
 
-from sefbot import brain, ckazros, config, customcmds, db, kb
-from sefbot.scope import Scope
+from owaua import brain, ckazros, config, customcmds, db, kb
+from owaua.scope import Scope
 
 
 class CkazrosTest(unittest.TestCase):
@@ -111,7 +111,7 @@ class CkazrosSlashRegistrationTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         import discord
 
-        from sefbot import slash
+        from owaua import slash
 
         self.client = discord.Client(intents=discord.Intents.none())
         self.tree = slash.setup(self.client, lambda *_args: None)

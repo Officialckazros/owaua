@@ -13,7 +13,7 @@ os.environ.setdefault("DISCORD_TOKEN", "test-token")
 import discord
 from discord import app_commands
 
-from sefbot import config, slash
+from owaua import config, slash
 
 
 class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):

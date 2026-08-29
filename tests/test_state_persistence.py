@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 
-from sefbot import blocked, config, db, dm, tos
+from owaua import blocked, config, db, dm, tos
 
 
 class StatePersistenceTest(unittest.TestCase):

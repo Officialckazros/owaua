@@ -1,4 +1,4 @@
-# Top.gg listing checklist for SefBot
+# Top.gg listing checklist for owaua
 
 Use this when submitting at https://top.gg/bot/new  
 Official bot rules: https://support.top.gg/hc/en-us/articles/23146912808988-Discord-Bot-Guidelines  
@@ -10,7 +10,7 @@ Official bot rules: https://support.top.gg/hc/en-us/articles/23146912808988-Disc
 |------|-------------|-------------|
 | Music lookup | Avoid redistributing copyrighted media | `!music` / `/music` return validated YouTube search/watch links and metadata only. |
 | `dm_user` action | DMs must name the author (or say anonymous) **and** have opt-out | Relayed DMs now attribute the requester; `!dmblock` / `!dmunblock` / `!mydm` |
-| Thin privacy page | Honest data disclosure (Discord + good practice) | Expanded ToS/Privacy at `/sefbot` (age 13+, third-party AI, retention, controls) |
+| Thin privacy page | Honest data disclosure (Discord + good practice) | Expanded ToS/Privacy at `/owaua` (age 13+, third-party AI, retention, controls) |
 | Drugs / crime facilitation | No depicting/facilitating sale of controlled substances | Persona hard limits: no sourcing/selling drugs; no real crime help |
 | NSFW anywhere | NSFW stays in NSFW channels | Channel NSFW flag injected into prompts; adult content blocked in SFW channels |
 | Religious auto-harassment | Must abide by Discord ToS | Removed “insult anyone with religion in profile” rule |
@@ -51,7 +51,7 @@ Chaotic AI Discord bot that learns from your server — memory, mood, custom com
 
 ## Long description should include
 
-- How to invite / get started (`@SefBot` or DM, `!help`)
+- How to invite / get started (`@owaua` or DM, `!help`)
 - Command overview
 - Privacy link + `!privacy` / `!dmblock`
 - That music returns links and metadata only

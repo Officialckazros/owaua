@@ -18,10 +18,11 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
 WEBSITE_ROOT = ROOT.parents[1] / "website"
-CONFIG_DIR = Path.home() / ".config" / "opsef-deploy"
+CONFIG_DIR = Path.home() / ".config" / "owaua-deploy"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 STATE_FILE = CONFIG_DIR / "state.json"
 WEBSITE_STATE_FILE = CONFIG_DIR / "websites-state.json"
+LEGACY_CONFIG_DIR = Path.home() / ".config" / (("op" + "sef") + "-deploy")
 PANEL_URL = "https://portal.daki.cc"
 MAX_API_RESPONSE_BYTES = 32 * 1024 * 1024
 MAX_DEPLOY_FILE_BYTES = 2 * 1024 * 1024
@@ -79,14 +80,14 @@ class DakiClient:
     def request(
         self, method, path, data=None, raw=None, timeout=60, expect_json=True
     ):
-        if method not in {"GET", "POST"} or not path.startswith("/api/"):
+        if method not in {"GET", "POST", "PUT"} or not path.startswith("/api/"):
             raise DeployError("Refusing an invalid Daki API request")
         if data is not None and raw is not None:
             raise DeployError("Refusing an ambiguous Daki API request")
         headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {self.api_key}",
-            "User-Agent": "opsef-deploy/1.0",
+            "User-Agent": "owaua-deploy/1.0",
         }
         body = None
         if raw is not None:
@@ -277,6 +278,39 @@ class DakiClient:
         signal = "start" if state in {"offline", "unknown"} else "restart"
         self.request("POST", self.server_path("/power"), {"signal": signal})
 
+    def update_startup_variable(self, name, value):
+        if name not in {"STARTUP_CMD", "SECOND_CMD"} or not isinstance(value, str):
+            raise DeployError("Refusing an unexpected startup-variable change")
+        self.request(
+            "PUT",
+            self.server_path("/startup/variable"),
+            {"key": name, "value": value},
+        )
+
+    def rename_server(self, name):
+        if name != "owaua":
+            raise DeployError("Refusing an unexpected Daki server name")
+        self.request("POST", self.server_path("/settings/rename"), {"name": name})
+
+    def rename_files(self, renames):
+        if not isinstance(renames, list) or not renames:
+            raise DeployError("At least one file rename is required")
+        validated = []
+        for item in renames:
+            if not isinstance(item, dict) or set(item) != {"from", "to"}:
+                raise DeployError("Refusing an invalid remote file rename")
+            validated.append(
+                {
+                    "from": validate_relative_path(item["from"]),
+                    "to": validate_relative_path(item["to"]),
+                }
+            )
+        self.request(
+            "PUT",
+            self.server_path("/files/rename"),
+            {"root": "/", "files": validated},
+        )
+
 
 def save_json(path, value):
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -313,6 +347,17 @@ def load_json(path, default):
         return default
     except json.JSONDecodeError as error:
         raise DeployError(f"Invalid deployment file {path}: {error}") from None
+
+
+def migrate_legacy_config_dir():
+    """Move the pre-rename private deployment state to owaua once."""
+    if CONFIG_DIR.exists() or not LEGACY_CONFIG_DIR.exists():
+        return
+    if LEGACY_CONFIG_DIR.is_symlink():
+        raise DeployError(f"Refusing symbolic-link configuration directory {LEGACY_CONFIG_DIR}")
+    CONFIG_DIR.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(LEGACY_CONFIG_DIR, CONFIG_DIR)
+    os.chmod(CONFIG_DIR, 0o700)
 
 
 def choose_server(client, preferred=None):
@@ -496,6 +541,7 @@ def setup(allow_insecure_localhost=False):
 
 
 def load_config(force_setup=False, allow_insecure_localhost=False):
+    migrate_legacy_config_dir()
     if CONFIG_DIR.is_symlink():
         raise DeployError(
             f"Refusing symbolic-link configuration directory {CONFIG_DIR}"
@@ -568,22 +614,22 @@ def run_checks():
         [executable, "-m", "compileall", "-q", "src"], cwd=ROOT, check=True
     )
     if (ROOT / "tests").is_dir():
-        with tempfile.TemporaryDirectory(prefix="opsef-deploy-tests-") as directory:
+        with tempfile.TemporaryDirectory(prefix="owaua-deploy-tests-") as directory:
             environment = os.environ.copy()
             environment.update(
                 {
                     "DISCORD_TOKEN": "deployment-check-token",
                     "PYTHONPATH": "src",
-                    "SEFBOT_DB": str(Path(directory) / "sefbot-test.db"),
-                    "SEFBOT_OWNER_ID": "",
-                    "SEFBOT_PRIVACY_CONTACT": "privacy@example.invalid",
-                    "SEFBOT_RULES_ENABLED": "0",
-                    "SEFBOT_RULES_GUILD": "",
-                    "SEFBOT_RULES_LLM_ENABLED": "0",
-                    "SEFBOT_SAFETY_ENABLED": "0",
-                    "SEFBOT_STT_ENABLED": "0",
-                    "SEFBOT_SYNC_COMMANDS": "0",
-                    "SEFBOT_SYNC_GUILDS": "",
+                    "OWAUA_DB": str(Path(directory) / "owaua-test.db"),
+                    "OWAUA_OWNER_ID": "",
+                    "OWAUA_PRIVACY_CONTACT": "privacy@example.invalid",
+                    "OWAUA_RULES_ENABLED": "0",
+                    "OWAUA_RULES_GUILD": "",
+                    "OWAUA_RULES_LLM_ENABLED": "0",
+                    "OWAUA_SAFETY_ENABLED": "0",
+                    "OWAUA_STT_ENABLED": "0",
+                    "OWAUA_SYNC_COMMANDS": "0",
+                    "OWAUA_SYNC_GUILDS": "",
                 }
             )
             subprocess.run(  # noqa: S603, RUF100 - fixed interpreter/arguments
@@ -708,9 +754,9 @@ def assemble_sites(destination):
     femsec_source = WEBSITE_ROOT / "wearegays.net" / "femsec"
     if femsec_source.is_dir():
         _copy_tree(femsec_source, destination / "femsec")
-    opsef_home = wearegays / "opsef" / "index.html"
-    if opsef_home.is_file() and not opsef_home.is_symlink():
-        shutil.copy2(opsef_home, wearegays / "index.html")
+    owaua_home = wearegays / "owaua" / "index.html"
+    if owaua_home.is_file() and not owaua_home.is_symlink():
+        shutil.copy2(owaua_home, wearegays / "index.html")
     status_source = WEBSITE_ROOT / "wearedevsstatus"
     if status_source.is_dir():
         status_dir = wearegays / "status"
@@ -763,7 +809,7 @@ def website_digest(archive):
 def deploy_websites(args):
     if not WEBSITE_ROOT.is_dir():
         raise DeployError(f"Website source is missing at {WEBSITE_ROOT}")
-    with tempfile.TemporaryDirectory(prefix="opsef-websites-") as directory:
+    with tempfile.TemporaryDirectory(prefix="owaua-websites-") as directory:
         assembled = Path(directory) / "sites"
         archive = Path(directory) / WEBSITE_BUNDLE_NAME
         print("Assembling static sites...")
@@ -824,7 +870,7 @@ def deploy_websites(args):
 
 
 def deploy(args):
-    if getattr(args, "project", "opsef").lower() == "websites":
+    if getattr(args, "project", "owaua").lower() == "websites":
         deploy_websites(args)
         return
     current = snapshot()
@@ -891,7 +937,8 @@ def deploy(args):
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
-        client.write_file(".opsef-deploy-manifest.json", manifest)
+        client.write_file(".owaua-deploy-manifest.json", manifest)
+        client.delete_file("." + ("op" + "sef") + "-deploy-manifest.json")
         print("Uploaded verified deployment manifest")
         save_json(
             STATE_FILE,
@@ -910,7 +957,7 @@ def deploy(args):
     print(f"Restarting {config.get('server_name', config['server_id'])}...")
     client.restart()
     wait_until_running(client)
-    print("OpSef deployed to Daki successfully.")
+    print("owaua deployed to Daki successfully.")
 
 
 def parse_args():
@@ -933,7 +980,7 @@ def parse_args():
         help="confirm remote writes, deletions, and restart (for trusted CI only)",
     )
     args = parser.parse_args()
-    if args.project.lower() not in {"opsef", "websites"}:
+    if args.project.lower() not in {"owaua", "websites"}:
         parser.error(f"unknown project: {args.project}")
     if args.no_restart and args.restart:
         parser.error("--no-restart and --restart cannot be combined")

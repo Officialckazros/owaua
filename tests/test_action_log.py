@@ -5,8 +5,8 @@ from unittest import mock
 
 import discord
 
-from sefbot import community, config, db
-from sefbot.module_catalog import MODULES, merge_settings
+from owaua import community, config, db
+from owaua.module_catalog import MODULES, merge_settings
 
 
 class _Channel:
@@ -171,7 +171,7 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
         entry = SimpleNamespace(id=7654, user=actor, reason="Cleanup", extra=None)
 
         with mock.patch(
-            "sefbot.community.recent_audit_entry",
+            "owaua.community.recent_audit_entry",
             new=mock.AsyncMock(return_value=entry),
         ):
             await community.bulk_message_delete(messages)
@@ -194,7 +194,7 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
         client = SimpleNamespace(get_guild=lambda guild_id: self.guild)
 
         with mock.patch(
-            "sefbot.community.recent_audit_entry",
+            "owaua.community.recent_audit_entry",
             new=mock.AsyncMock(return_value=None),
         ):
             await community.raw_bulk_message_delete(client, payload)
@@ -217,7 +217,7 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
         client = SimpleNamespace(get_guild=lambda guild_id: self.guild)
 
         with mock.patch(
-            "sefbot.community.recent_audit_entry",
+            "owaua.community.recent_audit_entry",
             new=mock.AsyncMock(return_value=None),
         ):
             await community.raw_message_delete(client, payload)
@@ -245,7 +245,7 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
         client = SimpleNamespace(get_guild=lambda guild_id: self.guild)
 
         with mock.patch(
-            "sefbot.community.recent_audit_entry",
+            "owaua.community.recent_audit_entry",
             new=mock.AsyncMock(return_value=None),
         ):
             await community.raw_message_delete(client, payload)
@@ -269,7 +269,7 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with mock.patch(
-            "sefbot.community.recent_audit_entry",
+            "owaua.community.recent_audit_entry",
             new=mock.AsyncMock(return_value=None),
         ):
             await community.message_delete(message)
@@ -295,7 +295,7 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with mock.patch(
-            "sefbot.community.recent_audit_entry",
+            "owaua.community.recent_audit_entry",
             new=mock.AsyncMock(return_value=None),
         ):
             await community.message_delete(message)
@@ -321,7 +321,7 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with mock.patch(
-            "sefbot.community.recent_audit_entry",
+            "owaua.community.recent_audit_entry",
             new=mock.AsyncMock(return_value=None),
         ):
             await community.message_delete(message)

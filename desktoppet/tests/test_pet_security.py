@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import stat
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,7 +11,7 @@ from unittest import mock
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 PET_PATH = Path(__file__).resolve().parents[1] / "pet.py"
-SPEC = importlib.util.spec_from_file_location("sefpet_test_module", PET_PATH)
+SPEC = importlib.util.spec_from_file_location("owaua_test_module", PET_PATH)
 pet = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(pet)
 
@@ -84,7 +85,7 @@ class EndpointTests(unittest.TestCase):
 
     def test_provider_values_cannot_be_mixed(self):
         brain = pet.Brain(
-            {"SEFPET_AI_KEY": "secret", "GROQ_API_KEY": "other"},
+            {"OWAUA_AI_KEY": "secret", "GROQ_API_KEY": "other"},
             dict(pet.DEFAULT_SETTINGS),
         )
         self.assertEqual(brain.provider, "offline")
@@ -122,7 +123,7 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_save_is_atomic_private_and_excludes_internal_fields(self):
         with tempfile.TemporaryDirectory() as directory:
-            config_dir = Path(directory) / ".sefpet"
+            config_dir = Path(directory) / ".owaua"
             config_file = config_dir / "config.json"
             with (
                 mock.patch.object(pet, "CONFIG_DIR", config_dir),
@@ -156,9 +157,37 @@ class ConfigurationTests(unittest.TestCase):
             if os.name != "nt":
                 self.assertEqual(stat.S_IMODE(env_file.stat().st_mode), 0o600)
 
+    def test_pre_rename_private_state_and_key_are_migrated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy_dir = root / ("." + "sef" + "pet")
+            canonical_dir = root / ".owaua"
+            legacy_dir.mkdir()
+            legacy_key = "SEF" + "PET_AI_KEY"
+            (legacy_dir / ".env").write_text(
+                f"{legacy_key}=secret\n", encoding="utf-8"
+            )
+            fake_keyring = mock.Mock()
+            fake_keyring.get_password.side_effect = [None, "keyring-secret"]
+            with (
+                mock.patch.object(pet.Path, "home", return_value=root),
+                mock.patch.object(pet, "CONFIG_DIR", canonical_dir),
+                mock.patch.dict(sys.modules, {"keyring": fake_keyring}),
+            ):
+                pet._migrate_legacy_user_state()
+            self.assertFalse(legacy_dir.exists())
+            self.assertEqual(
+                (canonical_dir / ".env").read_text(encoding="utf-8"),
+                "OWAUA_AI_KEY=secret\n",
+            )
+            fake_keyring.set_password.assert_called_once_with(
+                pet.KEYRING_SERVICE, "OWAUA_AI_KEY", "keyring-secret"
+            )
+            fake_keyring.delete_password.assert_called_once()
+
     def test_corrupt_settings_are_preserved_for_recovery(self):
         with tempfile.TemporaryDirectory() as directory:
-            config_dir = Path(directory) / ".sefpet"
+            config_dir = Path(directory) / ".owaua"
             config_dir.mkdir()
             config_file = config_dir / "config.json"
             config_file.write_text("{not-json", encoding="utf-8")
@@ -216,7 +245,7 @@ class ResourceAndProcessTests(unittest.TestCase):
     def test_child_environment_excludes_provider_secrets(self):
         with mock.patch.dict(
             os.environ,
-            {"PATH": "/bin", "GROQ_API_KEY": "secret", "SEFPET_AI_KEY": "secret2"},
+            {"PATH": "/bin", "GROQ_API_KEY": "secret", "OWAUA_AI_KEY": "secret2"},
             clear=True,
         ):
             child_env = pet._subprocess_environment()

@@ -1,11 +1,16 @@
-name = "sefbot-path"
+name = "owaua-path"
 main = "src/index.js"
-compatibility_date = "2026-07-01"
+compatibility_date = "2026-08-29"
 account_id = "114651c9288b7d9012b396fe66737d16"
 
 routes = [
+  { pattern = "wearegays.net/owaua*", zone_name = "wearegays.net" },
+  { pattern = "www.wearegays.net/owaua*", zone_name = "wearegays.net" },
+  # Pre-rename links remain permanent redirects handled by this Worker.
   { pattern = "wearegays.net/sefbot*", zone_name = "wearegays.net" },
   { pattern = "www.wearegays.net/sefbot*", zone_name = "wearegays.net" },
+  { pattern = "wearegays.net/opsef-*", zone_name = "wearegays.net" },
+  { pattern = "www.wearegays.net/opsef-*", zone_name = "wearegays.net" },
   { pattern = "wearegays.net/healthz", zone_name = "wearegays.net" },
   { pattern = "www.wearegays.net/healthz", zone_name = "wearegays.net" },
   { pattern = "wearegays.net/readyz", zone_name = "wearegays.net" },
@@ -13,4 +18,4 @@ routes = [
 ]
 
 [vars]
-SEFBOT_ORIGIN = "http://paid5.daki.cc:4204"
+OWAUA_ORIGIN = "http://paid5.daki.cc:4204"

@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from sefbot import rule34
+from owaua import rule34
 
 
 class Rule34ValidationTests(unittest.TestCase):

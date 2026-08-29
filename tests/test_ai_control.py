@@ -5,7 +5,7 @@ import time
 import unittest
 from unittest import mock
 
-from sefbot import ai, ai_control, config, db
+from owaua import ai, ai_control, config, db
 
 
 class AIControlTest(unittest.TestCase):

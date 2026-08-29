@@ -6,8 +6,8 @@ from unittest import mock
 
 os.environ.setdefault("DISCORD_TOKEN", "test-token")
 
-from sefbot import config, rules, slash, voice
-from sefbot.services.llm_client import (
+from owaua import config, rules, slash, voice
+from owaua.services.llm_client import (
     _extract_json,
     _validate_download_url,
     coerce_bool,

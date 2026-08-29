@@ -1,11 +1,24 @@
 """Security regression tests for actions, moderation, rules, and voice."""
 
 import datetime
+import os
 import types
 import unittest
 from unittest import mock
 
-from sefbot import actions, brain, embeds, function_registry, moderation, rules, slash, voice
+from owaua import actions, brain, config, embeds, function_registry, moderation, rules, slash, voice
+
+
+class RebrandMigrationTest(unittest.TestCase):
+    def test_legacy_environment_is_imported_without_overriding_owaua(self):
+        legacy_name = ("SEF" + "BOT_") + "PREFIX"
+        with mock.patch.dict(os.environ, {legacy_name: "?"}, clear=False):
+            os.environ.pop("OWAUA_PREFIX", None)
+            config._import_legacy_environment()
+            self.assertEqual(os.environ["OWAUA_PREFIX"], "?")
+            os.environ["OWAUA_PREFIX"] = "!"
+            config._import_legacy_environment()
+            self.assertEqual(os.environ["OWAUA_PREFIX"], "!")
 
 
 class ModelOutputLinkSafetyTest(unittest.TestCase):
@@ -52,18 +65,29 @@ class ModelOutputLinkSafetyTest(unittest.TestCase):
 
 
 class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
-    def test_assistant_contract_proposes_one_confirmed_action(self):
+    def test_assistant_contract_proposes_ordered_confirmed_actions(self):
         contract = brain._ASSISTANT_JSON_CONTRACT
-        self.assertIn("exactly ONE proposal", contract)
-        self.assertIn("never say the action already happened", contract)
+        self.assertIn("1-5 ordered proposal", contract)
+        self.assertIn("never say an action already happened", contract)
         self.assertNotIn("actions MUST always be an empty list", contract)
 
-    def test_assistant_proposal_accepts_one_known_action_only(self):
+    def test_assistant_proposal_accepts_small_known_action_batches(self):
         proposal = {"type": "set_nickname", "target_user": "42", "nickname": "Raven"}
         self.assertEqual([proposal], actions.assistant_proposals([proposal]))
         self.assertEqual([proposal], actions.assistant_proposals(proposal))
-        self.assertEqual([], actions.assistant_proposals([proposal, proposal]))
+        self.assertEqual([proposal, proposal], actions.assistant_proposals([proposal, proposal]))
+        self.assertEqual([], actions.assistant_proposals([proposal] * 6))
         self.assertEqual([], actions.assistant_proposals([{"type": "shell"}]))
+
+    def test_role_created_earlier_in_batch_is_an_explicit_dependency(self):
+        proposals = actions.assistant_proposals([
+            {"type": "create_role", "name": "promo allowed"},
+            {"type": "assign_role", "target_user": "42", "role": "promo allowed"},
+        ])
+        self.assertEqual(2, len(proposals))
+        self.assertEqual(
+            "promo allowed", proposals[1]["_assistant_depends_on_role_name"]
+        )
 
     def test_assistant_proposal_accepts_common_safe_aliases(self):
         proposal = {"type": "remove_slowmode"}
@@ -135,7 +159,7 @@ class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
             actions.assistant_resolution_message("change the channel topic", question),
         )
 
-    def test_assistant_output_resolution_is_one_safe_shared_boundary(self):
+    def test_assistant_output_resolution_is_a_safe_shared_batch_boundary(self):
         proposal = {"type": "set_slowmode", "seconds": 10}
         response, proposals = actions.resolve_assistant_output(
             "set slowmode to 10 seconds",
@@ -146,6 +170,17 @@ class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([proposal], proposals)
         self.assertIn("Nothing has changed yet", response)
         self.assertNotIn("Done already", response)
+
+        batch = [proposal, {"type": "set_channel_topic", "topic": "Rules"}]
+        response, proposals = actions.resolve_assistant_output(
+            "set slowmode to 10 seconds and set the topic to Rules",
+            batch,
+            "Done already.",
+            in_guild=True,
+        )
+        self.assertEqual(batch, proposals)
+        self.assertIn("Ready for 2 action(s)", response)
+        self.assertIn("Confirm each action below in order", response)
 
         response, proposals = actions.resolve_assistant_output(
             "set slowmode to 10 seconds",

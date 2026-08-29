@@ -11,8 +11,8 @@ from unittest import mock
 os.environ.setdefault("PYTHON_DOTENV_DISABLED", "1")
 os.environ.setdefault("DISCORD_TOKEN", "test-token")
 
-from sefbot import ai, brain, config, db, kb
-from sefbot.scope import Scope
+from owaua import ai, brain, config, db, kb
+from owaua.scope import Scope
 
 
 class MemoryLearningTest(unittest.IsolatedAsyncioTestCase):
@@ -61,7 +61,7 @@ class MemoryLearningTest(unittest.IsolatedAsyncioTestCase):
             "memories": [
                 {
                     "about": "server",
-                    "content": "Owns and maintains SefBot",
+                    "content": "Owns and maintains owaua",
                     "importance": 0.9,
                 },
                 {
@@ -73,7 +73,7 @@ class MemoryLearningTest(unittest.IsolatedAsyncioTestCase):
         }
         with mock.patch.object(ai, "json_call", new=mock.AsyncMock(return_value=result)):
             learned = await brain.learn_from_turn(
-                "I own SefBot and I prefer concise status updates",
+                "I own owaua and I prefer concise status updates",
                 self.user,
                 self.scope,
             )
@@ -87,7 +87,7 @@ class MemoryLearningTest(unittest.IsolatedAsyncioTestCase):
         provider = mock.AsyncMock(return_value={"memories": [{"content": "should not exist"}]})
         with mock.patch.object(ai, "json_call", new=provider):
             learned = await brain.learn_from_turn(
-                "I own SefBot and want that remembered",
+                "I own owaua and want that remembered",
                 self.user,
                 self.scope,
             )
