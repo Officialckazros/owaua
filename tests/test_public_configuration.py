@@ -16,7 +16,7 @@ class PublicConfigurationTest(unittest.TestCase):
         self.assertEqual(config.BLOCKED_USER_IDS, set())
         self.assertNotIn("1535083112709496903", source)
         self.assertNotIn("836988339491962881", source)
-        self.assertNotIn("ckazros@kozzyx.org", source)
+        self.assertNotIn("kozzyx.org", source)
         self.assertNotIn("https://wearegays.net", source)
 
 
