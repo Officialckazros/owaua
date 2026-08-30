@@ -34,7 +34,6 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install --require-hashes -r requirements.lock
 
-# Add DISCORD_TOKEN and the required web/legal settings to .env first.
 PYTHONPATH=src python -m owaua.bot
 ```
 
