@@ -1,0 +1,7 @@
+title = "owaua gitleaks configuration"
+
+[allowlist]
+description = "Discord OAuth fixture IDs are public-shaped test data, not credentials."
+paths = [
+  '''tests/test_dashboard\.py''',
+]

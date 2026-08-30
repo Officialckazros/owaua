@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Officialckazros/owaua/security/advisories/new
+    about: Please report vulnerabilities privately.
+  - name: Contribution guide
+    url: https://github.com/Officialckazros/owaua/blob/main/CONTRIBUTING.md
+    about: Read the local development and pull-request guidance.

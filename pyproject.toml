@@ -8,6 +8,16 @@ version = "2.0.0"
 description = "Privacy-first Discord assistant and companion desktop pet"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
+license = "GPL-3.0-only"
+keywords = ["discord", "discord-bot", "moderation", "privacy", "self-hosted"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
 dependencies = [
   "aiohttp>=3.11,<4.0",
   "anthropic>=0.40.0",
@@ -20,6 +30,12 @@ dependencies = [
   "PyNaCl>=1.6.2,<2.0",
   "python-dotenv>=1.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Officialckazros/owaua"
+Repository = "https://github.com/Officialckazros/owaua"
+Issues = "https://github.com/Officialckazros/owaua/issues"
+Security = "https://github.com/Officialckazros/owaua/security/policy"
 
 [project.optional-dependencies]
 dev = [

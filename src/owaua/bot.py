@@ -696,9 +696,6 @@ def _start_message_task(coroutine: typing.Any) -> None:
     task.add_done_callback(_message_tasks.discard)
 
 
-TARGET_SYNC_GUILD = 1535083112709496903
-
-
 @client.event
 async def on_ready():
     client.readiness.discord = True
@@ -719,7 +716,7 @@ async def on_ready():
             synced = await _tree.sync()
             print(f"[slash] globally synced {len(synced)} commands")
             # Clear stale guild copies so commands are not shown twice.
-            guild_ids = list(config.SYNC_GUILDS) if config.SYNC_GUILDS else [str(TARGET_SYNC_GUILD)]
+            guild_ids = list(config.SYNC_GUILDS)
             for g in client.guilds:
                 guild_ids.append(str(g.id))
             for guild_id in dict.fromkeys(guild_ids):
@@ -1082,11 +1079,14 @@ async def on_member_update(before: discord.Member, after: discord.Member):
             detail += "\nAdded: " + ", ".join(added)
         if removed:
             detail += "\nRemoved: " + ", ".join(removed)
+        self_update = bool(client.user and after.id == client.user.id)
+        if self_update:
+            detail = "I noticed that my server roles changed.\n" + detail
         _start_message_task(
             community.gateway_event_log(
                 after.guild,
                 "role",
-                "Member roles updated",
+                "My roles changed" if self_update else "Member roles updated",
                 detail,
                 audit_backed=True,
                 actor=after,
@@ -1431,11 +1431,18 @@ async def on_guild_role_delete(role: discord.Role):
 
 @client.event
 async def on_guild_role_update(before: discord.Role, after: discord.Role):
+    bot_member = after.guild.me
+    self_update = bool(bot_member and any(role.id == after.id for role in bot_member.roles))
     await community.gateway_event_log(
         after.guild,
         "role",
-        "Role updated",
-        f"**{before.name}** → **{after.name}** (`{after.id}`).",
+        "One of my roles was edited" if self_update else "Role updated",
+        (
+            "I noticed that one of my roles was edited.\n"
+            if self_update
+            else ""
+        )
+        + f"**{before.name}** → **{after.name}** (`{after.id}`).",
         audit_backed=True,
         target=after,
     )
@@ -2105,7 +2112,7 @@ async def _chat(
                 elif assistant:
                     fallback_system = (
                         "You are owaua in ASSISTANT MODE — a capable Discord "
-                        "assistant. Drop the chaotic persona; do what is asked.\n\n"
+                        "assistant. Drop the usual persona; do what is asked.\n\n"
                         + brain.format_speaker_block(speaker)
                         + "\n\n"
                         + brain.assistant_block()
@@ -2575,7 +2582,7 @@ async def _cmd_help(message: typing.Any, arg: typing.Any, guild_id: typing.Any, 
         f"**intelligence** `{p}user [@user|name] [question]` · `{p}server [question]` · `{p}userinfo [@user]` · `{p}badmessages [@user]`\n"
         f"**memory** `{p}teach` `{p}memories` `{p}memory erase|edit|compact` `{p}forget <id>`\n"
         f"**bond** `{p}bond [@user]` `{p}rivalries` `{p}resetconvo`\n"
-        f"**vibe** `{p}mood` `{p}vibecheck` `{p}recap [day|week]` `{p}persona`\n"
+        f"**mood** `{p}mood` `{p}vibecheck` `{p}recap [day|week]` `{p}persona`\n"
         f"**swear jar** `{p}swears [@user]` — server total; admins toggle with `/config swearjar on|off`\n"
         f"**quotes** `{p}quote add|random|list|del`\n"
         f"**games** `{p}ship @a @b` `{p}8ball` `{p}roastbattle @user` `{p}trivia` `{p}whoami`\n"
@@ -3465,7 +3472,7 @@ async def _cmd_cybersec(
 
 
 async def _cmd_ask(message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any):
-    """Ask DeepSeek V4 Flash directly — one-shot, no persona, no chaos."""
+    """Ask DeepSeek V4 Flash directly — one-shot, no persona."""
     p = _prefix_for_scope(guild_id)
     q = (arg or "").strip()
     file_notes = await textfiles.extract_message_text_files(message)
@@ -3717,8 +3724,8 @@ async def _cmd_assistant(
 ):
     """One-shot helpful mode with confirmed Discord actions for this request.
 
-    Normal @mentions / DMs stay full chaotic owaua. Sticky mode is intentionally
-    gone — people hated permanent corporate-assistant vibes.
+    Normal @mentions / DMs stay full owaua. Sticky mode is intentionally
+    gone — people hated a permanent corporate-assistant tone.
     """
     p = _prefix_for_scope(guild_id)
     raw = (arg or "").strip()
@@ -3758,7 +3765,7 @@ async def _cmd_assistant(
             f"example: `{p}assistant give @user the Moderator role`\n"
             f"revert the last reversible action: `{p}assistant undo`\n"
             "discord still gates actions by *your* permissions. "
-            "there is no sticky on/off — @ me again and i'm chaotic again."
+            "there is no sticky on/off — @ me again and i'm back to normal."
         )
         await _send(message.channel, embeds.say(body, title="assistant"), feedback=False)
         return
@@ -3971,7 +3978,7 @@ async def _cmd_mode(message: typing.Any, arg: typing.Any, guild_id: typing.Any, 
         brain.set_freaky_mode(author, False)
         await _send(
             message.channel,
-            embeds.ok("freaky mommy mode disabled. back to normal chaos."),
+            embeds.ok("freaky mommy mode disabled. back to normal."),
             feedback=False,
         )
         return
@@ -4034,8 +4041,8 @@ async def _cmd_vibecheck(
         return
     system = ckazros.apply(
         ((db.guild_settings(guild_id).get("persona") or "").strip() or config.PERSONA)
-        + "\n\nGive an unhinged, brutally honest read on this channel's "
-        "energy right now based on the messages. Keep it short. No emoji."
+        + "\n\nGive an unhinged, brutally honest read on this channel "
+        "right now based on the messages. Keep it short. No emoji."
     )
     async with message.channel.typing():
         try:
@@ -4059,7 +4066,7 @@ async def _cmd_vibecheck(
     text = brain.scrub_ai_output(text)
     await _send(
         message.channel,
-        embeds.say(text, title="vibe check"),
+        embeds.say(text, title="channel read"),
         user_msg="vibecheck",
         bot_msg=text,
         author=author,
@@ -4315,7 +4322,7 @@ async def _cmd_recap(
     system = ckazros.apply(
         ((db.guild_settings(guild_id).get("persona") or "").strip() or config.PERSONA)
         + f"\n\nWrite a savage, funny {span} recap of this channel from the messages. "
-        "Call out bits, people, and vibes. Short paragraphs. No emoji."
+        "Call out bits, people, and what the room was like. Short paragraphs. No emoji."
     )
     async with message.channel.typing():
         try:
@@ -5022,8 +5029,8 @@ async def _cmd_8ball(
         "nah.",
         "ask again when you're smarter.",
         "absolutely. go ruin your life.",
-        "the vibes say no.",
-        "it's giving yes.",
+        "absolutely not.",
+        "yeah.",
         "50/50 and i don't care.",
         "lmao no.",
         "signs point to you already knowing.",
