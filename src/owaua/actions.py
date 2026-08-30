@@ -25,7 +25,7 @@ from typing import List, Optional, Union
 
 import discord
 
-from owaua import config
+from owaua import community, config, db
 
 log = logging.getLogger("owaua.actions")
 
@@ -50,6 +50,8 @@ _PERMS = {
     "set_channel_topic": "manage_channels",
     "react_message": None,
     "deny_media_perms": "manage_roles",
+    "add_banned_phrases": "manage_guild",
+    "remove_banned_phrases": "manage_guild",
 }
 
 _MAX_REACTS = 5
@@ -158,6 +160,10 @@ _TYPE_ALIASES = {
     "rename_server": "set_server_name",
     "status": "set_status",
     "deny_media": "deny_media_perms",
+    "add_banned_words": "add_banned_phrases",
+    "add_blocked_phrases": "add_banned_phrases",
+    "remove_banned_words": "remove_banned_phrases",
+    "remove_blocked_phrases": "remove_banned_phrases",
 }
 
 _ACTION_REQUEST_RE = re.compile(
@@ -166,7 +172,10 @@ _ACTION_REQUEST_RE = re.compile(
     r"slowmode)\b"
     r"|\b(?:give|assign|add|remove|take|create|delete)\b.{0,80}\b(?:role|channel)\b"
     r"|\b(?:dm|message|react\s+to)\b.{0,80}(?:<@!?\d{15,22}>|\bmessage\b)"
-    r"|\b(?:set|change)\b.{0,80}\b(?:server\s+name|status|channel\s+topic)\b"
+    r"|\b(?:set|change)\b.{0,80}\b(?:server\s+name|status|channel\s+topic|"
+    r"nickname|nick|name)\b"
+    r"|\b(?:add|remove|block|unblock)\b.{0,300}\b(?:banned|blocked|automod)\s+"
+    r"(?:word|words|phrase|phrases)\b"
     r"|\bdeny\b.{0,80}\b(?:media|attachments?|embeds?)\b"
     r")"
 )
@@ -186,7 +195,7 @@ _ACTION_REQUEST_START_RE = re.compile(
     r"(?:please\s+)?(?:go\s+ahead\s+and\s+)?)(?:"
     r"rename|nick(?:name)?|kick|ban|mute|timeout|unmute|untimeout|purge|clear|"
     r"give|assign|add|remove|take|create|delete|dm|message|react|set|change|"
-    r"update|deny|enable|disable|turn)\b"
+    r"update|deny|enable|disable|turn|block|unblock)\b"
 )
 _TERSE_SLOWMODE_REQUEST_RE = re.compile(
     r"(?is)^\s*slowmode\s+(?:off|on|remove|disable|enable|stop|reset|\d)"
@@ -195,6 +204,43 @@ _USER_MENTION_RE = re.compile(r"<@!?(\d{15,22})>")
 _ROLE_MENTION_RE = re.compile(r"<@&(\d{15,22})>")
 _CHANNEL_MENTION_RE = re.compile(r"<#(\d{15,22})>")
 _DURATION_RE = re.compile(r"(?i)(\d{1,6})\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)?\b")
+_BANNED_PHRASES_RE = re.compile(
+    r"(?is)\b(?P<verb>add|remove|block|unblock)\s+(?P<phrases>.+?)\s+"
+    r"(?:as\s+)?(?:a\s+)?(?:banned|blocked|automod)\s+(?:word|words|phrase|phrases)\b"
+)
+
+
+def _automod_phrases(raw: object, *, limit: int = 100) -> list[str]:
+    """Normalize a small, usable list of phrase-based AutoMod rules."""
+    candidates = raw if isinstance(raw, list) else [raw]
+    phrases: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        value = " ".join(str(candidate or "").strip().strip("'\"`").split())
+        if not value or len(value) > 60 or value.casefold() in seen:
+            continue
+        seen.add(value.casefold())
+        phrases.append(value)
+        if len(phrases) >= limit:
+            break
+    return phrases
+
+
+def _infer_banned_phrase_proposal(text: str) -> Optional[dict[typing.Any, typing.Any]]:
+    """Recover comma-separated banned-word requests when model JSON is absent."""
+    match = _BANNED_PHRASES_RE.search(text)
+    if match is None:
+        return None
+    raw_phrases = re.split(r"\s*(?:,|;|\n|\band\b)\s*", match.group("phrases"))
+    phrases = _automod_phrases(raw_phrases)
+    if not phrases:
+        return None
+    action = (
+        "remove_banned_phrases"
+        if match.group("verb").lower() in {"remove", "unblock"}
+        else "add_banned_phrases"
+    )
+    return {"type": action, "phrases": phrases}
 
 
 def _role_name(value: object) -> str:
@@ -383,6 +429,10 @@ def infer_assistant_proposal(text: str) -> Optional[dict[typing.Any, typing.Any]
     channel_match = _CHANNEL_MENTION_RE.search(value)
     channel = channel_match.group(1) if channel_match else None
 
+    banned_phrase_proposal = _infer_banned_phrase_proposal(value)
+    if banned_phrase_proposal is not None:
+        return banned_phrase_proposal
+
     if "slowmode" in lowered:
         proposal: dict[str, typing.Any] = {"type": "set_slowmode"}
         if channel:
@@ -427,6 +477,20 @@ def infer_assistant_proposal(text: str) -> Optional[dict[typing.Any, typing.Any]
         if re.search(r"(?i)\bban\b", value):
             return {"type": "ban_user", "target_user": user}
 
+        nickname = re.search(
+            r"(?is)\b(?:rename|change|set)\b.*?\b(?:nickname|nick|name)\s+"
+            r"(?:to|as)\s+(.+)$",
+            value,
+        )
+        if nickname:
+            new_nickname = nickname.group(1).strip().strip("'\"`.,!? ")
+            if new_nickname:
+                return {
+                    "type": "set_nickname",
+                    "target_user": user,
+                    "nickname": new_nickname[:32],
+                }
+
     if role and re.search(r"(?i)\bdelete\b.{0,40}\brole\b|\bdelete\s*<@&", value):
         return {"type": "delete_role", "role": role}
     if channel and re.search(r"(?i)\bdelete\b.{0,40}\bchannel\b|\bdelete\s*<#", value):
@@ -465,6 +529,11 @@ def assistant_resolution_message(text: str, model_response: str = "") -> str:
         return (
             "What slowmode delay should I use? Say something like `slowmode 10 seconds` "
             "or `slowmode off`; mention a channel only if you do not mean this one."
+        )
+    if re.search(r"\b(?:banned|blocked|automod)\s+(?:word|words|phrase|phrases)\b", lowered):
+        return (
+            "Give the words or phrases as a comma-separated list, for example: "
+            "`add spam, scam links as banned words`."
         )
     if re.search(r"\b(?:kick|ban|mute|timeout|unmute|untimeout|nickname|rename|dm)\b", lowered):
         return "Mention the exact user and include any duration, nickname, or message needed."
@@ -614,6 +683,8 @@ def action_results_ok(
         "status set to ",
         "denied attach files and embed links for ",
         "reacted ",
+        "added ",
+        "removed ",
     )
     if any(line.startswith(prefix) for prefix in success_prefixes):
         return "failed" not in line
@@ -959,6 +1030,9 @@ def preview_action(action: dict[typing.Any, typing.Any]) -> str:
         details.append(f"topic={str(action.get('topic') or '')[:100]}")
     if canonical == "purge_messages":
         details.append(f"count={str(action.get('count') or action.get('amount') or 10)[:8]}")
+    if canonical in {"add_banned_phrases", "remove_banned_phrases"}:
+        phrases = _automod_phrases(action.get("phrases"))
+        details.append(f"phrases={', '.join(phrases)[:180] or '(none)'}")
     reason = str(action.get("reason") or "").strip()
     if reason:
         details.append(f"reason={reason[:120]}")
@@ -1087,6 +1161,26 @@ async def prepare_inverse(
         return {
             "type": "set_server_name",
             "name": previous,
+            "reason": "revert previous assistant action",
+        }
+
+    if action_name in {"add_banned_phrases", "remove_banned_phrases"}:
+        configured = db.module_config(f"guild:{guild.id}", "automod")
+        existing = _automod_phrases(configured["settings"].get("banned_phrases"), limit=500)
+        requested = _automod_phrases(action.get("phrases"))
+        existing_by_key = {phrase.casefold(): phrase for phrase in existing}
+        if action_name == "add_banned_phrases":
+            changed = [phrase for phrase in requested if phrase.casefold() not in existing_by_key]
+            inverse_type = "remove_banned_phrases"
+        else:
+            wanted = {phrase.casefold() for phrase in requested}
+            changed = [phrase for phrase in existing if phrase.casefold() in wanted]
+            inverse_type = "add_banned_phrases"
+        if not changed:
+            return None
+        return {
+            "type": inverse_type,
+            "phrases": changed,
             "reason": "revert previous assistant action",
         }
 
@@ -1513,6 +1607,45 @@ async def _one(
         names = [r.name[:100] for r in target.roles if r.name != "@everyone"][:50]
         rendered = f"{target.display_name} roles: {', '.join(names) or 'none'}"
         return discord.utils.escape_mentions(rendered[:1500])
+
+    if t in {"add_banned_phrases", "remove_banned_phrases"}:
+        requested_phrases = _automod_phrases(a.get("phrases"))
+        if not requested_phrases:
+            return f"{t}: include 1-100 phrases, each at most 60 characters"
+        configured = db.module_config(f"guild:{guild.id}", "automod")
+        settings = dict(configured["settings"])
+        existing = _automod_phrases(settings.get("banned_phrases"), limit=500)
+        existing_by_key = {phrase.casefold(): phrase for phrase in existing}
+        if t == "add_banned_phrases":
+            additions = [
+                phrase for phrase in requested_phrases if phrase.casefold() not in existing_by_key
+            ]
+            if not additions:
+                return "all requested blocked phrases are already configured"
+            if len(existing) + len(additions) > 500:
+                return "blocked: this server already has the maximum 500 blocked phrases"
+            settings["banned_phrases"] = [*existing, *additions]
+            verb = "added"
+            changed = additions
+        else:
+            remove_keys = {phrase.casefold() for phrase in requested_phrases}
+            changed = [phrase for phrase in existing if phrase.casefold() in remove_keys]
+            if not changed:
+                return "none of those blocked phrases are configured"
+            settings["banned_phrases"] = [
+                phrase for phrase in existing if phrase.casefold() not in remove_keys
+            ]
+            verb = "removed"
+        db.module_config_set(
+            f"guild:{guild.id}",
+            "automod",
+            enabled=bool(configured["enabled"]),
+            settings=settings,
+            actor_id=str(requester.id),
+        )
+        synced = await community.sync_native_automod(guild)
+        suffix = " and synced Discord AutoMod" if synced else ""
+        return f"{verb} {len(changed)} blocked phrase(s){suffix}"
 
     if t == "kick_user":
         if not target:

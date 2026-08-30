@@ -81,21 +81,29 @@ class FreakyModeTest(unittest.TestCase):
         )
         self.assertEqual(0, stored)
 
-    def test_age_restricted_channel_activates_adult_persona_without_saved_mode(self) -> None:
+    def test_age_restricted_channel_does_not_activate_freaky_mode_by_default(self) -> None:
         uid = "42"
         guild = Scope.guild(7).key
 
         self.assertFalse(brain.freaky_enabled(uid))
-        self.assertTrue(brain.freaky_turn(uid, channel_nsfw=True))
+        self.assertFalse(brain.freaky_turn(uid, channel_nsfw=True))
         self.assertFalse(brain.freaky_turn(uid, channel_nsfw=True, assistant=True))
+
+        prompt = brain.build_system(
+            uid, "tester", "hi", guild, server_name="lab", channel_nsfw=True
+        )
+        self.assertIn(config.NSFW_CHANNEL_PROMPT, prompt)
+        self.assertNotIn(config.FREAKY_MODE_PROMPT, prompt)
+
         brain.set_freaky_mode(uid, True)
+        self.assertTrue(brain.freaky_turn(uid, channel_nsfw=True))
         self.assertFalse(brain.freaky_turn(uid, channel_nsfw=False))
         self.assertFalse(brain.freaky_turn(uid, channel_nsfw=None))
 
         prompt = brain.build_system(
             uid, "tester", "hi", guild, server_name="lab", channel_nsfw=True
         )
-        self.assertIn(config.NSFW_CHANNEL_PROMPT, prompt)
+        self.assertIn(config.FREAKY_MODE_PROMPT, prompt)
         self.assertNotIn(config.FREAKY_MODE_OFF_PROMPT, prompt)
         self.assertTrue(brain.freaky_enabled(uid))
 
@@ -139,3 +147,11 @@ class FreakyModeTest(unittest.TestCase):
         db.guild_settings_set(guild, model="some-guild-model")
         with mock.patch.object(config, "MODEL_NSFW", "adult-model"):
             self.assertEqual("adult-model", brain.chat_model(guild, channel_nsfw=True))
+
+    def test_freaky_chat_uses_the_configured_strong_model(self) -> None:
+        guild = Scope.guild(7).key
+        with mock.patch.object(config, "MODEL_FREAKY", "strong-freaky-model"):
+            self.assertEqual(
+                "strong-freaky-model",
+                brain.chat_model(guild, freaky=True),
+            )

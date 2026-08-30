@@ -692,6 +692,15 @@ def _start_message_task(coroutine: typing.Any) -> None:
     task.add_done_callback(_message_tasks.discard)
 
 
+async def _sync_native_automod_once() -> None:
+    """Keep each configured guild's native Discord AutoMod rule current."""
+    for guild in list(client.guilds):
+        try:
+            await community.sync_native_automod(guild)
+        except Exception:
+            _LOG.exception("native AutoMod sync failed for guild %s", guild.id)
+
+
 @client.event
 async def on_ready():
     client.readiness.discord = True
@@ -730,6 +739,7 @@ async def on_ready():
     _start_background_task("guild-archive", lambda: archive.archive_loop(client))
     _start_background_task("community-scheduler", _community_scheduler_loop)
     _start_background_task("booster-import", _booster_import_once)
+    _start_background_task("native-automod-sync", _sync_native_automod_once)
     if config.MALWARE_SCAN_ENABLED:
         _start_background_task("malware-signatures", malware.signature_update_loop)
 
@@ -2060,9 +2070,9 @@ async def _chat(
                 fallbacks=None
                 if assistant
                 else (
-                    config.MODEL_NSFW_FALLBACKS
-                    if channel_nsfw
-                    else (config.MODEL_FREAKY_FALLBACKS if freaky else None)
+                    config.MODEL_FREAKY_FALLBACKS
+                    if freaky
+                    else (config.MODEL_NSFW_FALLBACKS if channel_nsfw else None)
                 ),
                 schema="brain_response",
                 task="assistant" if assistant else "chat",
@@ -2574,7 +2584,7 @@ async def _cmd_help(message: typing.Any, arg: typing.Any, guild_id: typing.Any, 
         f"**music** `{p}music <song name>` — returns a validated search/watch link\n"
         f"{age_restricted_help}"
         f"**assistant** `{p}assistant <request>` — confirmed Discord actions; `{p}assistant undo` reverts the last reversible one\n"
-        f"**owner** `{p}ckazros <anything>` — do it; standing orders (speak Hebrew, etc.) stick until `{p}ckazros clear`\n"
+        f"**owner** `{p}ckazros <anything>` — one verified request at a time\n"
         f"**language** `{p}language [name]` — replies in that language (`{p}language hebrew`; `{p}language reset`)\n"
         f"**mode** `{p}mode ai-fast|ai-balanced|ai-reasoning` — choose AI speed/reasoning\n"
         f"**model** `{p}model` · `{p}model deepseek|groq` — show/switch this server's brain model\n"
@@ -3791,7 +3801,7 @@ async def _cmd_assistant(
 async def _cmd_ckazros(
     message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
 ):
-    """Owner-only: do anything asked; standing orders persist globally."""
+    """Owner-only: handle a verified request without persistent prompt orders."""
     p = _prefix_for_scope(guild_id)
     result = ckazros.dispatch(author, arg or "", prefix=p)
     if result.denied or not result.execute:
@@ -3929,17 +3939,17 @@ async def _cmd_mode(message: typing.Any, arg: typing.Any, guild_id: typing.Any, 
         )
         return
     if low in ("freaky", "mommy", "horny", "sexy"):
-        brain.set_freaky_mode(author, False)
         if message.guild is not None and rule34.is_age_restricted_channel(message.channel):
+            brain.set_freaky_mode(author, True)
             await _send(
                 message.channel,
                 embeds.ok(
-                    "this channel is Discord age-restricted, so freaky behavior is "
-                    "already active automatically here; no saved setting is needed."
+                    "freaky mommy mode enabled for you in this age-restricted channel."
                 ),
                 feedback=False,
             )
             return
+        brain.set_freaky_mode(author, False)
         await _send(
             message.channel,
             embeds.error(
@@ -4190,10 +4200,135 @@ _NUKE_MAX = 100
 
 async def _cmd_nuke(message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any):
     """Delete the last N messages in this channel. Requires Manage Messages."""
+    if message.guild is None or not isinstance(message.author, discord.Member):
+        await _send(message.channel, embeds.error("nuke only works in a server."), feedback=False)
+        return
+    channel = message.channel
+    if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+        await _send(
+            message.channel,
+            embeds.error("nuke only works in a text channel or thread."),
+            feedback=False,
+        )
+        return
+
+    me = message.guild.me
+    author_ok = _has_perm(message.author, "manage_messages", channel) or config.is_bot_owner(
+        message.author.id
+    )
+    bot_ok = bool(
+        me
+        and (
+            _has_perm(me, "manage_messages", channel)
+            or _has_perm(me, "administrator", channel)
+        )
+    )
+    if not author_ok:
+        await _send(
+            message.channel,
+            embeds.error("you need `manage messages` in this channel to nuke."),
+            feedback=False,
+        )
+        return
+    if not bot_ok:
+        await _send(
+            message.channel,
+            embeds.error("i need `manage messages` in this channel to nuke."),
+            feedback=False,
+        )
+        return
+
+    raw_amount = (arg or "").strip().split(maxsplit=1)[0] if (arg or "").strip() else "10"
+    try:
+        amount = max(1, min(int(raw_amount), _NUKE_MAX))
+    except (TypeError, ValueError):
+        await _send(message.channel, embeds.error("usage: `!nuke [1-100]`"), feedback=False)
+        return
+
+    channel_id = channel.id
+    correlation_id = secrets.token_hex(16)
+
+    async def _purge(confirmation: discord.Interaction) -> None:
+        guild = confirmation.guild
+        current = guild.get_channel(channel_id) if guild else None
+        if guild and current is None and hasattr(guild, "get_thread"):
+            current = guild.get_thread(channel_id)
+        if not isinstance(current, (discord.TextChannel, discord.Thread)):
+            result = "target channel no longer exists"
+            db.record_action_audit(
+                nonce=view.nonce,
+                actor_id=str(confirmation.user.id),
+                scope_id=scope_key(guild_id=confirmation.guild_id, user_id=confirmation.user.id),
+                action="purge",
+                target_id=str(channel_id),
+                parameters={"amount": amount},
+                source="prefix",
+                correlation_id=correlation_id,
+                status="denied",
+                result=result,
+            )
+            await confirmation.followup.send(embed=embeds.error(result), ephemeral=True)
+            return
+        if not _has_perm(confirmation.user, "manage_messages", current):
+            result = "your permission changed; purge denied."
+            status = "denied"
+        else:
+            try:
+                deleted = await current.purge(
+                    limit=amount,
+                    reason=(
+                        f"owaua confirmed purge by {confirmation.user} "
+                        f"({confirmation.user.id}); correlation={correlation_id}"
+                    ),
+                )
+                result = f"deleted {len(deleted)} message(s)"
+                status = "completed"
+            except (discord.Forbidden, discord.HTTPException):
+                result = "purge failed because Discord denied the operation"
+                status = "failed"
+        db.record_action_audit(
+            nonce=view.nonce,
+            actor_id=str(confirmation.user.id),
+            scope_id=scope_key(guild_id=confirmation.guild_id, user_id=confirmation.user.id),
+            action="purge",
+            target_id=str(channel_id),
+            parameters={"amount": amount},
+            source="prefix",
+            correlation_id=correlation_id,
+            status=status,
+            result=result,
+        )
+        await confirmation.followup.send(
+            embed=embeds.ok(result) if status == "completed" else embeds.error(result),
+            ephemeral=True,
+        )
+
+    view = slash.InvokerConfirmation(
+        message.author.id,
+        _purge,
+        guild_id=message.guild.id,
+        channel_id=channel.id,
+    )
+    db.record_action_audit(
+        nonce=view.nonce,
+        actor_id=str(message.author.id),
+        scope_id=scope_key(guild_id=message.guild.id, user_id=message.author.id),
+        action="purge",
+        target_id=str(channel_id),
+        parameters={"amount": amount},
+        source="prefix",
+        correlation_id=correlation_id,
+        status="pending",
+    )
     await _send(
         message.channel,
-        embeds.error("Use `/nuke` so Discord can show an invoker-bound Confirm/Cancel preview."),
+        embeds.say(
+            f"Delete up to **{amount}** recent message(s) from <#{channel_id}>?",
+            title="confirm purge",
+        ),
         feedback=False,
+        reference=message,
+        view=view,
     )
 
 

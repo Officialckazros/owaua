@@ -438,7 +438,7 @@ def reply_instruction(user_id: str, guild_id: str) -> str:
         f"answer) in {label}. Keep persona, tone, and length. JSON keys, memory "
         f"contents, relationship fields, and other structured fields stay in "
         f"English. Do not switch to English unless the user asked for English "
-        f"this turn. Owner standing orders still override this if they conflict."
+        f"this turn. This applies only to the visible reply."
     )
 
 

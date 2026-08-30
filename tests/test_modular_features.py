@@ -8,7 +8,7 @@ from unittest import mock
 
 os.environ.setdefault("DISCORD_TOKEN", "test-token")
 
-from owaua import config, rules, slash, voice
+from owaua import community, config, rules, slash, voice
 from owaua.services.llm_client import (
     _extract_json,
     _validate_download_url,
@@ -87,6 +87,35 @@ class RulesRegressionTest(unittest.TestCase):
         client = types.SimpleNamespace(user=bot_user)
         with mock.patch.object(rules.discord, "Message", FakeDiscordMessage):
             self.assertIsNone(rules.detect_rule(client, typing.cast(typing.Any, message)))
+
+
+class NativeAutomodTest(unittest.IsolatedAsyncioTestCase):
+    def test_native_keywords_are_bounded_and_deduplicated(self):
+        values = [" spam ", "SPAM", "", "x" * 61, *[f"word-{i}" for i in range(110)]]
+        result = community._native_automod_keywords({"banned_phrases": values})
+        self.assertEqual(result[:2], ["spam", "word-0"])
+        self.assertLessEqual(len(result), 100)
+
+    async def test_sync_creates_one_native_rule_for_configured_phrases(self):
+        guild = types.SimpleNamespace(
+            id=123,
+            me=types.SimpleNamespace(
+                guild_permissions=types.SimpleNamespace(manage_guild=True)
+            ),
+            get_channel=lambda channel_id: None,
+            fetch_automod_rules=mock.AsyncMock(return_value=[]),
+            create_automod_rule=mock.AsyncMock(),
+        )
+        with mock.patch.object(
+            community,
+            "_cfg",
+            return_value={"enabled": True, "settings": {"banned_phrases": ["scam"]}},
+        ):
+            self.assertTrue(await community.sync_native_automod(typing.cast(typing.Any, guild)))
+        guild.create_automod_rule.assert_awaited_once()
+        call = guild.create_automod_rule.await_args.kwargs
+        self.assertEqual(call["name"], "owaua: configured blocked phrases")
+        self.assertEqual(call["trigger"].keyword_filter, ["scam"])
 
 
 class CooldownRegressionTest(unittest.IsolatedAsyncioTestCase):

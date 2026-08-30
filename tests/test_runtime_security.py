@@ -150,6 +150,43 @@ class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
             actions.infer_assistant_proposal("ban <@123456789012345678>"),
         )
 
+    def test_nickname_request_recovers_without_model_action_shape(self):
+        self.assertTrue(
+            actions.looks_like_action_request(
+                "change <@123456789012345678>'s name to zeousky's ex"
+            )
+        )
+        self.assertEqual(
+            {
+                "type": "set_nickname",
+                "target_user": "123456789012345678",
+                "nickname": "zeousky's ex",
+            },
+            actions.infer_assistant_proposal(
+                "change <@123456789012345678>'s name to zeousky's ex"
+            ),
+        )
+
+    def test_banned_phrase_request_recovers_a_single_batched_automod_action(self):
+        request = "add brit, britt, british, UK, england as banned words"
+        expected = {
+            "type": "add_banned_phrases",
+            "phrases": ["brit", "britt", "british", "UK", "england"],
+        }
+        self.assertTrue(actions.looks_like_action_request(request))
+        self.assertEqual(expected, actions.infer_assistant_proposal(request))
+        response, proposals = actions.resolve_assistant_output(
+            request, [], "I cannot do that.", in_guild=True
+        )
+        self.assertEqual([expected], proposals)
+        self.assertIn("Nothing has changed yet", response)
+
+    def test_banned_phrase_parser_deduplicates_and_rejects_oversized_entries(self):
+        self.assertEqual(
+            ["spam", "scam"],
+            actions._automod_phrases([" spam ", "SPAM", "", "x" * 61, "scam"]),
+        )
+
     def test_action_resolution_keeps_model_clarification(self):
         question = "Which channel should I update?"
         self.assertEqual(
@@ -323,6 +360,48 @@ class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             0, typing.cast(typing.Any, thread.edit.await_args).kwargs["slowmode_delay"]
         )
+
+    async def test_confirmed_banned_phrase_action_persists_and_syncs_automod(self):
+        class FakeMember:
+            pass
+
+        guild = types.SimpleNamespace(owner_id=999, id=123)
+        requester = FakeMember()
+        requester.id = 7
+        requester.guild = guild
+        requester.guild_permissions = types.SimpleNamespace(
+            administrator=False, manage_guild=True
+        )
+        bot_member = FakeMember()
+        bot_member.id = 8
+        bot_member.guild = guild
+        configured = {
+            "enabled": True,
+            "settings": {"banned_phrases": ["spam"], "delete": True},
+        }
+
+        with (
+            mock.patch.object(actions.discord, "Member", FakeMember),
+            mock.patch.object(actions.db, "module_config", return_value=configured),
+            mock.patch.object(actions.db, "module_config_set") as persist,
+            mock.patch.object(
+                actions.community, "sync_native_automod", new_callable=mock.AsyncMock, return_value=True
+            ) as sync,
+        ):
+            result = await actions._one(
+                {"type": "add_banned_phrases", "phrases": ["spam", "scam", "phishing"]},
+                requester,
+                guild,
+                object(),
+                bot_member=bot_member,
+            )
+
+        self.assertEqual("added 2 blocked phrase(s) and synced Discord AutoMod", result)
+        self.assertEqual(
+            ["spam", "scam", "phishing"],
+            persist.call_args.kwargs["settings"]["banned_phrases"],
+        )
+        sync.assert_awaited_once_with(guild)
 
     async def test_assistant_confirmation_records_inverse_and_consumes_undo(self):
         proposal = {"type": "set_nickname", "target_user": "42", "nickname": "Before"}

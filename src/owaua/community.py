@@ -12,6 +12,7 @@ import fnmatch
 import html
 import io
 import json
+import logging
 import math
 import re
 import secrets
@@ -28,6 +29,8 @@ import discord
 from owaua import config as bot_config
 from owaua import db, embeds, staffops
 from owaua.scope import Scope
+
+log = logging.getLogger("owaua.community")
 
 _URL_RE: Final = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
 _INVITE_RE: Final = re.compile(
@@ -58,6 +61,7 @@ _HTTP_HOSTS: Final = frozenset(
 )
 _token_cache: dict[str, tuple[str, float]] = {}
 _persistent_views_registered = False
+_NATIVE_AUTOMOD_RULE_NAME: Final = "owaua: configured blocked phrases"
 
 
 def _component_slug(value: object, fallback: str) -> str:
@@ -1436,6 +1440,88 @@ async def _automod(message: discord.Message) -> bool:
             ),
         )
     return deleted
+
+
+def _native_automod_keywords(settings: dict[typing.Any, typing.Any]) -> list[str]:
+    """Return safe Discord AutoMod keywords from the dashboard configuration."""
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for raw in settings.get("banned_phrases", []):
+        value = str(raw).strip()
+        # Discord's keyword trigger rejects empty/oversized entries. Keep the
+        # native rule bounded rather than allowing one bad dashboard value to
+        # prevent the rest of the guild sync.
+        if not value or len(value) > 60 or value.casefold() in seen:
+            continue
+        seen.add(value.casefold())
+        keywords.append(value)
+        if len(keywords) >= 100:
+            break
+    return keywords
+
+
+async def sync_native_automod(guild: discord.Guild) -> bool:
+    """Mirror configured blocked phrases into one managed Discord AutoMod rule.
+
+    The rule is deliberately limited to phrases already configured by the
+    server owner. It is not created for an empty configuration, and rules
+    belonging to other apps or administrators are never modified.
+    """
+    config = _cfg(guild, "automod")
+    if not config["enabled"]:
+        return False
+    keywords = _native_automod_keywords(config["settings"])
+    if not keywords:
+        return False
+    me = guild.me
+    if me is None or not me.guild_permissions.manage_guild:
+        return False
+
+    actions = [
+        discord.AutoModRuleAction(
+            type=discord.AutoModRuleActionType.block_message,
+        )
+    ]
+    log_channel = _channel(guild, config["settings"].get("log_channel_id"))
+    if log_channel is not None:
+        actions.append(
+            discord.AutoModRuleAction(
+                type=discord.AutoModRuleActionType.send_alert_message,
+                channel_id=log_channel.id,
+            )
+        )
+    trigger = discord.AutoModTrigger(
+        type=discord.AutoModRuleTriggerType.keyword,
+        keyword_filter=keywords,
+    )
+    try:
+        rules = await guild.fetch_automod_rules()
+        managed = next(
+            (rule for rule in rules if rule.name == _NATIVE_AUTOMOD_RULE_NAME),
+            None,
+        )
+        if managed is None:
+            await guild.create_automod_rule(
+                name=_NATIVE_AUTOMOD_RULE_NAME,
+                event_type=discord.AutoModRuleEventType.message_send,
+                trigger=trigger,
+                actions=actions,
+                enabled=True,
+                reason="Sync owaua configured blocked phrases",
+            )
+        else:
+            await managed.edit(
+                name=_NATIVE_AUTOMOD_RULE_NAME,
+                event_type=discord.AutoModRuleEventType.message_send,
+                trigger=trigger,
+                actions=actions,
+                enabled=True,
+                reason="Sync owaua configured blocked phrases",
+            )
+        return True
+    except (discord.Forbidden, discord.HTTPException):
+        log.warning("could not sync native AutoMod for guild %s", guild.id, exc_info=True)
+        return False
 
 
 async def _slowmode(message: discord.Message) -> bool:

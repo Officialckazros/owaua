@@ -132,10 +132,9 @@ Dashboard-enabled community commands (available only when their module is on):
                          default for people who haven't picked their own.
                          Prefix alias: `!lang`  (slash: `/language`)
 
-!ckazros <anything>      Owner-only. Does whatever you ask. Standing orders
-                         (example: `!ckazros speak in hebrew from now`) apply
-                         to every later reply until `!ckazros clear`.
-                         `!ckazros` / `status` lists orders; `undo` pops last.
+!ckazros <anything>      Owner-only. Handles one request at a time; requests
+                         never apply to later replies. `!ckazros` / `status`
+                         lists retired legacy orders; `undo`/`clear` remove them.
                          (also: slash `/ckazros`)
 
 Normal @mentions / DMs stay full owaua. Only the !assistant command

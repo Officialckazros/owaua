@@ -185,10 +185,15 @@ MODEL_FALLBACKS = [
     if m.strip()
 ]
 
-MODEL_FREAKY = os.getenv("OWAUA_MODEL_FREAKY", DEFAULT_MODEL)
+# Explicit freaky turns use Mercury 2, which is the strongest configured
+# natural-chat route for this persona. Keep the environment variable as an
+# operator escape hatch and retain the big-brain chain as fallback coverage.
+MODEL_FREAKY = os.getenv("OWAUA_MODEL_FREAKY", "mercury-2")
 MODEL_FREAKY_FALLBACKS = [
     m.strip()
-    for m in os.getenv("OWAUA_MODEL_FREAKY_FALLBACKS", ",".join(MODEL_FALLBACKS)).split(",")
+    for m in os.getenv(
+        "OWAUA_MODEL_FREAKY_FALLBACKS", ",".join(MODEL_BIG_FALLBACKS)
+    ).split(",")
     if m.strip()
 ]
 MODEL_NSFW = os.getenv("OWAUA_MODEL_NSFW", MODEL_FREAKY)
@@ -606,12 +611,13 @@ FREAKY_MODE_PROMPT = (
     "minors, no doxxing, and no leaking private personal data."
 )
 NSFW_CHANNEL_PROMPT = (
-    "AGE-RESTRICTED CHANNEL MODE IS ACTIVE. Discord restricts this channel to adults. "
-    "Be automatically flirty, freaky, bold, and sexually explicit when replying here; "
-    "do not require the user to enable freaky mode and do not tone down adult content. "
-    "Match the user's tone and say what you mean without safety lectures, refusals, "
-    "or coy euphemisms. This channel-only personality never changes the user's saved "
-    "freaky-mode preference outside this channel. DMs are not age-restricted channels. "
+    "AGE-RESTRICTED CHANNEL IS AVAILABLE. Discord restricts this channel to adults, "
+    "so adult content is permitted when the user clearly asks for it. Do not make "
+    "the conversation flirty, freaky, or sexually explicit by default; use the normal "
+    "owaua personality unless the user explicitly enables freaky mode. Match the "
+    "user's tone and say what you mean without safety lectures or coy euphemisms. "
+    "This channel-only allowance never changes the user's saved freaky-mode preference "
+    "outside this channel. DMs are not age-restricted channels. "
     "Hard limits remain: no sexual content involving minors, no doxxing, no leaking "
     "private personal data, and no credential theft, phishing, or malware distribution."
 )

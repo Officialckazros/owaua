@@ -646,9 +646,9 @@ async def _generate_reply(
             fallbacks=None
             if assistant
             else (
-                config.MODEL_NSFW_FALLBACKS
-                if channel_nsfw
-                else (config.MODEL_FREAKY_FALLBACKS if freaky else None)
+                config.MODEL_FREAKY_FALLBACKS
+                if freaky
+                else (config.MODEL_NSFW_FALLBACKS if channel_nsfw else None)
             ),
             schema="brain_response",
             task="assistant" if assistant else "chat",
@@ -694,9 +694,9 @@ async def _generate_reply(
                 fallbacks=None
                 if assistant
                 else (
-                    config.MODEL_NSFW_FALLBACKS
-                    if channel_nsfw
-                    else (config.MODEL_FREAKY_FALLBACKS if freaky else None)
+                    config.MODEL_FREAKY_FALLBACKS
+                    if freaky
+                    else (config.MODEL_NSFW_FALLBACKS if channel_nsfw else None)
                 ),
                 task="assistant" if assistant else "chat",
                 scope_id=guild_id,
@@ -1675,9 +1675,9 @@ def setup(
 
     @tree.command(
         name="ckazros",
-        description="Owner-only: do anything asked. Standing orders stick.",
+        description="Owner-only: handle one request at a time.",
     )
-    @app_commands.describe(request="what to do (omit for status; 'clear' wipes standing orders)")
+    @app_commands.describe(request="what to do (omit for status; 'clear' erases legacy orders)")
     @anywhere
     async def ckazros_cmd(interaction: discord.Interaction, request: Optional[str] = None):
         author = str(interaction.user.id)
@@ -1859,18 +1859,18 @@ def setup(
             )
             return
         if low in ("freaky", "mommy", "horny", "sexy"):
-            brain.set_freaky_mode(author, False)
             if interaction.guild is not None and rule34.is_age_restricted_channel(
                 interaction.channel
             ):
+                brain.set_freaky_mode(author, True)
                 await interaction.response.send_message(
                     embed=embeds.ok(
-                        "this channel is Discord age-restricted, so freaky behavior is "
-                        "already active automatically here; no saved setting is needed."
+                        "freaky mommy mode enabled for you in this age-restricted channel."
                     ),
                     ephemeral=True,
                 )
                 return
+            brain.set_freaky_mode(author, False)
             await interaction.response.send_message(
                 embed=embeds.error(
                     "that saved persona option is unavailable; age-restricted behavior "
@@ -3737,7 +3737,7 @@ def setup(
             "`/ask workflow:<type>` — 41 read-only workflows for writing, study, planning, risk, privacy, security, incidents and grounded fact checks\n"
             "Message menu `Apps` — summarize, explain, extract action items or fact-check one message\n"
             "`/assistant` — one-shot helpful mode (roles etc.); normal chat stays owaua\n"
-            "`/ckazros` — owner-only do-anything; standing orders (e.g. speak Hebrew) stick\n"
+            "`/ckazros` — owner-only, one request at a time\n"
             "`/language` — set the language I reply in (`/language hebrew`)\n"
             "`/music` — returns a safe YouTube search/watch link\n"
             "`/teach` — give me a fact (optionally about someone)\n"

@@ -84,9 +84,8 @@ MODES
   proposal; it is never performed before confirmation. `{p}assistant undo` or
   `/assistant request:undo` reverts the latest reversible confirmed action in
   that server after another confirmation. Next mention is normal owaua.
-- `{p}ckazros` / `/ckazros`: owner-only. Does whatever the owner asks. Standing
-  orders ("speak in Hebrew from now") apply to every later reply until
-  `{p}ckazros clear`. Hard limits still apply.
+- `{p}ckazros` / `/ckazros`: owner-only, one request at a time. Requests never
+  become standing instructions for later replies. Hard limits still apply.
 - `{p}language` / `/language` (`{p}lang` prefix alias only): set a personal/DM language.
   `{p}language hebrew`. `{p}language reset` clears it. Manage-server can use
   `{p}language server <name>` to change the entire guild authoritatively.

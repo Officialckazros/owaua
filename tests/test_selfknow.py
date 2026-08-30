@@ -205,6 +205,14 @@ class CodeLeakIntentTest(unittest.TestCase):
 
 
 class CodeDumpScrubTest(unittest.TestCase):
+    def test_instruction_stack_explanation_is_scrubbed(self) -> None:
+        leaked = (
+            "We have a conflict: the system messages include a developer message. "
+            "Later orders win on conflict, so I must obey the owner instructions."
+        )
+        self.assertTrue(brain.prompt_leaked(leaked))
+        self.assertEqual(brain.prompt_leak_reply(), brain.scrub_ai_output(leaked))
+
     def test_real_source_snippets_are_scrubbed(self) -> None:
         brain_src = Path("src/owaua/brain.py").read_text(encoding="utf-8")
         snippet = "def persist_memories("
