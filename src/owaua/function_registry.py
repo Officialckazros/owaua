@@ -182,8 +182,6 @@ def _hierarchy_ok(ctx: ActionContext, target: discord.Member) -> Optional[str]:
         return _error("can't moderate the server owner.")
     if target.id == ctx.actor.id:
         return _error("you can't moderate yourself.")
-    # Discord's administrator permission does not bypass role hierarchy.  Only
-    # the guild owner may act on a member whose top role is equal or higher.
     if ctx.actor.id != ctx.guild.owner_id and ctx.actor.top_role <= target.top_role:
         return _error(f"your top role is not high enough to moderate {target.display_name}.")
     bot_member = ctx.bot_member or ctx.guild.me

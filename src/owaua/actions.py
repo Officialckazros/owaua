@@ -228,7 +228,6 @@ def assistant_proposals(raw_actions: object) -> List[dict[typing.Any, typing.Any
     proposals: List[dict[typing.Any, typing.Any]] = []
     created_role_names: dict[str, str] = {}
     for candidate in candidates:
-        # Do not permit a model to manufacture internal execution metadata.
         proposal: typing.Any = {
             key: value for key, value in candidate.items() if not str(key).startswith("_assistant_")
         }
@@ -1377,7 +1376,7 @@ async def execute_all(
         except discord.Forbidden:
             act_name: typing.Any = a.get("type") or a.get("action") or "action"
             line = f"blocked: I lack permission or role position for `{act_name}`"
-        except Exception:  # noqa: BLE001 - action boundary must fail closed
+        except Exception:  # noqa: BLE001
             act_name: typing.Any = a.get("type") or a.get("action") or "action"
             log.exception("confirmed action %s failed", act_name)
             line = f"failed `{act_name}`; check the bot logs with the request id"
@@ -1595,9 +1594,6 @@ async def _one(
             mentionable=a.get("mentionable") is True,
             reason=reason,
         )
-        # This is runtime-only metadata for a later, separately confirmed
-        # assignment from the same ordered assistant batch.  It never comes
-        # from model output and cannot select a pre-existing role by name.
         a["_assistant_created_role_id"] = str(role.id)
         return f"created role {role.name}"
 

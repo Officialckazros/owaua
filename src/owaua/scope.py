@@ -36,8 +36,6 @@ class Scope:
 
     @classmethod
     def dm(cls, user_id: object) -> "Scope":
-        # DMs are intentionally user-scoped.  Group/private-channel installs
-        # therefore cannot expose another participant's memory.
         return cls("dm", str(user_id))
 
     @classmethod

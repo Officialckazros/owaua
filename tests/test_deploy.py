@@ -12,7 +12,7 @@ from unittest import mock
 DEPLOY_PATH = Path(__file__).resolve().parents[1] / "scripts" / "deploy"
 LOADER = importlib.machinery.SourceFileLoader("owaua_deploy_test_module", str(DEPLOY_PATH))
 SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
-if SPEC is None:  # pragma: no cover - importlib invariant
+if SPEC is None:  # pragma: no cover
     raise RuntimeError("could not load deployment script")
 deploy_script = importlib.util.module_from_spec(SPEC)
 LOADER.exec_module(deploy_script)

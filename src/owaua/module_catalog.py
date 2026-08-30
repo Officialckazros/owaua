@@ -620,10 +620,6 @@ MODULES: Final[dict[str, dict[typing.Any, typing.Any]]] = {
 }
 
 
-# Core settings predate the module catalog and are read directly by the AI,
-# privacy, rules, moderation and voice runtimes.  Keeping their public editor
-# metadata and validation here gives the dashboard one complete, allow-listed
-# surface instead of accepting arbitrary guild_settings keys.
 SERVER_SETTINGS: Final[dict[str, dict[typing.Any, typing.Any]]] = {
     "persona": {
         "label": "AI persona",

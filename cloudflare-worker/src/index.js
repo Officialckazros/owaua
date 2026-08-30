@@ -1,4 +1,3 @@
-// This is the app's Daki allocation, not the Daki control-panel origin.
 const DEFAULT_ORIGIN = "http://paid5.daki.cc:4204";
 const ALLOWED_ORIGINS = new Set([DEFAULT_ORIGIN]);
 const PUBLIC_HOSTS = new Set(["wearegays.net", "www.wearegays.net"]);
@@ -234,7 +233,6 @@ async function proxiedResponse(path, upstream, target, publicUrl, method) {
         );
       }
     } catch {
-      // A malformed redirect is deliberately omitted.
     }
   }
 

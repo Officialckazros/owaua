@@ -524,9 +524,6 @@ def persist_memories(
             continue
         if not freaky_enabled(author) and is_pet_name_memory(content):
             continue
-        # Model output may not assign content to another person or promote a
-        # chat snippet into a guild-wide fact. Explicit /teach handles those
-        # higher-authority cases.
         subject = db.normalize_subject(author, default_user=author)
         try:
             importance = float(typing.cast(typing.Any, it).get("importance", 0.5))
@@ -954,10 +951,6 @@ def scrub_ai_output(
     raw = (text or "").strip() if text is not None else ""
     if any_prompt_leaked(raw, *extra):
         return prompt_leak_reply(assistant)
-    # Top.gg requires controlled-substance content to be absent and adult
-    # content to stay inside Discord-marked age-restricted channels. Fail
-    # closed even if a provider ignores the system prompt or an administrator
-    # configured an unsafe custom persona.
     if _PROHIBITED_SUBSTANCE_OUTPUT_RE.search(raw):
         return _TOPGG_CONTENT_BLOCK_REPLY
     adult = bool(_ADULT_OUTPUT_RE.search(raw))

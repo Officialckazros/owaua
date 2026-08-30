@@ -183,7 +183,7 @@ async def translate_many(
             prompt_version="localization-v2",
         )
         translated = _json_object(raw)
-    except Exception as error:  # translation must never prevent a reply
+    except Exception as error:
         log.warning("language-pack translation failed: %s", type(error).__name__)
         translated = None
     if translated is None:
@@ -291,7 +291,6 @@ class Language:
         return self.name
 
 
-# code, English name, native name, extra aliases
 _CATALOG_ROWS: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
     ("en", "English", "English", ("eng", "en-us", "en-gb", "american", "british")),
     ("es", "Spanish", "español", ("espanol", "castilian", "castellano")),

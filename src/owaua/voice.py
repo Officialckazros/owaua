@@ -48,7 +48,6 @@ _SAMPLE_RATE = 48000
 _CHANNELS = 2
 _SAMPLE_WIDTH = 2
 _BYTES_PER_SECOND = _SAMPLE_RATE * _CHANNELS * _SAMPLE_WIDTH
-# Groq's current Orpheus endpoint accepts a maximum of 200 input characters.
 _MAX_TTS_CHARACTERS = 200
 _MAX_TTS_AUDIO_BYTES = 10 * 1024 * 1024
 _MAX_STT_AUDIO_BYTES = 4 * 1024 * 1024
@@ -119,8 +118,6 @@ def set_stt_consent(user_id: int, guild_id: int, enabled: bool) -> None:
         "1" if enabled else "0",
     )
     if not enabled:
-        # Revocation takes effect immediately for existing sessions, including
-        # the controller whose /stt invocation was session-only consent.
         for session in list(_stt_sessions.values()):
             if session.guild_id == int(guild_id) and numeric_id in session.consenting_user_ids:
                 _request_session_stop(session, announce=True)
@@ -463,7 +460,6 @@ def _session_is_authorized(session: SttSession, vc: typing.Any) -> bool:
     if not _destination_is_usable(session.channel, vc.guild):
         return False
     for participant in participants:
-        # Invoking /stt is explicit consent for the controller for this session.
         if participant.id != session.controller_id and not has_stt_consent(
             participant.id, session.guild_id
         ):
@@ -502,8 +498,6 @@ async def _stt_worker(session: SttSession, vc: typing.Any) -> None:
                     scope_id=Scope.guild(session.guild_id).key,
                     user_id=str(uid),
                 )
-                # Consent, membership, feature flags, and destination access can
-                # all change while the provider request is in flight.
                 if not _session_is_authorized(session, vc):
                     continue
                 text = discord.utils.escape_markdown(
@@ -830,8 +824,6 @@ async def _toggle_stt_locked(interaction: discord.Interaction) -> Tuple[bool, st
     if member.id not in participant_ids:
         return False, "join the voice channel before starting transcription."
 
-    # Reserve the guild slot before the first connection/notice await. Consent
-    # revocation and guild disable hooks can now cancel even a starting session.
     session = SttSession(
         guild.id,
         destination,
@@ -866,7 +858,6 @@ async def _toggle_stt_locked(interaction: discord.Interaction) -> Tuple[bool, st
                 await typing.cast(typing.Any, vc).disconnect()
         return False, "already connected with a non-recv voice client — /leave first."
 
-    # The status notice must be visible before any capture begins.
     try:
         notice: typing.Any = await typing.cast(typing.Any, destination).send(
             f"🎙️ **Live transcription is starting** in **{voice_channel.name}** by "
@@ -884,8 +875,6 @@ async def _toggle_stt_locked(interaction: discord.Interaction) -> Tuple[bool, st
                 await typing.cast(typing.Any, vc).disconnect()
         return False, "couldn't post the recording notice; transcription was not started."
 
-    # Recheck everyone after the notice/network await. Anyone joining, leaving,
-    # revoking consent, or losing transcript visibility cancels startup.
     participants = _human_participants(voice_channel)
     participant_ids = {participant.id for participant in participants}
     startup_valid = bool(

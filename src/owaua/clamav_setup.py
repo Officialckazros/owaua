@@ -53,7 +53,7 @@ def _download_package(destination: Path) -> None:
     partial = destination.with_suffix(".part")
     digest = hashlib.sha256()
     received = 0
-    request = urllib.request.Request(  # noqa: S310 - pinned HTTPS URL and SHA-256
+    request = urllib.request.Request(  # noqa: S310
         _PACKAGE_URL,
         headers={"Accept": "application/octet-stream", "User-Agent": "owaua-clamav-setup/1"},
     )
@@ -93,7 +93,7 @@ def _install_engine() -> None:
     _download_package(package)
     config.MALWARE_CLAMAV_ROOT.mkdir(parents=True, exist_ok=True)
     try:
-        subprocess.run(  # noqa: S603 - fixed extractor, package, and destination
+        subprocess.run(  # noqa: S603
             [extractor, "--extract", str(package), str(config.MALWARE_CLAMAV_ROOT)],
             check=True,
             timeout=180,
@@ -235,7 +235,7 @@ def main() -> int:
         _write_configuration()
         _update_database()
         _start_daemon()
-    except Exception as error:  # noqa: BLE001 - startup must emit one actionable failure
+    except Exception as error:  # noqa: BLE001
         print(f"[malware] ClamAV setup failed: {error}", file=sys.stderr)
         return 1
     print(f"[malware] ClamAV {_VERSION} installed, updated, and running locally")

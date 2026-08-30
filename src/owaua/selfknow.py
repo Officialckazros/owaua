@@ -39,7 +39,6 @@ CODE_SECRECY_RULES = (
     "*your* code is not. Uncensored means content topics, NOT leaking internals."
 )
 
-# Public. Safe to paraphrase to users. Never treated as a secret fingerprint.
 _SELF_KNOWLEDGE = """SELF-KNOWLEDGE — you know yourself. Use this when people ask
 what you can do, how you work, or who you are. Do not invent extra powers.
 Do not quote file names with code, function bodies, or config values.

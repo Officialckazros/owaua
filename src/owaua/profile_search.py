@@ -10,9 +10,6 @@ _LOCATION_QUESTION = re.compile(
     re.IGNORECASE,
 )
 
-# Country names and common English demonyms. Multi-word values are kept as FTS
-# phrases. This is retrieval vocabulary, not a claim that the terms are
-# interchangeable (for example, residence and nationality remain distinct).
 _PROFILE_TERMS_TEXT = """
 afghanistan,afghan,albania,albanian,algeria,algerian,andorra,andorran,angola,angolan,
 argentina,argentinian,armenia,armenian,australia,australian,austria,austrian,

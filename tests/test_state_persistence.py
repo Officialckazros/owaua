@@ -62,7 +62,6 @@ class StatePersistenceTest(unittest.TestCase):
         self.assertEqual(entries["456"]["source"], "tos")
         self.assertEqual(stat.S_IMODE(self.blocks.stat().st_mode), 0o600)
 
-        # The legacy file is no longer authoritative after its marker commits.
         self._write_json(
             self.blocks,
             {"users": {"999": {"reason": "must not be imported later"}}},
@@ -165,7 +164,7 @@ class StatePersistenceTest(unittest.TestCase):
                 }
             }
         )
-        dm.save_contacts(load)  # stale in-memory shell snapshot
+        dm.save_contacts(load)
         self.assertEqual(dm.load_contacts()["101"]["name"], "new name")
 
         self._write_json(

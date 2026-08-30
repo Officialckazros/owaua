@@ -121,7 +121,6 @@ async def fetch_context(query: str, guild: typing.Any, requester: typing.Any = N
     if requester_perms is None or not (
         requester_perms.view_audit_log or requester_perms.administrator
     ):
-        # Do not even call Discord's audit-log API for an unauthorized user.
         return ""
     me = getattr(guild, "me", None)
     perms = getattr(me, "guild_permissions", None) if me is not None else None

@@ -337,7 +337,6 @@ def check_request_budget(scope_id: str | None, task: str, *, user_id: str | None
     with _usage_lock:
         _cleanup_usage_maps(now_value)
 
-        # 1. Global Checks
         glob_min = _usage.setdefault(("global", "*"), collections.deque())
         _prune_times(glob_min, now_value, 60.0)
         if len(glob_min) >= host_min_limit:
@@ -353,14 +352,12 @@ def check_request_budget(scope_id: str | None, task: str, *, user_id: str | None
         if len(glob_day) >= host_day_limit:
             raise _budget_error(glob_day, now_value, 86400.0)
 
-        # 2. Scope Checks
         if scope:
             sc_min = _usage.setdefault(("scope", scope), collections.deque())
             _prune_times(sc_min, now_value, 60.0)
             if len(sc_min) >= scope_limit if (scope_limit := scope_min_limit) else host_min_limit:
                 raise _budget_error(sc_min, now_value, 60.0)
 
-        # 3. User Checks (exempt bot owner)
         if user and not is_owner:
             u_min = _usage.setdefault(("user", user), collections.deque())
             _prune_times(u_min, now_value, 60.0)
@@ -436,7 +433,6 @@ def reserve_provider_attempt(
         if len(_provider_attempts) >= host_attempt_limit:
             raise _budget_error(_provider_attempts, now_value, 60.0)
 
-        # 1. Global Token Checks
         g_min_tokens = _token_usage.setdefault(("global", "*"), collections.deque())
         _prune_tokens(g_min_tokens, now_value, 60.0)
         if sum(cost for _t, cost in g_min_tokens) + token_cost > host_token_min_limit:
@@ -452,14 +448,12 @@ def reserve_provider_attempt(
         if sum(cost for _t, cost in g_day_tokens) + token_cost > host_token_day_limit:
             raise _budget_error(g_day_tokens, now_value, 86400.0)
 
-        # 2. Scope Token Checks
         if scope:
             sc_tokens = _token_usage.setdefault(("scope", scope), collections.deque())
             _prune_tokens(sc_tokens, now_value, 60.0)
             if sum(cost for _t, cost in sc_tokens) + token_cost > scope_token_min_limit:
                 raise _budget_error(sc_tokens, now_value, 60.0)
 
-        # 3. User Token Checks (exempt bot owner)
         if user and not is_owner:
             u_min_tokens = _token_usage.setdefault(("user", user), collections.deque())
             _prune_tokens(u_min_tokens, now_value, 60.0)
@@ -523,7 +517,7 @@ def check_search_budget(user_id: str | None) -> None:
     if not uid or config.is_bot_owner(uid):
         return
     now_val = time.monotonic()
-    window = 300.0  # 5 minutes
+    window = 300.0
     limit = max(1, int(getattr(config, "AI_SEARCH_REQUESTS_PER_WINDOW", 4)))
     with _tool_usage_lock:
         bucket = _search_usage.setdefault(uid, collections.deque())
@@ -542,7 +536,7 @@ def check_tts_budget(user_id: str | None) -> None:
     if not uid or config.is_bot_owner(uid):
         return
     now_val = time.monotonic()
-    window = 300.0  # 5 minutes
+    window = 300.0
     limit = max(1, int(getattr(config, "AI_TTS_REQUESTS_PER_WINDOW", 3)))
     with _tool_usage_lock:
         bucket = _tts_usage.setdefault(uid, collections.deque())
@@ -599,8 +593,6 @@ def estimate_chat_tokens(system: str, messages: object) -> int:
         if isinstance(value, dict):
             part_type = str(typing.cast(typing.Any, value).get("type") or "")
             if part_type in {"image_url", "input_image", "image"}:
-                # Conservative fixed reservation for provider image tokenization;
-                # the encoded transport bytes themselves are not prompt tokens.
                 return 2_000
             if "content" in value:
                 return _parts(typing.cast(typing.Any, value).get("content")) + estimate_tokens(
@@ -706,7 +698,6 @@ def finish_trace(
             error_type=type(error).__name__[:80] if error is not None else "",
         )
     except Exception:
-        # Observability can never make a user-facing AI request fail.
         return
 
 

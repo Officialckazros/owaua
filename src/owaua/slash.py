@@ -60,9 +60,6 @@ UP, DOWN = "\U0001f44d", "\U0001f44e"
 
 _track: Optional[Callable[..., typing.Any]] = None
 
-# A deferred interaction otherwise remains as Discord's "owaua is thinking"
-# indicator until its token expires. Keep enough room for normal AI and API
-# work, but always turn a stalled command into a visible, actionable result.
 _COMMAND_TIMEOUT_SECONDS = 90.0
 
 
@@ -763,7 +760,6 @@ async def _generate_reply(
 
     flag = data.get("tos_violation") or data.get("tos_flag") or data.get("policy_violation")
     if flag:
-        # Model classifications are advisory and can never globally block a user.
         print(f"[tos] advisory model flag ignored for enforcement ({author})")
 
     if assistant:
@@ -790,7 +786,6 @@ async def _generate_reply(
             name=f"conversation-summary:{author}:{guild_id}",
         )
 
-    # Ordinary chat never executes model-emitted Discord actions.
     summaries: list[str] = []
     image = actions.chart_url(data.get("chart")) if data.get("chart") else None
 
@@ -933,8 +928,6 @@ class _BlockingTree(app_commands.CommandTree):
         privacy_safe = name in {"privacy", "tos", "terms", "help", "about", "status"}
 
         if config.is_blocked(uid) and not privacy_safe:
-            # Privacy/legal escape hatches remain available to blocked users.
-            # In particular, /privacy export and /privacy delete must stay reachable.
             try:
                 msg = "you are blocked from using this bot."
                 if interaction.response.is_done():
@@ -3646,9 +3639,6 @@ def setup(
     async def profile_cmd(interaction: discord.Interaction, user: Optional[discord.User] = None):
         target = user or interaction.user
         fetched = target
-        # Discord only includes banner/accent data in a fetched user object. Keep
-        # the resolved Member as the display source so server avatars and roles
-        # are not lost in guild interactions.
         try:
             fetched = await interaction.client.fetch_user(target.id)
         except (discord.Forbidden, discord.HTTPException, discord.NotFound):

@@ -76,8 +76,6 @@ def _mod_log_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
     except Exception:
         log.exception("could not read mod-log settings for guild %s", guild.id)
 
-    # The environment value remains a compatibility fallback, but resolution is
-    # guild-local and still requires a private channel.
     candidates = [configured, str(getattr(config, "MODLOG_CHANNEL", "") or "").strip()]
     for raw_id in candidates:
         if not raw_id.isdigit():
@@ -258,8 +256,6 @@ class ModerationReviewView(discord.ui.View):
                 )
                 return
 
-            # The lock serializes all click handlers. Consume immediately after
-            # fresh authorization, before fetching or mutating the source message.
             self._done = True
             _pending_reviews.pop(self.review.message_id, None)
             for child in self.children:
@@ -405,8 +401,6 @@ async def safety_check(message: discord.Message) -> None:
         return
     mod_channel = await _fresh_private_staff_channel(message.guild, _mod_log_channel(message.guild))
     if mod_channel is None:
-        # Never send content to a classifier when there is nowhere private for
-        # a human to review the result.
         return
     if getattr(message.author, "bot", False):
         return

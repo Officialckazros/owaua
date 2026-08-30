@@ -88,11 +88,8 @@ class AbuseHardeningTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(config, "AI_USER_REQUESTS_PER_HOUR", 3),
             mock.patch.object(config, "AI_USER_REQUESTS_PER_DAY", 4),
         ):
-            # 1st request ok
             ai_control.check_request_budget("guild:1", "chat", user_id="123")
-            # 2nd request ok
             ai_control.check_request_budget("guild:1", "chat", user_id="123")
-            # 3rd request in same minute fails minute budget
             with self.assertRaises(ai_control.AIBudgetExceeded):
                 ai_control.check_request_budget("guild:1", "chat", user_id="123")
 
@@ -119,13 +116,11 @@ class AbuseHardeningTests(unittest.IsolatedAsyncioTestCase):
     async def test_user_in_flight_concurrency_guard(self) -> None:
         """Verify user cannot run multiple AI requests in parallel."""
         async with ai_control.user_ai_guard("user1"):
-            # Second attempt while in flight must raise
             with self.assertRaises(ai_control.AIBudgetExceeded) as ctx:
                 async with ai_control.user_ai_guard("user1"):
                     pass
             self.assertIn("already have an AI request processing", str(ctx.exception))
 
-        # Once first turn finishes, next turn succeeds
         async with ai_control.user_ai_guard("user1"):
             pass
 
@@ -160,11 +155,9 @@ class AbuseHardeningTests(unittest.IsolatedAsyncioTestCase):
     def test_tos_hammer_spam_quarantine_and_escalation(self) -> None:
         """Verify rapid hammer spam triggers quarantine and strike escalation."""
         uid = "7777"
-        # Exhaust standard rate limit
         for _ in range(5):
             tos.rate_limit_retry_after(uid)
 
-        # Further rapid attempts trigger quarantine
         retry = 0.0
         for _ in range(6):
             retry = tos.rate_limit_retry_after(uid)

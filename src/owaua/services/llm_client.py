@@ -719,9 +719,6 @@ class LLMClient:
         ai_control.check_request_budget(scope_id, "speech", user_id=user_id)
         payload = {
             "model": model,
-            # Groq's current Orpheus API accepts at most 200 characters.
-            # Callers validate this too; retaining the bound here prevents a
-            # future caller from submitting an invalid provider request.
             "input": text[:200],
             "voice": voice,
             "response_format": response_format,

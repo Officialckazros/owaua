@@ -100,9 +100,6 @@ INFERX_BASE_URL = (os.getenv("INFERX_BASE_URL") or "https://model.inferx.net/end
     "/"
 )
 
-# DeepSeek exposes the current 0731 checkpoint through this stable API id.
-# Dated display/version names such as ``deepseek-v4-flash-0731`` are not valid
-# request ids on the official API and are migrated below for compatibility.
 OFFICIAL_DEEPSEEK_MODEL = "deepseek-v4-flash"
 OFFICIAL_DEEPSEEK_MODEL_VERSION = "DeepSeek-V4-Flash-0731"
 _configured_deepseek_model = (os.getenv("DEEPSEEK_MODEL") or OFFICIAL_DEEPSEEK_MODEL).strip()
@@ -188,9 +185,6 @@ MODEL_FALLBACKS = [
     if m.strip()
 ]
 
-# Adult-only Discord channels have a dedicated host-configurable route.  Keep this
-# server-side so a guild model preference can never accidentally select a safety
-# model for a channel Discord has already marked age-restricted.
 MODEL_FREAKY = os.getenv("OWAUA_MODEL_FREAKY", DEFAULT_MODEL)
 MODEL_FREAKY_FALLBACKS = [
     m.strip()
@@ -204,9 +198,6 @@ MODEL_NSFW_FALLBACKS = [
     if m.strip()
 ]
 
-# Live Groq *chat* models from GET /openai/v1/models. Speech, transcription,
-# and prompt-guard endpoints cannot run the Discord brain, so they stay out
-# of /model. Llama 3.3 70B Versatile and Llama 3.1 8B Instant were shut down.
 GROQ_DEFAULT = "openai/gpt-oss-120b"
 GROQ_CHAT_MODELS = (
     ("openai/gpt-oss-120b", "Groq GPT-OSS 120B"),
@@ -219,7 +210,6 @@ GROQ_CHAT_MODELS = (
 )
 
 MODEL_SWITCHER = {
-    # Keep old picker/database values as migrations onto the official API.
     "inferx": DEFAULT_MODEL,
     "ix": DEFAULT_MODEL,
     "ix:deepseek-v4-flash": DEFAULT_MODEL,
@@ -250,7 +240,6 @@ MODEL_SWITCHER = {
     "allam": "allam-2-7b",
     "safeguard": "openai/gpt-oss-safeguard-20b",
     "safety": "openai/gpt-oss-safeguard-20b",
-    # Shut down on Groq 2026-08-16; map old picker values onto the replacement.
     "llama": GROQ_DEFAULT,
     "llama3": GROQ_DEFAULT,
     "llama-3.3": GROQ_DEFAULT,
@@ -292,8 +281,6 @@ def model_display(model: str) -> str:
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
-# Optional credentials for the age-restricted Rule34 image command. The API
-# requires both values; leaving either blank keeps the command safely disabled.
 RULE34_USER_ID = (os.getenv("OWAUA_RULE34_USER_ID") or "").strip()
 RULE34_API_KEY = (os.getenv("OWAUA_RULE34_API_KEY") or "").strip()
 MODEL = MODEL_SMART
@@ -311,8 +298,6 @@ DB_PATH = os.getenv("OWAUA_DB", _DEFAULT_DB_PATH)
 
 OWNER_ID = (os.getenv("OWAUA_OWNER_ID") or "").strip()
 
-# Static blocks are deployment configuration. Keep the public source neutral;
-# the transactional block store still works when this list is empty.
 _BLOCKED_DEFAULT: tuple[str, ...] = ()
 BLOCKED_USER_IDS = {
     x.strip()
@@ -365,9 +350,6 @@ KB_TOPK = _int("OWAUA_KB_TOPK", 6)
 CHANNEL_CONTEXT = _int("OWAUA_CHANNEL_CONTEXT", 10)
 CONVO_TURNS = _int("OWAUA_CONVO_TURNS", 20)
 MEMORY_SOFT_CAP = _int("OWAUA_MEMORY_SOFT_CAP", 200)
-# Guilds in this explicit allowlist keep a text-only, permanent archive.  This
-# is intentionally deployment configuration rather than a dashboard toggle:
-# enabling it changes the guild's privacy and retention contract.
 ARCHIVE_GUILD_IDS = frozenset(
     guild_id.strip()
     for guild_id in os.getenv("OWAUA_ARCHIVE_GUILD_IDS", "").split(",")
@@ -380,7 +362,6 @@ EMBED_COLOR = int(os.getenv("OWAUA_EMBED_COLOR", "0x5865F2"), 0)
 
 AI_MAX_CONCURRENCY = max(1, min(4, _int("OWAUA_AI_MAX_CONCURRENCY", 4)))
 AI_USER_MAX_CONCURRENCY = max(1, min(2, _int("OWAUA_AI_USER_MAX_CONCURRENCY", 1)))
-# Host hard ceilings. Guild dashboard values may only lower these limits.
 AI_REQUESTS_PER_MINUTE = max(1, min(60, _int("OWAUA_AI_REQUESTS_PER_MINUTE", 60)))
 AI_USER_REQUESTS_PER_MINUTE = max(1, min(6, _int("OWAUA_AI_USER_REQUESTS_PER_MINUTE", 6)))
 AI_REQUESTS_PER_HOUR = max(10, min(5_000, _int("OWAUA_AI_REQUESTS_PER_HOUR", 1_000)))
@@ -436,16 +417,10 @@ SAFETY_BASE_URL = (os.getenv("OWAUA_SAFETY_BASE_URL") or "https://openrouter.ai/
 SAFETY_API_KEY = (os.getenv("OWAUA_SAFETY_API_KEY") or OPENROUTER_API_KEY).strip()
 MULTILINGUAL_MODEL = os.getenv("OWAUA_MULTILINGUAL_MODEL", "openai/gpt-oss-20b")
 WHISPER_MODEL = os.getenv("OWAUA_WHISPER_MODEL", "whisper-large-v3-turbo")
-# Groq retired the original Orpheus preview model and its ``tara`` voice.
-# Keep these aligned with the supported Groq speech endpoint defaults so a
-# standard deployment can use /say without an extra environment override.
 _LEGACY_TTS_MODEL = "orpheus-3-0.1b-ft"
 _GROQ_ORPHEUS_ENGLISH_MODEL = "canopylabs/orpheus-v1-english"
 TTS_MODEL = os.getenv("OWAUA_TTS_MODEL", _GROQ_ORPHEUS_ENGLISH_MODEL)
 TTS_VOICE = os.getenv("OWAUA_TTS_VOICE", "troy")
-# Existing deployments may still have the retired defaults stored as environment
-# variables. Translate only that known-invalid pair; explicit supported custom
-# values remain untouched.
 if TTS_MODEL == _LEGACY_TTS_MODEL:
     TTS_MODEL = _GROQ_ORPHEUS_ENGLISH_MODEL
     if TTS_VOICE == "tara":
@@ -469,7 +444,7 @@ RULES_LLM_MODEL = os.getenv("OWAUA_RULES_LLM_MODEL", SAFETY_MODEL)
 
 SYNC_COMMANDS = _bool("OWAUA_SYNC_COMMANDS", False)
 ALLOW_LOCAL_ENDPOINTS = _bool("OWAUA_ALLOW_LOCAL_ENDPOINTS", False)
-WEB_HOST = (os.getenv("OWAUA_WEB_HOST") or "0.0.0.0").strip()  # noqa: S104 - container bind
+WEB_HOST = (os.getenv("OWAUA_WEB_HOST") or "0.0.0.0").strip()  # noqa: S104
 
 
 def _web_port() -> int:

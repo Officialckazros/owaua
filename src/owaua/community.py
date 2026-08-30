@@ -857,8 +857,6 @@ async def _log_media_files(message: discord.Message) -> list[discord.File]:
         try:
             files.append(await attachment.to_file(use_cached=True))
         except (discord.HTTPException, OSError, ValueError):
-            # Preserve the normal attachment link even if Discord's CDN has
-            # already expired or a media download cannot be relayed.
             continue
     return files
 
@@ -1196,8 +1194,6 @@ async def _log(
     embed.set_footer(text=" • ".join(footer)[:2048])
     posted = await _safe_send(destination, embed=embeds.fit_total(embed), files=files)
     if posted is None and files:
-        # A relay can fail for an expired CDN object or Discord upload limit.
-        # The audit event itself must still be recorded with its safe file links.
         await _safe_send(destination, embed=embeds.fit_total(embed))
 
 

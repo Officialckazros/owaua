@@ -589,10 +589,9 @@ def _gemini_generate(
             f"{safe_model}:generateContent?{query}"
         )
         try:
-            req = urllib.request.Request(  # noqa: S310 -- fixed HTTPS provider host
+            req = urllib.request.Request(  # noqa: S310
                 url, data=data, headers={"Content-Type": "application/json"}
             )
-            # The host and scheme above are fixed; only encoded path/query values vary.
             with urllib.request.urlopen(req, timeout=20) as r:  # noqa: S310
                 d = json.loads(_read_limited(r))
             for cand in typing.cast(typing.Iterable[typing.Any], d.get("candidates") or []):
@@ -666,7 +665,7 @@ def _cerebras_generate(
             "messages": full,
         }
     ).encode()
-    req = urllib.request.Request(  # noqa: S310 -- fixed HTTPS provider endpoint
+    req = urllib.request.Request(  # noqa: S310
         "https://api.cerebras.ai/v1/chat/completions",
         data=body,
         headers={
@@ -676,7 +675,6 @@ def _cerebras_generate(
         },
     )
     try:
-        # The request URL is a fixed HTTPS provider endpoint.
         with urllib.request.urlopen(req, timeout=20) as response:  # noqa: S310
             d = json.loads(_read_limited(response))
     except urllib.error.HTTPError as e:
@@ -748,7 +746,7 @@ def _openrouter_generate(
             "route": "fallback",
         }
     ).encode()
-    req = urllib.request.Request(  # noqa: S310 -- fixed HTTPS provider endpoint
+    req = urllib.request.Request(  # noqa: S310
         "https://openrouter.ai/api/v1/chat/completions",
         data=body,
         headers={
@@ -758,7 +756,6 @@ def _openrouter_generate(
         },
     )
     try:
-        # The request URL is a fixed HTTPS provider endpoint.
         with urllib.request.urlopen(req, timeout=timeout) as response:  # noqa: S310
             d = json.loads(_read_limited(response))
     except urllib.error.HTTPError as e:
@@ -798,13 +795,12 @@ def _post_json(
     provider: str,
 ) -> dict[typing.Any, typing.Any]:
     data = json.dumps(payload).encode()
-    req = urllib.request.Request(  # noqa: S310 -- caller passes a validated HTTPS provider URL
+    req = urllib.request.Request(  # noqa: S310
         url,
         data=data,
         headers=headers,
     )
     try:
-        # Host is a configured provider base, not user input.
         with urllib.request.urlopen(req, timeout=timeout) as response:  # noqa: S310
             return json.loads(_read_limited(response))
     except urllib.error.HTTPError as e:
@@ -1467,7 +1463,6 @@ def _tavily_results(query: str, k: int) -> List[dict[typing.Any, typing.Any]]:
         data=body,
         headers={"Content-Type": "application/json"},
     )
-    # The request URL is a fixed HTTPS provider endpoint.
     with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
         d = json.loads(_read_limited(resp))
     return [
@@ -1577,7 +1572,6 @@ def _extract_json(text: str) -> Optional[dict[typing.Any, typing.Any]]:
                 return typing.cast(typing.Any, parsed)
         except json.JSONDecodeError:
             pass
-    # Truncated JSON from a token cap: salvage the chat reply if present.
     m = re.search(r'"response"\s*:\s*"((?:\\.|[^"\\])*)"', text)
     if m:
         try:

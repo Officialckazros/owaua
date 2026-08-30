@@ -127,8 +127,6 @@ class TosDiscordUnblockTest(unittest.IsolatedAsyncioTestCase):
             ephemeral=True,
         )
 
-        # The callback has its own guard as defense in depth if invoked
-        # directly instead of through discord.py's View dispatcher.
         direct_other_response = types.SimpleNamespace(send_message=mock.AsyncMock())
         direct_other = types.SimpleNamespace(
             user=types.SimpleNamespace(id=43), response=direct_other_response
@@ -143,7 +141,6 @@ class TosDiscordUnblockTest(unittest.IsolatedAsyncioTestCase):
             reason="manual operator block",
             block_source="manual",
         )
-        # Keep one ToS entry present so the command reaches its target validation.
         blocked.block_user("123456789", reason="tos: other user", block_source="tos")
         message = self._message()
 

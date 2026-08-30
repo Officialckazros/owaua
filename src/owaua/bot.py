@@ -143,13 +143,9 @@ class owauaClient(discord.Client):
         self.web_service: WebService | None = None
 
     async def setup_hook(self) -> None:
-        # Opening the repository runs transactional migrations before Discord
-        # is marked ready. A failed integrity check aborts startup.
         db.conn()
         db.integrity_check()
         multilingual.install_discord_localization()
-        # Force the bounded, idempotent legacy-state imports before privacy
-        # exports/deletions can run, so JSON-era state cannot be missed.
         blocked.list_blocked()
         dm.load_contacts()
         db.cleanup_expired_content(config.CONTENT_RETENTION_DAYS)
@@ -712,10 +708,8 @@ async def on_ready():
         _LOG.exception("persistent component registration failed")
     if not getattr(client, "_synced", False):
         try:
-            # Sync global catalog for all servers, DMs, and user-install contexts
             synced = await _tree.sync()
             print(f"[slash] globally synced {len(synced)} commands")
-            # Clear stale guild copies so commands are not shown twice.
             guild_ids = list(config.SYNC_GUILDS)
             for g in client.guilds:
                 guild_ids.append(str(g.id))
@@ -1052,8 +1046,6 @@ async def _check_trivia_answer(message: discord.Message, scope_id: str) -> bool:
     guess = message.content.strip().casefold()
     if not answer or guess != answer:
         return False
-    # No await occurs between state validation and consumption, so another
-    # gateway event cannot consume the same question in this process.
     db.kv_set(key, "")
     await _send(
         message.channel,
@@ -1188,9 +1180,6 @@ async def _handle_swear_jar(message: discord.Message, guild_id: str, content: st
 
 @client.event
 async def on_message(message: discord.Message):
-    # Write consent-approved guild history before any awaited policy work.  A user
-    # can delete a just-sent message before Discord's cache or later handlers see
-    # it; the delete audit can then recover this same privacy-scoped record.
     if message.guild is not None:
         if archive.enabled_guild(message.guild.id):
             await archive.store_live_message(message)
@@ -1233,8 +1222,6 @@ async def on_message(message: discord.Message):
         "about",
         "status",
     }
-    # A hard block stops bot features, but never the privacy/Terms escape hatch.
-    # Blocked users must still be able to inspect/export/delete their data.
     if config.is_blocked(message.author.id) and command_name not in privacy_commands:
         return
     if message.guild is None and _cli_claims_user(message.author.id):
@@ -1380,7 +1367,6 @@ async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
 
 @client.event
 async def on_bulk_message_delete(messages: list[discord.Message]):
-    # The raw event always fires and owns complete/partial cache handling.
     return None
 
 
@@ -2049,9 +2035,6 @@ async def _chat(
     if file_notes:
         user_turn += f"\n\n[attached text file(s)]\n{file_notes}"
 
-    # Run memory distillation beside the response call. It has its own bounded
-    # extractor, so a provider fallback that drops the response JSON's optional
-    # memories field cannot erase this turn from long-term memory.
     memory_task = asyncio.create_task(
         brain.safely_learn_from_turn(query, author, guild_id),
         name=f"memory:{author}:{guild_id}",
@@ -2203,8 +2186,6 @@ async def _chat(
     else:
         response = scrubbed
 
-    # Model classifications are advisory only. They never delete content or
-    # globally block a user without staff review.
 
     if assistant:
         response, proposals = actions.resolve_assistant_output(
@@ -2231,8 +2212,6 @@ async def _chat(
             name=f"conversation-summary:{author}:{guild_id}",
         )
 
-    # Ordinary chat stays response-only. Assistant batches render one
-    # invoker-bound confirmation per action; each click executes only that action.
     summaries: list[typing.Any] = []
     image = actions.chart_url(data.get("chart")) if data.get("chart") else None
 
@@ -2310,8 +2289,6 @@ async def _handle_command(
         "about",
         "status",
     }
-    # Keep privacy and legal controls reachable after a block. In particular,
-    # !privacy export/delete must not be swallowed by the access gate.
     if config.is_blocked(author) and name not in privacy_commands:
         return
 
@@ -2522,7 +2499,6 @@ async def _handle_command(
         }
         module_name = command_modules.get(name)
         if module_name and not db.module_config(guild_id, module_name)["enabled"]:
-            # `rank` is also the self-assignable-rank command when Levels is off.
             if not (name == "rank" and db.module_config(guild_id, "autoroles")["enabled"]):
                 await _send(
                     message.channel,
@@ -3029,7 +3005,6 @@ async def _cmd_booster(
                 except discord.HTTPException:
                     ok_flag, text = False, "Discord rejected the role update."
         elif len(parts) > 1:
-            # Preserve spaces after the colour while dropping the subcommand token.
             name = (
                 (arg or "").split(maxsplit=2)[2] if len((arg or "").split(maxsplit=2)) > 2 else None
             )
@@ -4501,8 +4476,6 @@ async def _cmd_user(message: typing.Any, arg: typing.Any, guild_id: typing.Any, 
     for key in ("bad_messages", "recent_messages", "sample_messages"):
         intel[key] = _visible_history_rows(message, intel[key])
     if uid != author:
-        # Aggregate fields were computed across all channels; omit them when
-        # auditing another member because some source channels may be hidden.
         intel["monthly"] = []
         intel["channels"] = []
         intel["top_words"] = []
@@ -5600,9 +5573,6 @@ async def _cmd_tos(message: typing.Any, arg: typing.Any, guild_id: typing.Any, a
                         + (f"\n  • input: `{offending}`" if offending else "")
                     )
                 body = "\n\n".join(lines)
-                # Embed descriptions are limited to 4,096 characters.  Do not silently
-                # truncate a global owner audit: send the complete review as a private
-                # text attachment when it no longer fits comfortably in an embed.
                 if len(body) <= 3_800:
                     await _send_private(
                         message,

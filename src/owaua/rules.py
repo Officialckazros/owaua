@@ -388,7 +388,6 @@ def normalize_for_rules(content: str) -> str:
     )
     value = re.sub(r"([^\W\d_])\1{2,}", r"\1\1", value)
     value = re.sub(r"[^a-z0-9]+", " ", value).strip()
-    # Collapse deliberately spaced-out words such as "k y s" or "p e d o".
     value = re.sub(
         r"(?<![a-z])(?:[a-z]\s+){2,}[a-z](?![a-z])",
         lambda match: match.group(0).replace(" ", ""),
@@ -449,8 +448,6 @@ def _spam_violation(guild_id: int, author_id: int, content: str) -> bool:
     normalized = (content or "").strip().casefold()
     if not normalized:
         return False
-    # Retain only a short digest, not raw message text, in the transient spam
-    # window. The digest is used solely for equality within one guild/user key.
     digest = hashlib.blake2b(
         normalized.encode("utf-8", errors="ignore"), digest_size=16
     ).hexdigest()
@@ -666,7 +663,7 @@ async def _log_action(
             str(pending.offender_id),
             Scope.guild(pending.guild_id).key,
         )
-    except Exception:  # noqa: BLE001 - audit failure cannot undo a Discord action
+    except Exception:  # noqa: BLE001
         log.exception("rules audit write failed")
 
 
@@ -707,9 +704,6 @@ async def execute_pending(
         return "denied: can't moderate the server owner."
     if member.id == current_approver.id:
         return "denied: approvers cannot moderate themselves."
-    # Administrator does not bypass Discord role hierarchy; only the guild
-    # owner does. Rechecking here prevents stale approval buttons from acting
-    # after a role change.
     if current_approver.id != guild.owner_id and member.top_role >= current_approver.top_role:
         return "denied: the approver's role is not above the target."
     bot_block = _bot_can_execute(guild, member, pending, current_bot)
@@ -1104,5 +1098,5 @@ async def check_message(client: typing.Any, message: discord.Message) -> None:
         _pending[sent.id] = pending
         view.message = sent
         log.info("rules: queued %s for user %s in %s", rule.id, uid, message.guild.name)
-    except Exception:  # noqa: BLE001 - event boundary must isolate malformed messages
+    except Exception:  # noqa: BLE001
         log.exception("rules check crashed for message %s", getattr(message, "id", None))

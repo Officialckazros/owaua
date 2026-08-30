@@ -560,8 +560,6 @@ def incident_center(
             continue
         items.append(item)
 
-    # Existing unresolved tickets are first-class incidents even if they were
-    # created before the incident center existed.
     if wanted_source in (None, "ticket"):
         for ticket in db.community_records("ticket", guild, status=None, limit=5_000):
             if ticket["status"] not in {"active", "open", "waiting"}:
@@ -590,7 +588,6 @@ def incident_center(
                 continue
             items.append(ticket_item)
 
-    # Confirmed assistant mutations are always shown as resolved audit events.
     if wanted_source in (None, "assistant") and wanted_status in (None, "resolved"):
         rows = (
             db.conn()

@@ -91,7 +91,6 @@ def _boost_count(member: discord.Member) -> int:
 
 def stats(guild: discord.Guild) -> dict[str, int]:
     result = db.booster_stats(_scope(guild))
-    # Discord's native count can repair a lower local current total after downtime.
     result["current_boosts"] = max(
         result["current_boosts"], int(guild.premium_subscription_count or 0)
     )
@@ -787,7 +786,6 @@ async def handle_member_update(before: discord.Member, after: discord.Member) ->
             )
         await update_stat_channels(after.guild, settings)
         return f"recorded {after.display_name} as no longer boosting"
-    # Role-based personal-role eligibility can also change independently of Nitro.
     lost_revoke_role = bool(
         ({role.id for role in before.roles} - {role.id for role in after.roles})
         & _ids(settings.get("revoke_role_ids"))

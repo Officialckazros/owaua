@@ -4,8 +4,6 @@ These pages are generated from the running code's actual behaviour: storage
 tables, consent gates, provider calls, and deletion gaps. Keep them honest.
 """
 
-# Ruff's SQL heuristic sees the human-readable words "delete" and "from" in
-# this HTML policy. This module does not execute SQL.
 # ruff: noqa: S608
 
 from __future__ import annotations

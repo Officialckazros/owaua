@@ -46,7 +46,7 @@ from owaua.sites import (
 )
 
 log = logging.getLogger("owaua.web")
-DEFAULT_HOST: Final = "0.0.0.0"  # noqa: S104, RUF100 - container listener
+DEFAULT_HOST: Final = "0.0.0.0"  # noqa: S104, RUF100
 DEFAULT_PORT: Final = 8080
 MAX_REQUEST_BYTES: Final = 1_024
 READINESS_TIMEOUT_SECONDS: Final = 2.0
@@ -260,8 +260,6 @@ async def _security_headers(
             or request.path.startswith(DASHBOARD_PREFIX + "/")
             or request.path.startswith("/forms/")
         ):
-            # Preserve Set-Cookie on login/logout redirects. Rebuilding an
-            # HTTPException as a Response would discard its cookie jar.
             _apply_dashboard_headers(error)
             raise
         response = web.Response(
@@ -281,8 +279,6 @@ async def _security_headers(
         or request.path.startswith(DASHBOARD_PREFIX + "/")
         or request.path.startswith("/forms/")
     ):
-        # Dashboard responses set a route-specific CSP that allows only their
-        # same-origin stylesheet, script and API calls.
         _apply_dashboard_headers(response)
         return response
     form_action = "'self'" if request.path == "/owaua/terms/accept" else "'none'"
@@ -466,7 +462,7 @@ def create_app(
         try:
             async with asyncio.timeout(READINESS_TIMEOUT_SECONDS):
                 components = await _resolve_readiness(readiness_provider)
-        except Exception as error:  # noqa: BLE001, RUF100 - health checks fail closed
+        except Exception as error:  # noqa: BLE001, RUF100
             log.warning("Readiness provider failed (%s)", type(error).__name__)
             return web.json_response({"status": "not_ready"}, status=503)
         is_ready = all(components.values())
@@ -562,7 +558,7 @@ class WebService:
             try:
                 await runner.setup()
                 await web.TCPSite(runner, self._host, self._port).start()
-            except BaseException:  # noqa: BLE001, RUF100 - includes cancellation cleanup
+            except BaseException:  # noqa: BLE001, RUF100
                 await runner.cleanup()
                 raise
             self._runner = runner

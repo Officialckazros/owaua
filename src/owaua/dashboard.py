@@ -671,7 +671,7 @@ async def _discord_identity(
                         _provider_error_code(guilds),
                     )
                     return None
-    except Exception as error:  # noqa: BLE001 - external authentication fails closed
+    except Exception as error:  # noqa: BLE001
         log.warning(
             "Discord OAuth %s request raised %s",
             stage,

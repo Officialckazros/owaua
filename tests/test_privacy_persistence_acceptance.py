@@ -52,8 +52,6 @@ class IsolatedDatabaseTest(unittest.TestCase):
             tos._rate_buckets.clear()
 
     def _row_count(self, table: str, where: str = "1=1", args: tuple[typing.Any, ...] = ()) -> int:
-        # Test-only inputs are static literals defined in this module; values
-        # still use SQLite parameters.
         row = (
             db.conn()
             .execute(
@@ -293,7 +291,6 @@ class CacheAndConsentAcceptanceTest(IsolatedDatabaseTest):
                 message_id,
             )
 
-        # ToS acceptance is deliberately not storage consent.
         tos.accept(user_id)
         self.assertFalse(db.privacy_opted_in(user_id, scope))
         record("no-consent-no-guild-opt-in")

@@ -202,8 +202,6 @@ async def search(character: str, amount: int = 1) -> tuple[str, list[Post]]:
                     try:
                         payload = json.loads(raw.decode("utf-8"))
                     except (ValueError, UnicodeDecodeError):
-                        # Rule34 occasionally emits invalid JSON for an otherwise
-                        # successful request. Try a new small random batch instead.
                         payload: list[typing.Any] = []
                     for post in parse_posts(payload, batch_limit):
                         if post.image_url not in seen:

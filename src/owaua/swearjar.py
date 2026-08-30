@@ -5,11 +5,6 @@ from __future__ import annotations
 import re
 from typing import Final
 
-# Keep this deliberately narrower than moderation. The swear jar is a playful
-# counter, not a safety classifier, and it must not treat threats or protected
-# slurs as profanity. Explicit word boundaries prevent false positives such as
-# ``assignment`` and ``cockpit`` while allowing common inflected forms and
-# harmless obfuscation such as ``F.U.C.K`` or ``fuuuck``.
 _SWEAR_WORDS: Final = (
     "arse",
     "arsehole",

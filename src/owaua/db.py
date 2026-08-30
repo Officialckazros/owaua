@@ -532,14 +532,10 @@ def _tighten_database_permissions() -> None:
             if candidate.is_file() and not candidate.is_symlink():
                 os.chmod(candidate, 0o600)
         except OSError:
-            # Startup validation/integrity still decides whether the database
-            # is usable; permission warnings are handled by config startup.
             pass
 
 
 def _rescope_legacy_rows(c: sqlite3.Connection) -> None:
-    # Explicit memories can be safely assigned only when a guild id or DM
-    # subject/author identifies their original tenant.
     for row in c.execute("SELECT id,guild_id,author,subject FROM memories").fetchall():
         fallback = row["subject"] if str(row["subject"] or "").isdigit() else row["author"]
         scope = _canonical_scope(row["guild_id"], fallback)
@@ -601,8 +597,6 @@ def _rescope_legacy_rows(c: sqlite3.Connection) -> None:
             )
             c.execute("DELETE FROM guild_settings WHERE guild_id=?", (row["guild_id"],))
 
-    # Command names used to be global primary keys.  Rebuild with a composite
-    # tenant key and keep ambiguous rows disabled for explicit owner review.
     c.execute("DROP TABLE IF EXISTS commands_v3")
     c.execute(
         "CREATE TABLE commands_v3 ("
@@ -672,13 +666,9 @@ def _migrate(c: sqlite3.Connection) -> None:
 
             c.execute("CREATE INDEX IF NOT EXISTS idx_mem_subject ON memories(subject,guild_id)")
 
-            # Version 3 was the destructive privacy cut-over.  Later schema
-            # additions must never replay it: commands no longer even have
-            # the legacy ``guild_id`` column after this migration.
             if version < 3:
                 _logical_backup(c)
                 _rescope_legacy_rows(c)
-                # The user explicitly selected a clean privacy cut-over.
                 c.execute("DELETE FROM server_messages")
                 c.execute("UPDATE lessons SET enabled=0 WHERE scope_id IS NULL OR scope_id='' ")
 
@@ -729,10 +719,6 @@ def conn() -> sqlite3.Connection:
             return _conn
         db_path = Path(config.DB_PATH)
         if config.DB_PATH != ":memory:":
-            # A newly created private state directory must not inherit a
-            # permissive process umask. Existing directories are never chmod'd
-            # here because the configured database may intentionally live in
-            # a repository or another shared parent.
             db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         candidate = sqlite3.connect(
             config.DB_PATH,
@@ -890,8 +876,6 @@ def dynamic_block_apply(
                 metadata = _json_dict(row["metadata"])
                 blocked_at = _safe_timestamp(row["blocked_at"], timestamp)
 
-            # Never let an automatic update rewrite the visible reason/source
-            # of an existing manual block.  It is still retained in history.
             preserve_manual = (
                 row is not None
                 and str(row["block_source"] or "") == "manual"
@@ -929,9 +913,6 @@ def dynamic_block_apply(
                 ),
             )
 
-            # A prepared alt may have accepted the Terms before this account
-            # was blocked. Hold every recently matching accepted account for
-            # owner review at the block boundary, regardless of account age.
             network = c.execute(
                 "SELECT network_hash FROM tos_acceptances WHERE user_id=? "
                 "AND network_hash!='' AND network_seen_at>=?",
@@ -1731,8 +1712,6 @@ def booster_record_event(
             old = c.execute(
                 "SELECT * FROM booster_members WHERE guild_id=? AND user_id=?", (gid, uid)
             ).fetchone()
-            # Gateway order is not stable: a premium_since update can arrive seconds before
-            # the matching system message. Count that pair once, while later messages are boosts.
             paired_sync = bool(
                 old
                 and old["active"]
@@ -2954,7 +2933,7 @@ def ai_spend_reserve(
             for name, window, limit, suffix, extra in dimensions:
                 cutoff = created - window
                 row = c.execute(
-                    "SELECT COALESCE(SUM(reserved_microusd),0) total,"  # noqa: S608 -- suffix is selected from fixed SQL fragments above
+                    "SELECT COALESCE(SUM(reserved_microusd),0) total,"  # noqa: S608
                     "MIN(created) oldest FROM ai_spend_reservations "
                     f"WHERE created>=?{suffix}",
                     (cutoff, *extra),

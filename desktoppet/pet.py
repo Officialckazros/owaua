@@ -154,7 +154,7 @@ def _migrate_legacy_user_state():
         if not current and value:
             keyring.set_password(KEYRING_SERVICE, "OWAUA_AI_KEY", value)
             keyring.delete_password(legacy_service, legacy_key)
-    except Exception:  # noqa: BLE001 - keyring backends differ across platforms
+    except Exception:  # noqa: BLE001
         return
 
 
@@ -241,7 +241,7 @@ def load_keyring_secrets():
     for key in SECRET_ENV_KEYS:
         try:
             value = keyring.get_password(KEYRING_SERVICE, key)
-        except Exception:  # noqa: BLE001, S112 - keyring backends raise vendor errors
+        except Exception:  # noqa: BLE001, S112
             continue
         if value and len(value) <= MAX_ENV_VALUE_CHARS:
             values[key] = value
@@ -950,7 +950,7 @@ class Brain:
                 if answer:
                     self.last_error = ""
                     return answer[:MAX_RESPONSE_CHARS]
-            except Exception:  # noqa: BLE001 - sanitize every provider SDK failure
+            except Exception:  # noqa: BLE001
                 self.last_error = "AI request unavailable; using offline mode."
         return self._offline(question)
 
@@ -970,7 +970,7 @@ class Brain:
         if client is not None:
             try:
                 client.close()
-            except Exception:  # noqa: BLE001, S110 - close must remain idempotent
+            except Exception:  # noqa: BLE001, S110
                 pass
 
     @staticmethod
@@ -1228,7 +1228,7 @@ class AskThread(QThread):
     def run(self):
         try:
             self.done.emit(self.brain.ask(self.question))
-        except Exception:  # noqa: BLE001 - never leak SDK details through the UI
+        except Exception:  # noqa: BLE001
             self.done.emit("My brain is unavailable right now, so I switched to offline mode.")
 
 
@@ -2027,7 +2027,7 @@ def main():
             )
             tray.show()
             pet.tray_available = True
-    except Exception:  # noqa: BLE001 - system tray support is optional and vendor-specific
+    except Exception:  # noqa: BLE001
         tray = None
 
     return app.exec()

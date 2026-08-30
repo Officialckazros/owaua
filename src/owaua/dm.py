@@ -160,8 +160,6 @@ def _migrate_contacts() -> None:
 def load_contacts() -> dict[typing.Any, typing.Any]:
     """Return contacts from SQLite after an idempotent legacy import."""
     _migrate_contacts()
-    # Bot startup calls this API, so complete the companion active-session
-    # migration here as well before any privacy export/delete can run.
     _migrate_active()
     return db.dm_contacts_all()
 

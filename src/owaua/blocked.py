@@ -19,8 +19,6 @@ from pathlib import Path
 from owaua import db
 
 _ROOT = Path(__file__).resolve().parent.parent.parent
-# Kept for CLI output and deployment compatibility. This file is never
-# written after the SQLite cut-over.
 BLOCKED_FILE = Path(os.getenv("OWAUA_BLOCKED_FILE", str(_ROOT / "blocked_users.json")))
 
 _MAX_LEGACY_BYTES = 4 * 1024 * 1024
@@ -144,8 +142,6 @@ def _source_for(meta: dict[typing.Any, typing.Any]) -> str:
     category = _text(meta.get("category"), 80).lower()
     if reason.startswith(("tos:", "tos ")) or category.startswith("tos"):
         return "tos"
-    # Legacy entries not clearly identified as automatic must be treated as
-    # manual. This ensures the ToS-review CLI cannot unblock an operator ban.
     return "manual"
 
 

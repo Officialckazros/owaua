@@ -185,8 +185,6 @@ def record_web_acceptance(user_id: str, client_address: str) -> str:
         exclude_user_id=uid,
     )
     if not blocked_match:
-        # Static ids and emergency-only fallback blocks are not represented in
-        # dynamic_blocks, so retain the bounded application-level check too.
         recent_users = db.tos_acceptance_network_users(
             fingerprint,
             since=network_cutoff,
@@ -322,8 +320,6 @@ class AcceptanceView(discord.ui.View):
     async def read_terms(
         self, interaction: discord.Interaction, _button: discord.ui.Button[typing.Any]
     ) -> None:
-        # The explicit owner check also keeps direct callback invocation from
-        # bypassing the view guard.
         if interaction.user.id != self.user_id:
             await interaction.response.send_message(
                 "this acceptance link belongs to someone else. Run `/tos` for your own link.",
