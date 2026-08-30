@@ -34,3 +34,5 @@ npm run dry-run
 Explain the user-visible change, the privacy or security impact, and the checks you ran. Update documentation or tests when behavior changes. Please avoid unrelated formatting churn.
 
 Changes to legal copy, retention, consent, moderation, blocking, or action permissions deserve extra context because they affect real people and servers.
+
+By intentionally submitting a contribution, you agree to the contribution terms in the [Obsidian License 1.0](LICENSE).

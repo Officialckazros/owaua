@@ -8,7 +8,7 @@ version = "2.0.0"
 description = "Privacy-first Discord assistant and companion desktop pet"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
-license = "GPL-3.0-only"
+license = "LicenseRef-Obsidian-1.0"
 keywords = ["discord", "discord-bot", "moderation", "privacy", "self-hosted"]
 classifiers = [
   "Development Status :: 4 - Beta",

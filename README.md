@@ -92,4 +92,4 @@ Pushing a `v*` tag runs the GitHub release workflow, which tests the project and
 
 Small, focused pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first. Please report vulnerabilities privately as described in [SECURITY.md](SECURITY.md), rather than opening a public issue.
 
-The project is licensed under [GPL-3.0-only](LICENSE).
+The project is available under the proprietary, source-available [Obsidian License 1.0](LICENSE). You may inspect it for reference, evaluation, and security review; copying, modifying, deploying, or redistributing it requires written permission.
