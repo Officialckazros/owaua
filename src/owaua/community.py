@@ -1343,13 +1343,17 @@ def _automod_reason(message: discord.Message, settings: dict[typing.Any, typing.
             return "banned phrase"
     letters = [char for char in content if char.isalpha()]
     caps = sum(1 for char in letters if char.isupper())
-    if len(letters) >= 10 and caps * 100 / len(letters) >= int(
-        settings.get("max_caps_percent") or 100
+    if (
+        settings.get("max_caps_enabled", False)
+        and len(letters) >= 10
+        and caps * 100 / len(letters) >= int(settings.get("max_caps_percent") or 100)
     ):
         return "excessive capitals"
     if content.count("\n") > int(settings.get("max_newlines") or 9999):
         return "chat clearing"
-    if len(content) > int(settings.get("max_length") or 9999):
+    if settings.get("max_length_enabled", False) and len(content) > int(
+        settings.get("max_length") or 9999
+    ):
         return "message too long"
     if len(message.mentions) + len(message.role_mentions) > int(
         settings.get("max_mentions") or 9999

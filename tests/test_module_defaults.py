@@ -1,7 +1,7 @@
 import unittest
 
 from owaua import config, db
-from owaua.module_catalog import MODULES, SERVER_SETTINGS, default_settings
+from owaua.module_catalog import MODULES, SERVER_SETTINGS, default_settings, merge_settings
 
 
 class ModuleDefaultTests(unittest.TestCase):
@@ -46,7 +46,22 @@ class ModuleDefaultTests(unittest.TestCase):
         ]
 
         self.assertEqual(disabled_server_switches, [])
-        self.assertEqual(disabled_module_switches, [])
+        self.assertEqual(
+            disabled_module_switches,
+            ["automod.max_caps_enabled", "automod.max_length_enabled"],
+        )
+
+    def test_automod_caps_and_length_checks_start_disabled(self):
+        settings = default_settings("automod")
+
+        self.assertFalse(settings["max_caps_enabled"])
+        self.assertFalse(settings["max_length_enabled"])
+
+    def test_legacy_automod_thresholds_remain_opted_in(self):
+        merged = merge_settings("automod", {"max_caps_percent": 80, "max_length": 1800})
+
+        self.assertTrue(merged["max_caps_enabled"])
+        self.assertTrue(merged["max_length_enabled"])
 
 
 if __name__ == "__main__":

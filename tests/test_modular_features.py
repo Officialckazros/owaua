@@ -117,6 +117,40 @@ class NativeAutomodTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call["name"], "owaua: configured blocked phrases")
         self.assertEqual(call["trigger"].keyword_filter, ["scam"])
 
+    def test_caps_and_length_checks_are_opt_in(self):
+        message = types.SimpleNamespace(
+            content="THIS MESSAGE IS LOUD",
+            channel=types.SimpleNamespace(id=10, category_id=None),
+            author=types.SimpleNamespace(id=456, roles=[]),
+            mentions=[],
+            role_mentions=[],
+            guild=types.SimpleNamespace(id=123),
+        )
+        settings = {
+            "max_caps_enabled": False,
+            "max_caps_percent": 80,
+            "max_length_enabled": False,
+            "max_length": 1800,
+            "max_newlines": 8,
+            "max_mentions": 5,
+            "banned_phrases": [],
+            "blocked_domains": [],
+            "allowed_domains": [],
+            "rapid_messages": 6,
+            "rapid_window_seconds": 8,
+            "duplicate_window_seconds": 15,
+        }
+
+        self.assertIsNone(community._automod_reason(message, settings))
+        community._duplicates.clear()
+        settings["max_caps_enabled"] = True
+        self.assertEqual(community._automod_reason(message, settings), "excessive capitals")
+        settings["max_caps_enabled"] = False
+        settings["max_length_enabled"] = True
+        community._duplicates.clear()
+        message.content = "x" * 2000
+        self.assertEqual(community._automod_reason(message, settings), "message too long")
+
 
 class CooldownRegressionTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

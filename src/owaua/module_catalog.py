@@ -133,9 +133,11 @@ MODULES: Final[dict[str, dict[typing.Any, typing.Any]]] = {
             "banned_phrases": [],
             "allowed_domains": [],
             "blocked_domains": [],
+            "max_caps_enabled": False,
             "max_caps_percent": 80,
             "max_mentions": 5,
             "max_newlines": 8,
+            "max_length_enabled": False,
             "max_length": 1800,
             "duplicate_window_seconds": 15,
             "rapid_messages": 6,
@@ -938,6 +940,15 @@ def merge_settings(name: str, value: object) -> dict[typing.Any, typing.Any]:
             value: typing.Any = typing.cast(typing.Any, {**value, "channel_id": migrated})
     if len(typing.cast(typing.Any, value)) > 200:
         raise ValueError("too many settings")
+    # These switches were added after the numeric thresholds. Treat an older
+    # saved threshold as an explicit opt-in, while new configurations stay off
+    # until the dashboard switch is enabled.
+    if name == "automod":
+        legacy = typing.cast(typing.Any, value)
+        if "max_caps_enabled" not in legacy and "max_caps_percent" in legacy:
+            defaults["max_caps_enabled"] = True
+        if "max_length_enabled" not in legacy and "max_length" in legacy:
+            defaults["max_length_enabled"] = True
     for key, candidate in typing.cast(typing.Iterable[typing.Any], value.items()):
         if key not in defaults:
             continue
