@@ -60,6 +60,11 @@ UP, DOWN = "\U0001f44d", "\U0001f44e"
 
 _track: Optional[Callable[..., typing.Any]] = None
 
+# A deferred interaction otherwise remains as Discord's "owaua is thinking"
+# indicator until its token expires. Keep enough room for normal AI and API
+# work, but always turn a stalled command into a visible, actionable result.
+_COMMAND_TIMEOUT_SECONDS = 90.0
+
 
 class InvokerConfirmation(discord.ui.View):
     """Short-lived, invoker-bound, single-use confirmation."""
@@ -664,7 +669,7 @@ async def _generate_reply(
         elif assistant:
             fallback_system = (
                 "You are owaua in ASSISTANT MODE — a capable Discord assistant. "
-                "Drop the chaotic persona; do what is asked.\n\n"
+                "Drop the usual persona; do what is asked.\n\n"
                 + brain.format_speaker_block(speaker)
                 + "\n\n"
                 + brain.assistant_block()
@@ -861,6 +866,61 @@ async def _run_community_command(
 
 class _BlockingTree(app_commands.CommandTree):
     """Reject every slash interaction from hard-blocked users; ToS-gate the rest."""
+
+    async def _finish_failed_interaction(
+        self, interaction: discord.Interaction, message: str
+    ) -> None:
+        """Complete a failed command even when it has already been deferred.
+
+        Commands commonly defer before calling an external service.  Discord
+        does not automatically replace that deferred response if command code
+        later raises, so use the original response for deferred channel
+        messages and a private follow-up for all other completed responses.
+        """
+        try:
+            response = interaction.response
+            if not response.is_done():
+                await response.send_message(embed=embeds.error(message), ephemeral=True)
+                return
+
+            response_type = getattr(response, "type", None)
+            if response_type == discord.InteractionResponseType.deferred_channel_message:
+                await interaction.edit_original_response(embed=embeds.error(message), view=None)
+                return
+
+            await interaction.followup.send(embed=embeds.error(message), ephemeral=True)
+        except (discord.HTTPException, discord.NotFound, discord.Forbidden):
+            _LOG.debug("could not send slash command failure response", exc_info=True)
+
+    async def _call(self, interaction: discord.Interaction) -> None:
+        """Bound command execution so a deferred interaction cannot spin forever."""
+        try:
+            await asyncio.wait_for(
+                super()._call(interaction), timeout=_COMMAND_TIMEOUT_SECONDS
+            )
+        except TimeoutError:
+            interaction.command_failed = True
+            command = getattr(getattr(interaction, "command", None), "qualified_name", "unknown")
+            _LOG.warning("slash command timed out: %s", command)
+            await self._finish_failed_interaction(
+                interaction, "that took too long to finish. Please try again."
+            )
+
+    async def on_error(
+        self, interaction: discord.Interaction, error: app_commands.AppCommandError, /
+    ) -> None:
+        """Log unexpected slash failures and clear any pending response."""
+        command = interaction.command
+        if command is not None and command._has_any_error_handlers():
+            return
+        _LOG.error(
+            "slash command failed: %s",
+            getattr(command, "qualified_name", "unknown"),
+            exc_info=error,
+        )
+        await self._finish_failed_interaction(
+            interaction, "something went wrong before I could finish. Please try again."
+        )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         uid = interaction.user.id
@@ -1427,7 +1487,7 @@ def setup(
             return
         system = (
             config.PERSONA + "\n\nGive an unhinged, brutally honest read on this "
-            "channel's energy based on the messages. Keep it short. No emoji."
+            "channel based on the messages. Keep it short. No emoji."
         )
         try:
             text = await ai.chat(
@@ -1445,7 +1505,7 @@ def setup(
             )
             return
         text = brain.scrub_ai_output(text)
-        await interaction.followup.send(embed=embeds.say(text, title="vibe check"))
+        await interaction.followup.send(embed=embeds.say(text, title="channel read"))
 
     @tree.command(name="stats", description="See how much owaua has grown.")
     @anywhere
@@ -1548,7 +1608,7 @@ def setup(
             await interaction.response.send_message(
                 embed=embeds.error(
                     "usage: `/assistant request:<what you want>` (or attach a .txt file) — one-shot only. "
-                    "normal `/chat` stays chaotic owaua."
+                    "normal `/chat` stays owaua."
                 ),
                 ephemeral=True,
             )
@@ -1829,7 +1889,7 @@ def setup(
         if low in ("normal", "off", "disable", "stop", "reset", "clear"):
             brain.set_freaky_mode(author, False)
             await interaction.response.send_message(
-                embed=embeds.ok("freaky mommy mode disabled. back to normal chaos.")
+                embed=embeds.ok("freaky mommy mode disabled. back to normal.")
             )
             return
         if low in {"ai-fast", "ai-balanced", "ai-reasoning"}:
@@ -2394,7 +2454,7 @@ def setup(
                 or config.PERSONA
             )
             + f"\n\nWrite a savage, funny {span} recap of this channel from the messages. "
-            "Call out bits, people, and vibes. Short paragraphs. No emoji."
+            "Call out bits, people, and what the room was like. Short paragraphs. No emoji."
         )
         try:
             text = await ai.chat(
@@ -3408,8 +3468,8 @@ def setup(
             "nah.",
             "ask again when you're smarter.",
             "absolutely. go ruin your life.",
-            "the vibes say no.",
-            "it's giving yes.",
+            "absolutely not.",
+            "yeah.",
             "50/50 and i don't care.",
             "lmao no.",
             "signs point to you already knowing.",
@@ -3686,7 +3746,7 @@ def setup(
             "`/chat` — talk to me (react up/down on my reply to teach me)\n"
             "`/ask workflow:<type>` — 41 read-only workflows for writing, study, planning, risk, privacy, security, incidents and grounded fact checks\n"
             "Message menu `Apps` — summarize, explain, extract action items or fact-check one message\n"
-            "`/assistant` — one-shot helpful mode (roles etc.); normal chat stays chaotic\n"
+            "`/assistant` — one-shot helpful mode (roles etc.); normal chat stays owaua\n"
             "`/ckazros` — owner-only do-anything; standing orders (e.g. speak Hebrew) stick\n"
             "`/language` — set the language I reply in (`/language hebrew`)\n"
             "`/music` — returns a safe YouTube search/watch link\n"

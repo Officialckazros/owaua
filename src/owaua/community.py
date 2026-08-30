@@ -761,6 +761,12 @@ def _member_roles(member: object) -> set[str]:
     return {str(role.id) for role in getattr(member, "roles", [])}
 
 
+def _is_bot_member(guild: discord.Guild, member: object) -> bool:
+    """Identify owaua itself without relying on a cached User object."""
+    bot_member = getattr(guild, "me", None)
+    return bool(bot_member and getattr(member, "id", None) == getattr(bot_member, "id", None))
+
+
 def _render(
     template: object,
     *,
@@ -1778,11 +1784,13 @@ async def message_delete(message: discord.Message) -> None:
         if settings.get("include_attachments", True) and message.attachments
         else None
     )
+    own_message = _is_bot_member(message.guild, message.author)
     await _log(
         message.guild,
         "message",
-        "Message deleted",
-        "\n".join(lines),
+        "One of my messages was deleted" if own_message else "Message deleted",
+        ("I noticed that one of my messages was deleted.\n" if own_message else "")
+        + "\n".join(lines),
         channel=message.channel,
         actor=getattr(entry, "user", None) or message.author,
         target=message.author,
@@ -1869,11 +1877,15 @@ async def raw_message_delete(
         ]
         if settings.get("include_message_content", True):
             lines.append(f"**Content:** {_log_content(saved['content'] or '(no text)')}")
+        own_message = str(saved["user_id"]) == str(getattr(getattr(guild, "me", None), "id", ""))
         await _log(
             guild,
             "message",
-            "Recovered uncached message deletion",
-            "\n".join(lines),
+            "One of my uncached messages was deleted"
+            if own_message
+            else "Recovered uncached message deletion",
+            ("I noticed that one of my messages was deleted.\n" if own_message else "")
+            + "\n".join(lines),
             channel=channel,
             actor=getattr(entry, "user", None) or author,
             target=author,
@@ -1994,11 +2006,13 @@ async def message_edit(before: discord.Message, after: discord.Message) -> None:
             )
         )
     lines.append(f"[Jump to message]({after.jump_url})")
+    own_message = _is_bot_member(after.guild, after.author)
     await _log(
         after.guild,
         "message",
-        "Message edited",
-        "\n".join(lines),
+        "One of my messages was edited" if own_message else "Message edited",
+        ("I noticed that one of my messages was edited.\n" if own_message else "")
+        + "\n".join(lines),
         channel=after.channel,
         actor=after.author,
         target=after.channel,
@@ -2358,7 +2372,25 @@ async def audit_entry_log(entry: discord.AuditLogEntry) -> None:
             discord.AuditLogActionCategory.update: 0xFEE75C,
         }.get(typing.cast(typing.Any, category), None),
     )
-    description = f"{_log_value(actor or 'Discord')} performed **{action_title}**"
+    bot_member = getattr(entry.guild, "me", None)
+    target_is_bot = _is_bot_member(entry.guild, target)
+    target_is_bot_role = bool(
+        bot_member
+        and target is not None
+        and any(
+            getattr(role, "id", None) == getattr(target, "id", None)
+            for role in getattr(bot_member, "roles", [])
+        )
+    )
+    self_target = target_is_bot or target_is_bot_role
+    if self_target:
+        action_title = {
+            "member_role_update": "My roles changed",
+            "role_update": "One of my roles was edited",
+        }.get(action_name, f"My settings changed ({action_title})")
+    description = (
+        "I noticed this change affecting me.\n" if self_target else ""
+    ) + f"{_log_value(actor or 'Discord')} performed **{action_title}**"
     if target is not None:
         description += f" on {_log_value(target)}"
     description += "."

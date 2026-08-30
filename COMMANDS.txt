@@ -88,7 +88,7 @@ Dashboard-enabled community commands (available only when their module is on):
 !resetconvo              Clear short-term chat history with you.
 
 !mood                    Current server mood.
-!vibecheck               Brutal read on recent channel energy.
+!vibecheck               Brutal read on recent channel chat.
 !recap [day|week]        Savage recap of recent chat (smart model).
 !persona                 Show guild persona controls.
 !persona set <text>      Override persona for this server (manage server).
@@ -138,10 +138,10 @@ Dashboard-enabled community commands (available only when their module is on):
                          `!ckazros` / `status` lists orders; `undo` pops last.
                          (also: slash `/ckazros`)
 
-Normal @mentions / DMs stay full chaotic owaua. Only the !assistant command
+Normal @mentions / DMs stay full owaua. Only the !assistant command
 drops the savage tone and answers as a clear, compliant helper for THAT reply
 (roles, timeouts, nicknames, channels, factual answers, etc.). There is no
-sticky on/off — the next @mention is chaotic again. Assistant actions render
+sticky on/off — the next @mention is normal owaua again. Assistant actions render
 one Confirm/Cancel proposal and recheck the exact permission and hierarchy;
 ordinary mentions and DMs never run tools.
 

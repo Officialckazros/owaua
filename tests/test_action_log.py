@@ -357,6 +357,35 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("**Author:**", embed.description)
         self.assertIn("**Channel:**", embed.description)
 
+    async def test_bot_message_deletion_is_called_out_as_self_event(self):
+        self.guild.me.id = 900
+        bot_author = SimpleNamespace(
+            id=900,
+            name="owaua",
+            display_name="owaua",
+            mention="<@900>",
+            roles=[],
+            bot=True,
+        )
+        message = SimpleNamespace(
+            id=901,
+            guild=self.guild,
+            channel=self.guild.source_channel,
+            author=bot_author,
+            content="my response",
+            attachments=[],
+        )
+
+        with mock.patch(
+            "owaua.community.recent_audit_entry",
+            new=mock.AsyncMock(return_value=None),
+        ):
+            await community.message_delete(typing.cast(typing.Any, message))
+
+        embed = typing.cast(typing.Any, self.guild.log_channel.send.await_args).kwargs["embed"]
+        self.assertEqual(embed.title, "One of my messages was deleted")
+        self.assertIn("I noticed that one of my messages was deleted", embed.description)
+
     async def test_deleted_previewable_media_is_relayed_for_discord_preview(self):
         author = SimpleNamespace(
             id=55,
