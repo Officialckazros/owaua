@@ -376,8 +376,8 @@ class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
         bot_member.id = 8
         bot_member.guild = guild
         configured = {
-            "enabled": True,
-            "settings": {"banned_phrases": ["spam"], "delete": True},
+            "enabled": False,
+            "settings": {"banned_phrases": ["spam"], "delete": False},
         }
 
         with (
@@ -401,6 +401,8 @@ class ActionConfirmationTest(unittest.IsolatedAsyncioTestCase):
             ["spam", "scam", "phishing"],
             persist.call_args.kwargs["settings"]["banned_phrases"],
         )
+        self.assertTrue(persist.call_args.kwargs["enabled"])
+        self.assertTrue(persist.call_args.kwargs["settings"]["delete"])
         sync.assert_awaited_once_with(guild)
 
     async def test_assistant_confirmation_records_inverse_and_consumes_undo(self):

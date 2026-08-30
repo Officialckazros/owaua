@@ -1625,6 +1625,11 @@ async def _one(
             if len(existing) + len(additions) > 500:
                 return "blocked: this server already has the maximum 500 blocked phrases"
             settings["banned_phrases"] = [*existing, *additions]
+            # An explicit request to block a phrase is also an explicit request
+            # to enforce it.  Older guild configurations may have Automod or its
+            # deletion switch disabled, which otherwise leaves the confirmation
+            # successful but the phrase ineffective.
+            settings["delete"] = True
             verb = "added"
             changed = additions
         else:
@@ -1639,7 +1644,7 @@ async def _one(
         db.module_config_set(
             f"guild:{guild.id}",
             "automod",
-            enabled=bool(configured["enabled"]),
+            enabled=True if t == "add_banned_phrases" else bool(configured["enabled"]),
             settings=settings,
             actor_id=str(requester.id),
         )
