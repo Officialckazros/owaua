@@ -54,8 +54,10 @@ from owaua import (
     voice,
 )
 from owaua.dashboard import DashboardAuthConfig
+from owaua.dashboard_snapshot import serialize_guilds
 from owaua.scope import Scope, scope_key
 from owaua.services.llm_client import llm as _llm
+from owaua.services.task_supervisor import TaskSupervisor
 from owaua.web import ReadinessState, WebService
 
 _LOG = logging.getLogger(__name__)
@@ -141,6 +143,11 @@ class owauaClient(discord.Client):
         )
         self.readiness = ReadinessState()
         self.web_service: WebService | None = None
+        self.tasks = TaskSupervisor()
+
+    def dashboard_guilds(self) -> list[dict[str, typing.Any]]:
+        """Return a bounded, sanitized snapshot for the local dashboard."""
+        return serialize_guilds(self.guilds)
 
     async def setup_hook(self) -> None:
         db.conn()
@@ -164,17 +171,13 @@ class owauaClient(discord.Client):
                 discord_client_id=config.DISCORD_CLIENT_ID,
                 discord_client_secret=config.DISCORD_CLIENT_SECRET,
             ),
-            guild_provider=_dashboard_guilds,
+            guild_provider=self.dashboard_guilds,
         )
         await self.web_service.start()
 
     async def close(self) -> None:
         self.readiness.discord = False
-        tasks = [*_background_tasks.values(), *_message_tasks]
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        await self.tasks.close()
         await voice.shutdown()
         await _llm.close()
         if self.web_service is not None:
@@ -186,70 +189,10 @@ class owauaClient(discord.Client):
 
 client = owauaClient()
 
-_background_tasks: dict[str, asyncio.Task[typing.Any]] = {}
-_message_tasks: set[asyncio.Task[typing.Any]] = set()
-
 _recent: typing.Any = typing.cast(typing.Any, collections.OrderedDict())
 _RECENT_MAX = 500
 _last_activity: dict[typing.Any, typing.Any] = {}
 _lurk_channels: dict[typing.Any, typing.Any] = {}
-
-
-def _dashboard_guilds() -> list[dict[typing.Any, typing.Any]]:
-    """Return a sanitized live server snapshot for the local dashboard."""
-    output: list[typing.Any] = []
-    for guild in list(getattr(client, "guilds", []))[:500]:
-        output.append(
-            {
-                "id": str(guild.id),
-                "name": guild.name,
-                "icon": str(guild.icon.url) if guild.icon else "",
-                "member_count": int(guild.member_count or 0),
-                "everyone_permissions": int(guild.default_role.permissions.value),
-                "bot_permissions": int(guild.me.guild_permissions.value) if guild.me else 0,
-                "members": [
-                    {
-                        "id": str(member.id),
-                        "name": member.display_name[:100],
-                        "boosting": member.premium_since is not None,
-                    }
-                    for member in list(guild.members)[:10_000]
-                    if not member.bot
-                ],
-                "manager_ids": [
-                    str(member.id)
-                    for member in list(guild.members)[:10_000]
-                    if (
-                        member.id == guild.owner_id
-                        or member.guild_permissions.administrator
-                        or member.guild_permissions.manage_guild
-                    )
-                ],
-                "channels": [
-                    {
-                        "id": str(channel.id),
-                        "name": channel.name,
-                        "type": str(channel.type),
-                        "private": not channel.permissions_for(guild.default_role).view_channel,
-                        "bot_writable": bool(
-                            guild.me
-                            and channel.permissions_for(guild.me).view_channel
-                            and (
-                                not hasattr(channel.permissions_for(guild.me), "send_messages")
-                                or channel.permissions_for(guild.me).send_messages
-                            )
-                        ),
-                    }
-                    for channel in list(guild.channels)[:500]
-                ],
-                "roles": [
-                    {"id": str(role.id), "name": role.name, "color": str(role.color)}
-                    for role in list(guild.roles)[:500]
-                    if not role.is_default()
-                ],
-            }
-        )
-    return output
 
 
 UP, DOWN = "\U0001f44d", "\U0001f44e"
@@ -662,36 +605,6 @@ async def _guild_sync(guild_id: int) -> List[typing.Any]:
     return await _tree.sync(guild=g)
 
 
-def _start_background_task(name: str, coroutine_factory: typing.Any) -> None:
-    """Start one named process-lifetime task, including after reconnects."""
-    existing = _background_tasks.get(name)
-    if existing is not None and not existing.done():
-        return
-    task = asyncio.create_task(coroutine_factory(), name=f"owaua:{name}")
-    _background_tasks[name] = task
-
-    def _finished(done: asyncio.Task[typing.Any]) -> None:
-        if _background_tasks.get(name) is done:
-            _background_tasks.pop(name, None)
-        if done.cancelled():
-            return
-        try:
-            error = done.exception()
-        except asyncio.CancelledError:
-            return
-        if error is not None:
-            print(f"[background] {name} stopped: {type(error).__name__}: {error}")
-
-    task.add_done_callback(_finished)
-
-
-def _start_message_task(coroutine: typing.Any) -> None:
-    """Keep short-lived event tasks alive until completion."""
-    task = asyncio.create_task(coroutine)
-    _message_tasks.add(task)
-    task.add_done_callback(_message_tasks.discard)
-
-
 async def _sync_native_automod_once() -> None:
     """Keep each configured guild's native Discord AutoMod rule current."""
     for guild in list(client.guilds):
@@ -733,15 +646,15 @@ async def on_ready():
             typing.cast(typing.Any, client)._synced = True
         except Exception as e:
             print(f"[slash] sync failed: {e}")
-    _start_background_task("reflection", _reflection_loop)
-    _start_background_task("lurk", _lurk_loop)
-    _start_background_task("retention", _retention_loop)
-    _start_background_task("guild-archive", lambda: archive.archive_loop(client))
-    _start_background_task("community-scheduler", _community_scheduler_loop)
-    _start_background_task("booster-import", _booster_import_once)
-    _start_background_task("native-automod-sync", _sync_native_automod_once)
+    client.tasks.start_background("reflection", _reflection_loop)
+    client.tasks.start_background("lurk", _lurk_loop)
+    client.tasks.start_background("retention", _retention_loop)
+    client.tasks.start_background("guild-archive", lambda: archive.archive_loop(client))
+    client.tasks.start_background("community-scheduler", _community_scheduler_loop)
+    client.tasks.start_background("booster-import", _booster_import_once)
+    client.tasks.start_background("native-automod-sync", _sync_native_automod_once)
     if config.MALWARE_SCAN_ENABLED:
-        _start_background_task("malware-signatures", malware.signature_update_loop)
+        client.tasks.start_background("malware-signatures", malware.signature_update_loop)
 
 
 @client.event
@@ -1084,7 +997,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
         self_update = bool(client.user and after.id == client.user.id)
         if self_update:
             detail = "I noticed that my server roles changed.\n" + detail
-        _start_message_task(
+        client.tasks.start_transient(
             community.gateway_event_log(
                 after.guild,
                 "role",
@@ -1096,7 +1009,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
             )
         )
     if before.timed_out_until != after.timed_out_until:
-        _start_message_task(
+        client.tasks.start_transient(
             community.gateway_event_log(
                 after.guild,
                 "moderation",
@@ -1118,7 +1031,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
         if old != new:
             member_changes.append(f"**{name}:** {old or 'Not set'} → {new or 'Not set'}")
     if member_changes:
-        _start_message_task(
+        client.tasks.start_transient(
             community.gateway_event_log(
                 after.guild,
                 "member",
@@ -1221,7 +1134,7 @@ async def on_message(message: discord.Message):
     if content.startswith(prefix):
         command_name = content[len(prefix) :].strip().split(maxsplit=1)[0].lower()
         if message.guild is not None and command_name:
-            _start_message_task(community.command_event(message, command_name, content))
+            client.tasks.start_transient(community.command_event(message, command_name, content))
     privacy_commands = {
         "privacy",
         "privacypolicy",
@@ -1238,12 +1151,12 @@ async def on_message(message: discord.Message):
         return
 
     if message.guild is not None and message.content:
-        _start_message_task(boosters.handle_mentions(message))
-        _start_message_task(_handle_swear_jar(message, guild_id, content))
+        client.tasks.start_transient(boosters.handle_mentions(message))
+        client.tasks.start_transient(_handle_swear_jar(message, guild_id, content))
         if await community.handle_message(message):
             return
-        _start_message_task(moderation.safety_check(message))
-        _start_message_task(rules.check_message(client, message))
+        client.tasks.start_transient(moderation.safety_check(message))
+        client.tasks.start_transient(rules.check_message(client, message))
 
     guild_name = message.guild.name if message.guild else "DM"
     channel_name = getattr(message.channel, "name", "DM")
@@ -1267,7 +1180,7 @@ async def on_message(message: discord.Message):
 
     if message.guild and content and not is_dm:
         boosting = levels.is_booster(message.author)
-        _start_message_task(_award_xp(message, guild_id, author, boosting))
+        client.tasks.start_transient(_award_xp(message, guild_id, author, boosting))
 
     directed = bool(content.startswith(prefix) or client.user in message.mentions or is_dm)
     if directed:
@@ -1338,7 +1251,7 @@ async def on_interaction(interaction: discord.Interaction):
 @client.event
 async def on_message_edit(before: discord.Message, after: discord.Message):
     if after.guild is not None and archive.enabled_guild(after.guild.id):
-        _start_message_task(archive.store_live_message(after, edited=True))
+        client.tasks.start_transient(archive.store_live_message(after, edited=True))
     if before.content == after.content or after.guild is None:
         return
     if not after.author.bot:
@@ -1355,9 +1268,9 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
                 getattr(after.author, "display_name", str(after.author.id)),
                 after.content or "",
             )
-        _start_message_task(moderation.safety_check(after))
-        _start_message_task(rules.check_message(client, after))
-    _start_message_task(community.message_edit(before, after))
+        client.tasks.start_transient(moderation.safety_check(after))
+        client.tasks.start_transient(rules.check_message(client, after))
+    client.tasks.start_transient(community.message_edit(before, after))
 
 
 @client.event
@@ -5280,7 +5193,7 @@ async def _cmd_trivia(
             pass
         db.kv_set(trivia_key, "")
 
-    _start_message_task(_reveal())
+    client.tasks.start_transient(_reveal())
 
 
 async def _cmd_whoami(
