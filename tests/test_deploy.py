@@ -131,6 +131,17 @@ class DeploymentValidationTests(unittest.TestCase):
             def __getattr__(self, name: typing.Any):
                 def record(*_args: typing.Any, **_kwargs: typing.Any):
                     self.calls.append(name)
+                    if name == "request":
+                        return {
+                            "data": [
+                                {
+                                    "attributes": {
+                                        "identifier": "server_123",
+                                        "name": "Bots",
+                                    }
+                                }
+                            ]
+                        }
 
                 return record
 
@@ -160,14 +171,57 @@ class DeploymentValidationTests(unittest.TestCase):
         ):
             deploy_script.deploy(args)
 
-        self.assertEqual(len(FakeClient.instances), 1)
-        self.assertEqual(FakeClient.instances[0].calls, [])
+        self.assertEqual(len(FakeClient.instances), 2)
+        self.assertEqual(FakeClient.instances[0].calls, ["request"])
+        self.assertEqual(FakeClient.instances[1].calls, [])
 
     def test_websites_project_is_accepted(self) -> None:
         with mock.patch.object(deploy_script.sys, "argv", ["deploy", "websites", "--dry-run"]):
             args = deploy_script.parse_args()
         self.assertEqual(args.project, "websites")
         self.assertTrue(args.dry_run)
+
+    def test_projects_resolve_to_their_named_daki_servers(self) -> None:
+        config = {
+            "panel_url": "https://portal.daki.cc",
+            "api_key": "ptlc_test",
+            "server_id": "legacy_server",
+            "server_name": "legacy",
+        }
+        payload = {
+            "data": [
+                {"attributes": {"identifier": "bot_server", "name": "Bots"}},
+                {"attributes": {"identifier": "web_server", "name": "Websites"}},
+            ]
+        }
+        with (
+            mock.patch.object(deploy_script, "load_config", return_value=config),
+            mock.patch.object(deploy_script.DakiClient, "request", return_value=payload),
+        ):
+            bot = deploy_script.load_project_config("owaua")
+            websites = deploy_script.load_project_config("websites")
+        self.assertEqual(bot["server_id"], "bot_server")
+        self.assertEqual(bot["server_name"], "Bots")
+        self.assertEqual(websites["server_id"], "web_server")
+        self.assertEqual(websites["server_name"], "Websites")
+
+    def test_missing_named_project_server_fails_closed(self) -> None:
+        client = deploy_script.DakiClient("https://portal.daki.cc", "ptlc_test")
+        payload = {
+            "data": [
+                {"attributes": {"identifier": "bot_server", "name": "Bots"}},
+            ]
+        }
+        with (
+            mock.patch.object(client, "request", return_value=payload),
+            self.assertRaises(deploy_script.DeployError),
+        ):
+            deploy_script.choose_project_server(client, "websites")
+
+    def test_website_runtime_source_is_present_and_hashed(self) -> None:
+        contents, digest = deploy_script.website_runtime_digest()
+        self.assertIn(b"createServer", contents)
+        self.assertEqual(len(digest), 64)
 
     def test_github_action_accepts_a_commit_message(self) -> None:
         with mock.patch.object(
@@ -265,7 +319,11 @@ class DeploymentValidationTests(unittest.TestCase):
             archive = Path(directory) / "sites-bundle.zip"
             deploy_script.build_sites_archive(assembled, archive)
             self.assertGreater(archive.stat().st_size, 0)
-            self.assertTrue(deploy_script.website_digest(archive))
+            digest = deploy_script.website_digest(archive)
+            self.assertTrue(digest)
+            repeated = Path(directory) / "sites-bundle-repeated.zip"
+            deploy_script.build_sites_archive(assembled, repeated)
+            self.assertEqual(digest, deploy_script.website_digest(repeated))
 
 
 if __name__ == "__main__":

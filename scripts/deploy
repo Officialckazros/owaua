@@ -17,7 +17,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
-WEBSITE_ROOT = ROOT.parents[1] / "website"
+WEBSITE_ROOT = ROOT.parent / "website"
 CONFIG_DIR = Path.home() / ".config" / "owaua-deploy"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 STATE_FILE = CONFIG_DIR / "state.json"
@@ -28,6 +28,11 @@ MAX_API_RESPONSE_BYTES = 32 * 1024 * 1024
 MAX_DEPLOY_FILE_BYTES = 2 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 400 * 1024 * 1024
 WEBSITE_BUNDLE_NAME = "sites-bundle.zip"
+WEBSITE_SERVER_FILE = ROOT / "scripts" / "website_server.js"
+PROJECT_SERVER_NAMES = {
+    "owaua": "bots",
+    "websites": "websites",
+}
 _SERVER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _SECRET_RE = re.compile(
@@ -287,6 +292,27 @@ class DakiClient:
             {"key": name, "value": value},
         )
 
+    def primary_allocation_port(self):
+        payload = self.request("GET", self.server_path(""))
+        attributes = payload.get("attributes") if isinstance(payload, dict) else None
+        relationships = (
+            attributes.get("relationships") if isinstance(attributes, dict) else None
+        )
+        allocations = (
+            relationships.get("allocations") if isinstance(relationships, dict) else None
+        )
+        entries = allocations.get("data") if isinstance(allocations, dict) else None
+        if not isinstance(entries, list):
+            raise DeployError("Daki returned no allocation for the websites server")
+        for entry in entries:
+            allocation = entry.get("attributes") if isinstance(entry, dict) else None
+            if not isinstance(allocation, dict) or not allocation.get("is_default"):
+                continue
+            port = allocation.get("port")
+            if isinstance(port, int) and 1 <= port <= 65_535:
+                return port
+        raise DeployError("Daki returned no valid default allocation for the websites server")
+
     def rename_server(self, name):
         if name != "owaua":
             raise DeployError("Refusing an unexpected Daki server name")
@@ -360,7 +386,7 @@ def migrate_legacy_config_dir():
     os.chmod(CONFIG_DIR, 0o700)
 
 
-def choose_server(client, preferred=None):
+def available_servers(client):
     payload = client.request("GET", "/api/client")
     if not isinstance(payload, dict):
         raise DeployError(
@@ -386,6 +412,11 @@ def choose_server(client, preferred=None):
             )
     if not servers:
         raise DeployError("No Daki servers are available for this API key")
+    return servers
+
+
+def choose_server(client, preferred=None):
+    servers = available_servers(client)
     if preferred:
         for server in servers:
             if server["identifier"] == preferred:
@@ -403,6 +434,20 @@ def choose_server(client, preferred=None):
         if choice.isdigit() and 1 <= int(choice) <= len(servers):
             return servers[int(choice) - 1]
         print("Enter one of the listed numbers.")
+
+
+def choose_project_server(client, project):
+    target_name = PROJECT_SERVER_NAMES.get(project)
+    if target_name is None:
+        raise DeployError(f"Unknown deployment project: {project}")
+    for server in available_servers(client):
+        if server["name"].casefold() == target_name:
+            print(f"Using Daki server {server['name']} for {project}.")
+            return server
+    raise DeployError(
+        f"No Daki server named {target_name.title()} is available for {project}. "
+        "Rename the server in Daki or run --setup with an API key that can access it."
+    )
 
 
 def sanitize_api_message(value):
@@ -524,7 +569,9 @@ def setup(allow_insecure_localhost=False):
         pasted_key or getpass.getpass("Daki Client API key (hidden): ").strip()
     )
     client = DakiClient(panel_url, api_key)
-    server = choose_server(client, server_id)
+    if server_id is not None:
+        print("The selected server URL is ignored; deployment targets are fixed by project.")
+    server = choose_project_server(client, "owaua")
     config = {
         "panel_url": panel_url.rstrip("/"),
         "api_key": api_key,
@@ -569,6 +616,18 @@ def load_config(force_setup=False, allow_insecure_localhost=False):
         config.get("server_name"), config["server_id"]
     )
     return config
+
+
+def load_project_config(project, force_setup=False, allow_insecure_localhost=False):
+    """Load credentials and resolve the Daki server reserved for one project."""
+    config = load_config(force_setup, allow_insecure_localhost)
+    client = DakiClient(config["panel_url"], config["api_key"])
+    server = choose_project_server(client, project)
+    return {
+        **config,
+        "server_id": server["identifier"],
+        "server_name": server["name"],
+    }
 
 
 def deployable_files():
@@ -859,7 +918,12 @@ def build_sites_archive(source, archive):
             if not path.is_file() or path.is_symlink():
                 continue
             relative = path.relative_to(source).as_posix()
-            bundle.write(path, f"sites/{relative}")
+            info = zipfile.ZipInfo(f"sites/{relative}", date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.create_system = 3
+            info.external_attr = (path.stat().st_mode & 0o777) << 16
+            with path.open("rb") as source_file, bundle.open(info, "w") as destination:
+                shutil.copyfileobj(source_file, destination)
     if archive.stat().st_size > MAX_ARCHIVE_BYTES:
         archive.unlink(missing_ok=True)
         raise DeployError("Website archive is larger than the deploy limit")
@@ -876,6 +940,15 @@ def website_digest(archive):
     return digest.hexdigest()
 
 
+def website_runtime_digest():
+    if not WEBSITE_SERVER_FILE.is_file() or WEBSITE_SERVER_FILE.is_symlink():
+        raise DeployError(f"Website server source is missing at {WEBSITE_SERVER_FILE}")
+    contents = WEBSITE_SERVER_FILE.read_bytes()
+    if len(contents) > MAX_DEPLOY_FILE_BYTES:
+        raise DeployError("Website server source is larger than the deploy limit")
+    return contents, hashlib.sha256(contents).hexdigest()
+
+
 def deploy_websites(args):
     if not WEBSITE_ROOT.is_dir():
         raise DeployError(f"Website source is missing at {WEBSITE_ROOT}")
@@ -886,6 +959,7 @@ def deploy_websites(args):
         assemble_sites(assembled)
         build_sites_archive(assembled, archive)
         digest = website_digest(archive)
+        runtime_contents, runtime_digest = website_runtime_digest()
         print(
             f"Website bundle: {archive.stat().st_size} bytes, "
             f"{sum(1 for path in assembled.rglob('*') if path.is_file())} files"
@@ -893,17 +967,36 @@ def deploy_websites(args):
         state = load_json(WEBSITE_STATE_FILE, {})
         if not isinstance(state, dict):
             raise DeployError("Website deployment state must be a JSON object")
+        config = None
+        target_changed = False
+        if not args.dry_run:
+            config = load_project_config(
+                "websites", args.setup, args.allow_insecure_localhost
+            )
+            target_changed = state.get("server_id") != config["server_id"]
         previous = state.get("digest") if not args.full else None
-        if previous == digest and not args.restart and not args.setup:
+        runtime_changed = state.get("runtime_digest") != runtime_digest
+        if (
+            previous == digest
+            and not runtime_changed
+            and not target_changed
+            and not args.restart
+            and not args.setup
+        ):
             print("No website changes found.")
             if args.dry_run:
                 return
             return
         print("Files to upload:")
         print(f"  {WEBSITE_BUNDLE_NAME} (extracted to /sites)")
+        if runtime_changed or target_changed:
+            print("  index.js (static website server)")
         if args.dry_run:
             return
-        config = load_config(args.setup, args.allow_insecure_localhost)
+        if target_changed:
+            print("The website target changed; uploading the complete website bundle.")
+        if config is None:  # pragma: no cover - guarded above for type checkers
+            raise DeployError("Website deployment target was not configured")
         confirm_deployment(
             config,
             [WEBSITE_BUNDLE_NAME],
@@ -921,11 +1014,16 @@ def deploy_websites(args):
         client.delete_root_entry("sites")
         client.decompress_archive(WEBSITE_BUNDLE_NAME)
         client.delete_root_entry(WEBSITE_BUNDLE_NAME)
+        client.write_file("index.js", runtime_contents)
+        port = client.primary_allocation_port()
+        client.update_startup_variable("STARTUP_CMD", "")
+        client.update_startup_variable("SECOND_CMD", f"PORT={port} node index.js")
         save_json(
             WEBSITE_STATE_FILE,
             {
                 "server_id": config["server_id"],
                 "digest": digest,
+                "runtime_digest": runtime_digest,
                 "deployed_at": int(time.time()),
             },
         )
@@ -971,7 +1069,7 @@ def deploy(args):
         return
     if not args.skip_checks and (changed or deleted):
         run_checks()
-    config = load_config(args.setup, args.allow_insecure_localhost)
+    config = load_project_config("owaua", args.setup, args.allow_insecure_localhost)
     if state.get("server_id") not in {None, config["server_id"]}:
         changed = sorted(current)
         deleted = []
