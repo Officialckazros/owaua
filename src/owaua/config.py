@@ -1,8 +1,4 @@
-"""Central configuration loaded from the environment.
-
-Importing library modules must not require a Discord token; executable entry
-points call :func:`validate_runtime` before connecting instead.
-"""
+"""Environment-backed runtime configuration."""
 
 import logging
 import os
@@ -185,9 +181,6 @@ MODEL_FALLBACKS = [
     if m.strip()
 ]
 
-# Explicit freaky turns use Mercury 2, which is the strongest configured
-# natural-chat route for this persona. Keep the environment variable as an
-# operator escape hatch and retain the big-brain chain as fallback coverage.
 MODEL_FREAKY = os.getenv("OWAUA_MODEL_FREAKY", "mercury-2")
 MODEL_FREAKY_FALLBACKS = [
     m.strip()
@@ -314,6 +307,10 @@ SYNC_GUILDS = [
     g.strip() for g in os.getenv("OWAUA_SYNC_GUILDS", "").split(",") if g.strip()
 ]
 
+SUPPORT_GUILDS = [
+    g.strip() for g in os.getenv("OWAUA_SUPPORT_GUILDS", "").split(",") if g.strip()
+]
+
 
 def is_bot_owner(user_id: typing.Any) -> bool:
     """True if this Discord user id is owaua's owner."""
@@ -321,11 +318,7 @@ def is_bot_owner(user_id: typing.Any) -> bool:
 
 
 def is_blocked(user_id: typing.Any) -> bool:
-    """True if this user is hard-blocked from using the bot in any way.
-
-    Checks static ids from ``OWAUA_BLOCKED_USERS``, transactional SQLite
-    blocks managed by the CLI/ToS enforcement, and legacy emergency flags.
-    """
+    """Return whether a user is hard-blocked."""
     uid = str(user_id or "").strip()
     if not uid:
         return False

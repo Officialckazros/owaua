@@ -1,14 +1,4 @@
-"""The self-improvement engine + the structured "brain" prompt.
-
-system prompt = PERSONA (+ guild persona override)
-              + mood
-              + relationship with THIS user
-              + lessons
-              + identity + memories
-              + short-term conversation history
-              + server facts + channel context
-              + JSON output contract
-"""
+"""Structured prompt, memory, and response controls."""
 
 import difflib
 import math
@@ -92,12 +82,7 @@ def set_freaky_mode(user_id: str, enabled: bool) -> None:
 def freaky_turn(
     user_id: str, *, channel_nsfw: Optional[bool] = None, assistant: bool = False
 ) -> bool:
-    """Whether this reply uses the adult/flirty persona.
-
-    Freaky mode is an explicit user opt-in, and adult output is still isolated
-    to Discord-marked age-restricted server channels. A saved preference never
-    activates it in DMs, ordinary channels, or unknown contexts.
-    """
+    """Return whether this reply uses the opted-in adult persona."""
     return not assistant and channel_nsfw is True and freaky_enabled(user_id)
 
 
@@ -250,12 +235,7 @@ def facts_about_user(
     query: str = "",
     k: Optional[int] = None,
 ) -> List[str]:
-    """Return a bounded mix of relevant and important facts about one user.
-
-    The old implementation always returned the same 14 highest-importance
-    rows. Once a person had enough memories, newer or topic-relevant facts
-    could exist in SQLite but never reach the model.
-    """
+    """Return relevant and important facts about one user."""
     if not db.privacy_opted_in(str(user_id), str(guild_id)):
         return []
     rows = db.memories_about(user_id, guild_id)
@@ -342,12 +322,7 @@ def _safe_memory_content(value: object) -> str:
 
 
 async def learn_from_turn(text: str, author: str, guild_id: str) -> int:
-    """Reliably distill durable first-person facts from one opted-in turn.
-
-    This pass is independent from the response model's optional ``memories``
-    field, so provider fallbacks and malformed structured replies no longer
-    silently discard everything a person shared.
-    """
+    """Distill durable first-person facts from one opted-in turn."""
     author = str(author)
     guild_id = str(guild_id)
     if not db.privacy_opted_in(author, guild_id) or not should_extract_turn_memories(text):
@@ -798,11 +773,7 @@ _LEAK_INTENT_RE = re.compile(
     r")"
 )
 
-# A model can leak a prompt without copying enough exact text for the source
-# fingerprint check below. These phrases indicate it is narrating its hidden
-# instruction stack rather than answering the Discord user. The boundary is
-# deliberately narrow: it catches references to the model's own internal
-# messages and priority resolution, not ordinary discussion of prompting.
+# Catch instruction-stack narration that source fingerprints miss.
 _INSTRUCTION_STACK_LEAK_RE = re.compile(
     r"(?is)\b(?:"
     r"(?:my|the|your|our|this)\s+(?:developer|system)\s+messages?"
@@ -863,8 +834,8 @@ def _secret_chunks() -> List[str]:
         for src in _secret_sources():
             chunks.extend(_fingerprint_chunks(src, size=28))
             chunks.extend(_fingerprint_chunks(src, size=40))
-        seen: typing.Any = typing.cast(typing.Any, set())
-        out: list[typing.Any] = []
+        seen: set[str] = set()
+        out: list[str] = []
         for c in chunks:
             cl = c.lower().strip()
             if len(cl) < 20 or cl in seen:
@@ -876,14 +847,7 @@ def _secret_chunks() -> List[str]:
 
 
 def wants_prompt_leak(text: Optional[str]) -> bool:
-    """True only for a direct request to extract protected internals.
-
-    Stock prompt-injection wording is not enough by itself. Phrases such as
-    ``ignore previous instructions and write a haiku`` are commonly jokes,
-    tests, or ordinary requests and do not identify any protected target. The
-    explicit prompt/source matchers below still catch requests that name the
-    system prompt, hidden rules, internal configuration, or this bot's code.
-    """
+    """Return whether text directly requests protected internals."""
     if not text:
         return False
     return bool(_LEAK_INTENT_RE.search(text)) or selfknow.wants_code_leak(text)
@@ -949,8 +913,7 @@ def prompt_leak_reply(assistant: bool = False) -> str:
 
 
 def reject_prompt_extraction(text: Optional[str], assistant: bool = False) -> Optional[str]:
-    """If the user is clearly trying to extract the system prompt, return a
-    deflection string. Otherwise return None so the caller can proceed."""
+    """Return a deflection for system-prompt extraction attempts."""
     if wants_prompt_leak(text):
         return prompt_leak_reply(assistant)
     return None
@@ -962,14 +925,7 @@ def scrub_ai_output(
     assistant: bool = False,
     channel_nsfw: bool = False,
 ) -> str:
-    """Apply deterministic safety controls to untrusted model-produced text.
-
-    Pass extra structured fields (title, memories, quotes, full data dicts) so a
-    prompt leak hidden in side channels is still caught.  LLM-authored links are
-    deliberately defanged here, at the shared output boundary.  Host-validated
-    links such as web-search sources and dedicated command results are rendered
-    separately and remain clickable.
-    """
+    """Apply deterministic safety controls to model-produced text."""
     raw = (text or "").strip() if text is not None else ""
     if any_prompt_leaked(raw, *extra):
         return prompt_leak_reply(assistant)
@@ -1110,8 +1066,7 @@ async def answer_with_search(
     scope_id: str | None = None,
     user_id: str | None = None,
 ) -> tuple[str | None, list[dict[str, typing.Any]]]:
-    """Two-pass: fetch web results, then have the model re-answer IN CHARACTER
-    using them. Returns (woven_response_or_None, sources)."""
+    """Fetch web results and return a sourced model answer."""
     ctx, sources, err = await ai.search_context(query)
     if err or not ctx:
         return None, sources or []
@@ -1583,12 +1538,7 @@ def build_system(
 def chat_model(
     guild_id: str, *, assistant: bool = False, freaky: bool = False, channel_nsfw: bool = False
 ) -> Optional[str]:
-    """Model id for a chat turn.
-
-    Assistant mode always stays on the dedicated DeepSeek model. Age-restricted
-    channels use the dedicated host-configured adult route; normal and opt-in
-    freaky chat may use a per-guild override.
-    """
+    """Return the model ID for a chat turn."""
     if assistant:
         return config.DEEPSEEK_MODEL
     if channel_nsfw and freaky:

@@ -1,23 +1,4 @@
-"""Knowledge base — a real retrieval store, separate from the `memories` table.
-
-Why a new store instead of `memories`
---------------------------------------
-`memories` is the bot's *social* brain: per-user facts and a handful of
-server facts, deliberately soft-capped (`MEMORY_SOFT_CAP`) and decayed so it
-stays small and cheap. That is exactly the wrong shape for reference knowledge
-you want the bot to actually *know* (e.g. world religions): you want it
-uncapped, chunked, and retrieved by relevance — not decayed away the moment it
-passes 40 rows.
-
-So the KB is its own table plus a SQLite **FTS5** full-text index (BM25 ranked).
-No embedding provider needed, no extra dependency — FTS5 ships with Python's
-sqlite3. Content is chunked into passages on ingest; retrieval returns the
-top-k passages for a query, which `brain.build_system` injects as authoritative
-reference facts.
-
-Everything lives in the same SQLite file as the rest of the brain (`db.conn()`),
-so it persists across restarts with zero extra config.
-"""
+"""SQLite FTS5 reference knowledge base."""
 
 import logging
 import re
@@ -92,10 +73,7 @@ def ensure() -> None:
 
 
 def _chunk(text: str, size: int = 700, overlap: int = 120) -> List[str]:
-    """Split text into ~`size`-char passages on paragraph/sentence boundaries.
-
-    Overlap keeps a fact that straddles a boundary retrievable from either side.
-    """
+    """Split text into overlapping passages near `size` characters."""
     text = (text or "").strip()
     if not text:
         return []
@@ -161,11 +139,7 @@ def _keywords(text: str) -> List[str]:
 
 
 def _fts_query(query: str) -> str:
-    """Build a safe FTS5 MATCH expression from free text.
-
-    User text can contain FTS operators/punctuation that break MATCH parsing,
-    so we tokenise to words and OR the quoted terms — robust and good recall.
-    """
+    """Build a safe FTS5 match expression from free text."""
     kws = _keywords(query)
     return " OR ".join(f'"{w}"' for w in kws)
 

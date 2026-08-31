@@ -1,9 +1,4 @@
-"""Transactional hard-block persistence for owaua.
-
-SQLite is the source of truth. ``blocked_users.json`` is retained only as a
-one-time, permission-tightened migration source so existing deployments keep
-their blocks without continuing to expose or race on a shared JSON file.
-"""
+"""Transactional hard-block persistence and legacy migration."""
 
 from __future__ import annotations
 
@@ -44,12 +39,7 @@ def _migration_name(path: Path) -> str:
 
 
 def _secure_json_read(path: Path) -> tuple[str, object | None]:
-    """Read a regular legacy file without following symlinks.
-
-    Returns ``("missing", None)``, ``("invalid", None)``, or
-    ``("ok", decoded_json)``. A file must be made owner-only before any of
-    its contents are read.
-    """
+    """Read an owner-only regular legacy file without following symlinks."""
     try:
         if stat.S_ISLNK(os.lstat(path).st_mode):
             return "invalid", None
@@ -177,21 +167,15 @@ def _clean_metadata(raw: object) -> dict[typing.Any, typing.Any]:
 
 def _legacy_users(value: object) -> dict[typing.Any, typing.Any]:
     if isinstance(value, list):
-        return typing.cast(
-            typing.Any,
-            {str(user_id): {} for user_id in typing.cast(typing.Iterable[typing.Any], value)},
-        )
+        return {str(user_id): {} for user_id in value}
     if not isinstance(value, dict):
         return {}
-    users: typing.Any = typing.cast(typing.Any, value).get("users")
+    users = value.get("users")
     if isinstance(users, dict):
-        return typing.cast(typing.Any, users)
-    blocked_ids: typing.Any = typing.cast(typing.Any, value).get("blocked")
+        return users
+    blocked_ids = value.get("blocked")
     if isinstance(blocked_ids, list):
-        return typing.cast(
-            typing.Any,
-            {str(user_id): {} for user_id in typing.cast(typing.Iterable[typing.Any], blocked_ids)},
-        )
+        return {str(user_id): {} for user_id in blocked_ids}
     return {}
 
 

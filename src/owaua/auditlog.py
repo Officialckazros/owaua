@@ -1,10 +1,4 @@
-"""Audit-log context for the brain.
-
-When a user asks "who did X" about the server (who changed a channel, who
-banned/kicked someone, who renamed a role, ...), pull real entries from the
-Discord audit log and hand them to the model as authoritative context instead
-of letting it guess or answer "I can't see that".
-"""
+"""Discord audit-log context for the brain."""
 
 import logging
 import re
@@ -61,17 +55,13 @@ def _short(v: typing.Any, n: int = 80) -> str:
 
 
 def _change_bits(entry: typing.Any) -> str:
-    """Summarize the before->after field changes of an audit entry.
-
-    discord.py 2.x exposes changes as AuditLogChanges with `.before`/`.after`
-    AuditLogDiff objects (iterable key->value dicts), NOT a list of changes.
-    """
+    """Summarize an audit entry's before-and-after fields."""
     try:
         before = entry.before
         after = entry.after
     except Exception:
         return ""
-    keys: typing.Any = typing.cast(typing.Any, set())
+    keys: set[str] = set()
     for diff in (before, after):
         if diff is None:
             continue
@@ -80,7 +70,7 @@ def _change_bits(entry: typing.Any) -> str:
         except Exception:
             _LOG.debug("could not enumerate an audit-log change diff", exc_info=True)
             continue
-    bits: list[typing.Any] = []
+    bits: list[str] = []
     for key in sorted(keys):
         if key in ("id", "type", "position"):
             continue
@@ -109,12 +99,7 @@ def _target_label(target: typing.Any) -> str:
 
 
 async def fetch_context(query: str, guild: typing.Any, requester: typing.Any = None) -> str:
-    """Return formatted audit-log lines for `query`, or "" when not applicable.
-
-    Non-empty results are authoritative context for the brain. When the bot
-    can't read the log it returns an explicit note so the model says so instead
-    of inventing an answer.
-    """
+    """Return audit-log lines for `query`, or "" when not applicable."""
     if guild is None or not wants_audit_log(query):
         return ""
     requester_perms = getattr(requester, "guild_permissions", None)

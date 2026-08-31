@@ -1,15 +1,4 @@
-"""Owner CLI for ToS hard-blocks (auto-enforced by the bot).
-
-Usage:
-    tos break                 List every ToS-blocked user + why, then interactive unblock
-    tos break list            List only (no prompt)
-    tos break unblock <id>    Unblock one user and DM them that they can use the bot
-    tos break unblock all     Unblock everyone on the ToS list (with confirm) + DM each
-    tos help                  This help
-
-Also:
-    PYTHONPATH=src python -m owaua.tos_cli break
-"""
+"""Owner CLI for ToS hard blocks."""
 
 from __future__ import annotations
 
@@ -159,13 +148,7 @@ def _collect_emergency_blocks() -> Dict[str, dict[typing.Any, typing.Any]]:
 
 
 def collect_tos_blocks() -> List[Tuple[str, dict[typing.Any, typing.Any]]]:
-    """
-    Return sorted list of (user_id, meta) for every ToS hard-block.
-
-    Sources:
-      1. Transactional SQLite dynamic-block records marked as ToS enforcement
-      2. Legacy SQLite emergency flags
-    """
+    """Return ToS hard blocks sorted by user ID."""
     found: Dict[str, dict[typing.Any, typing.Any]] = {}
 
     for uid, meta in blocked.list_blocked().items():

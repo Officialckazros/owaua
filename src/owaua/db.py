@@ -1,18 +1,4 @@
-"""SQLite persistence — the bot's growing brain.
-
-Tables
-------
-memories      : facts about a subject (user id or 'server')
-lessons       : behavioral guidance from feedback
-feedback      : raw up/down + corrections
-commands      : community prompt-defined commands
-interactions  : stats + skill level
-kv            : misc key/value (mood, lurk timers, etc.)
-relationships : per-user bond score, nickname, grudge
-conversations : short-term user↔bot turns
-quotes        : hall of shame / saved lines
-guild_settings: per-server config (persona, lurk, language, etc.)
-"""
+"""SQLite persistence for bot state."""
 
 import json
 import math
@@ -36,13 +22,7 @@ _db_lock = threading.RLock()
 
 
 class _SerializedConnection(sqlite3.Connection):
-    """Serialize access while legacy synchronous callers are migrated.
-
-    sqlite is safe with WAL, but one ``check_same_thread=False`` connection is
-    not safe to use concurrently without application-level serialization.
-    Important multi-statement operations below additionally hold ``_db_lock``
-    for their complete transaction.
-    """
+    """Serialize access to the shared SQLite connection."""
 
     def execute(self, *args: typing.Any, **kwargs: typing.Any):
         with _db_lock:
@@ -280,6 +260,12 @@ CREATE TABLE IF NOT EXISTS tos_acceptances (
     submitted_at    REAL NOT NULL,
     reviewed_at     REAL
 );
+CREATE TABLE IF NOT EXISTS tos_blocked_networks (
+    network_hash    TEXT NOT NULL,
+    source_user_id  TEXT NOT NULL,
+    seen_at         REAL NOT NULL,
+    PRIMARY KEY (network_hash, source_user_id)
+);
 CREATE TABLE IF NOT EXISTS action_audit (
     nonce          TEXT PRIMARY KEY,
     actor_id       TEXT NOT NULL,
@@ -449,6 +435,8 @@ CREATE INDEX IF NOT EXISTS idx_tos_acceptance_network
     ON tos_acceptances(network_hash, network_seen_at);
 CREATE INDEX IF NOT EXISTS idx_tos_acceptance_review
     ON tos_acceptances(status, submitted_at);
+CREATE INDEX IF NOT EXISTS idx_tos_blocked_networks_hash
+    ON tos_blocked_networks(network_hash, seen_at);
 CREATE INDEX IF NOT EXISTS idx_archive_updated
     ON guild_archive_channels(guild_id, updated DESC);
 CREATE INDEX IF NOT EXISTS idx_cli_active_heartbeat
@@ -790,13 +778,7 @@ def import_legacy_dynamic_blocks(
     migration_name: str,
     records: list[tuple[str, str, dict[typing.Any, typing.Any]]],
 ) -> bool:
-    """Import legacy block records once, without replacing live SQLite data.
-
-    Returns ``True`` only for the process that committed the migration marker.
-    The marker and all imported rows are in the same transaction, which makes
-    concurrent bot/CLI startup safe and keeps a partial import from becoming
-    authoritative.
-    """
+    """Import legacy block records once without replacing live data."""
     c = conn()
     with _db_lock:
         try:
@@ -848,12 +830,7 @@ def dynamic_block_apply(
     fields: dict[typing.Any, typing.Any],
     history_event: dict[typing.Any, typing.Any],
 ) -> bool:
-    """Atomically create/update one dynamic block and append its history.
-
-    Manual blocks dominate automatic ToS blocks.  An automatic event may be
-    recorded against a manually blocked account, but it cannot silently turn
-    that entry into a ToS block that the ToS-review CLI is allowed to remove.
-    """
+    """Create or update one dynamic block and append its history."""
     uid = str(user_id)
     incoming_source = block_source if block_source in {"manual", "tos", "other"} else "other"
     c = conn()
@@ -919,12 +896,20 @@ def dynamic_block_apply(
                 (uid, timestamp - _TOS_NETWORK_RETENTION_SECONDS),
             ).fetchone()
             if network is not None:
+                network_hash = str(network["network_hash"])
+                c.execute(
+                    "INSERT INTO tos_blocked_networks"
+                    "(network_hash,source_user_id,seen_at) VALUES(?,?,?) "
+                    "ON CONFLICT(network_hash,source_user_id) DO UPDATE SET "
+                    "seen_at=excluded.seen_at",
+                    (network_hash, uid, timestamp),
+                )
                 peers = c.execute(
                     "SELECT user_id FROM tos_acceptances WHERE user_id!=? "
                     "AND status='accepted' AND network_hash=? AND network_seen_at>=?",
                     (
                         uid,
-                        str(network["network_hash"]),
+                        network_hash,
                         timestamp - _TOS_NETWORK_RETENTION_SECONDS,
                     ),
                 ).fetchall()
@@ -982,6 +967,11 @@ def dynamic_block_remove(user_id: str, *, expected_sources: set[str] | None = No
                     (uid, str(row["block_source"])),
                 )
             removed = int(cur.rowcount) > 0
+            if removed:
+                c.execute(
+                    "DELETE FROM tos_blocked_networks WHERE source_user_id=?",
+                    (uid,),
+                )
             c.commit()
             return removed
         except Exception:
@@ -2327,11 +2317,7 @@ _SNOWFLAKE = re.compile(r"(\d{15,22})")
 
 
 def normalize_subject(about: typing.Any, default_user: str | None = None) -> str:
-    """Canonical subject key: raw user id, or 'server'.
-
-    The model sometimes emits <@id>, bare ids, or 'me'/'user' — normalize so
-    erase/list/get all hit the same rows.
-    """
+    """Return a canonical user ID or `server` subject key."""
     s = str(about if about is not None else "server").strip()
     if not s:
         return "server"
@@ -2538,11 +2524,7 @@ def forget_memories_about(
     clear_convo: bool = True,
     all_guilds: bool = False,
 ) -> dict[typing.Any, typing.Any]:
-    """Wipe long-term memories about a subject.
-
-    Also clears short-term conversation history for that user (so the model
-    cannot re-learn the same facts on the next message). Returns counts.
-    """
+    """Delete long-term memories and related conversation history."""
     subject = normalize_subject(subject)
     gid = str(guild_id) if guild_id is not None else None
     if all_guilds or gid is None:
@@ -2886,12 +2868,7 @@ def ai_spend_reserve(
     scope_daily_limit_microusd: int | None,
     at: float | None = None,
 ) -> dict[typing.Any, typing.Any]:
-    """Atomically reserve worst-case paid-provider cost across durable windows.
-
-    Reservations are deliberately not refunded: a timed-out or disconnected
-    request may still be billable. Only metadata needed for enforcement is
-    retained, never prompts or model responses.
-    """
+    """Reserve estimated paid-provider cost across durable windows."""
     created = now() if at is None else float(at)
     cost = max(1, int(reserved_microusd))
     uid = str(user_id or "").strip() or None
@@ -3260,6 +3237,25 @@ def tos_challenge_consume(
     return str(row["user_id"])
 
 
+def tos_challenge_peek(
+    token_hash: str, version: str, *, current_time: float | None = None
+) -> str | None:
+    """Return the Discord id for an unexpired challenge without consuming it."""
+    timestamp = now() if current_time is None else float(current_time)
+    row = (
+        conn()
+        .execute(
+            "SELECT user_id,version,expires_at FROM tos_acceptance_challenges "
+            "WHERE token_hash=?",
+            (str(token_hash),),
+        )
+        .fetchone()
+    )
+    if row is None or str(row["version"]) != str(version) or float(row["expires_at"]) < timestamp:
+        return None
+    return str(row["user_id"])
+
+
 def tos_acceptance_set(
     user_id: str,
     version: str,
@@ -3340,6 +3336,39 @@ def tos_acceptance_network_has_dynamic_block(
             "JOIN dynamic_blocks b ON b.user_id=a.user_id "
             "WHERE a.network_hash=? AND a.network_seen_at>=? AND a.user_id!=? LIMIT 1",
             (str(network_hash), float(since), str(exclude_user_id)),
+        )
+        .fetchone()
+    )
+    return row is not None
+
+
+def tos_blocked_network_remember(network_hash: str, source_user_id: str) -> None:
+    """Record that a currently blocked account was seen on this network token."""
+    digest = str(network_hash or "")[:128]
+    uid = str(source_user_id or "")
+    if not digest or not uid:
+        return
+    conn().execute(
+        "INSERT INTO tos_blocked_networks(network_hash,source_user_id,seen_at) "
+        "VALUES(?,?,?) ON CONFLICT(network_hash,source_user_id) DO UPDATE SET "
+        "seen_at=excluded.seen_at",
+        (digest, uid, now()),
+    )
+    conn().commit()
+
+
+def tos_blocked_network_is_blocked(network_hash: str, *, since: float) -> bool:
+    """True when a live blocked account contributed this recent network token."""
+    digest = str(network_hash or "")
+    if not digest:
+        return False
+    row = (
+        conn()
+        .execute(
+            "SELECT 1 FROM tos_blocked_networks n "
+            "JOIN dynamic_blocks b ON b.user_id=n.source_user_id "
+            "WHERE n.network_hash=? AND n.seen_at>=? LIMIT 1",
+            (digest, float(since)),
         )
         .fetchone()
     )
@@ -3517,6 +3546,14 @@ def privacy_export(user_id: str) -> dict[typing.Any, typing.Any]:
                 (uid,),
             ).fetchall()
         ],
+        "tos_blocked_networks": [
+            dict(r)
+            for r in c.execute(
+                "SELECT network_hash,source_user_id,seen_at FROM tos_blocked_networks "
+                "WHERE source_user_id=?",
+                (uid,),
+            ).fetchall()
+        ],
         "assistant_actions": [
             dict(r)
             for r in c.execute(
@@ -3647,9 +3684,15 @@ def privacy_delete_user(user_id: str) -> dict[str, int]:
                     ),
                 )
                 counts["dynamic_blocks"] = 0
+                counts["tos_blocked_networks"] = 0
             else:
                 cur = c.execute("DELETE FROM dynamic_blocks WHERE user_id=?", (uid,))
                 counts["dynamic_blocks"] = max(0, int(cur.rowcount))
+                cur = c.execute(
+                    "DELETE FROM tos_blocked_networks WHERE source_user_id=?",
+                    (uid,),
+                )
+                counts["tos_blocked_networks"] = max(0, int(cur.rowcount))
             cur = c.execute("DELETE FROM kv WHERE key LIKE ?", (f"uf:{uid}:%",))
             counts["user_flags"] = max(0, int(cur.rowcount))
             c.commit()
@@ -3712,6 +3755,11 @@ def cleanup_expired_content(retention_days: int = MAX_RETENTION_DAYS) -> dict[st
                 (cutoff,),
             )
             counts["tos_acceptance_networks_minimized"] = max(0, int(cur.rowcount))
+            cur = c.execute(
+                "DELETE FROM tos_blocked_networks WHERE seen_at<?",
+                (cutoff,),
+            )
+            counts["tos_blocked_networks"] = max(0, int(cur.rowcount))
             cur = c.execute(
                 "DELETE FROM community_records WHERE status!='active' AND updated<?",
                 (cutoff,),
@@ -4082,12 +4130,7 @@ def levels_profile(user_id: str, guild_id: str) -> dict[typing.Any, typing.Any]:
 def levels_award(
     user_id: str, guild_id: str, amount: int, cooldown_seconds: float
 ) -> dict[typing.Any, typing.Any] | None:
-    """Atomically award XP if off cooldown.
-
-    Returns ``None`` while the user is still on cooldown, otherwise a dict
-    with ``gained``, ``leveled_to`` (only when a level-up happened) and the
-    updated ``xp``/``level``.
-    """
+    """Award XP when the user is off cooldown."""
     uid = str(user_id)
     gid = str(guild_id)
     c = conn()
@@ -4163,12 +4206,7 @@ def levels_top(guild_id: str, limit: int = 10) -> list[dict[typing.Any, typing.A
 def daily_claim(
     user_id: str, guild_id: str, reward: int, *, streak_window: float = 172_800.0
 ) -> tuple[float, int, int]:
-    """Atomically claim a daily reward.
-
-    Returns ``(seconds_until_next_claim, credited, streak)``.  ``credited`` is
-    ``0`` when the claim is still on cooldown.  A claim within ``streak_window``
-    of the previous one keeps the streak alive; anything longer resets it.
-    """
+    """Claim a daily reward and return cooldown, credit, and streak."""
     uid = str(user_id)
     gid = str(guild_id)
     c = conn()
@@ -4742,7 +4780,7 @@ def _top_words(rows: List[sqlite3.Row], n: int = 20) -> List[str]:
     """Most common non-stop words across a batch of recorded messages."""
     from collections import Counter
 
-    cnt: typing.Any = typing.cast(typing.Any, Counter())
+    cnt: Counter[str] = Counter()
     for r in rows:
         content = r["content"] or ""
         cnt.update(w for w in _WORD.findall(content.lower()) if w not in _STOP_WORDS)
@@ -4752,8 +4790,7 @@ def _top_words(rows: List[sqlite3.Row], n: int = 20) -> List[str]:
 def get_user_intelligence(
     user_id: str, guild_id: Optional[str] = None
 ) -> dict[typing.Any, typing.Any]:
-    """Full recorded history for a user — totals, monthly activity, channels,
-    favorite words, flagged messages, recent + random old message samples."""
+    """Return the recorded history for a user."""
     c = conn()
     uid = str(user_id)
     gid = str(guild_id or "")
@@ -4971,8 +5008,7 @@ def get_user_bad_messages(
 
 
 def get_server_intelligence(guild_id: str) -> dict[typing.Any, typing.Any]:
-    """Full recorded history for a server — totals, active users, monthly
-    activity, top channels, top words, top senders, flagged messages."""
+    """Return the recorded history for a server."""
     c = conn()
     gid = str(guild_id)
     total = c.execute("SELECT COUNT(*) n FROM server_messages WHERE guild_id=?", (gid,)).fetchone()[

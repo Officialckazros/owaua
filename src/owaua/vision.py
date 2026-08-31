@@ -1,9 +1,4 @@
-"""Vision features: the /describe slash command and the 'Describe image'
-message context menu, powered by Qwen vision (via :class:`LLMClient`).
-
-Each pass returns a description and a moderation flag in one call: the model
-replies with JSON ``{"description", "flagged", "category", "reason"}``.
-"""
+"""Image descriptions and moderation through the vision model."""
 
 import logging
 import typing

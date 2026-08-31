@@ -1,20 +1,4 @@
-"""Seed the knowledge base with religion content.
-
-Two ways to use it:
-
-    PYTHONPATH=src python -m owaua.fuck_religion --guild-id 123456789
-    PYTHONPATH=src python -m owaua.fuck_religion --guild-id 123456789 ./my_texts
-
-"Every single piece of information about religion" is not a finite thing anyone
-can literally hand a bot — so this ships a solid, neutral, encyclopedic STARTER
-set covering the major traditions, plus a bounded folder-ingest path for
-operator-reviewed text files.
-
-Content here is written to be factual and even-handed. Note that the default
-persona (config.PERSONA) is opinionated *against* religion; the KB is wired to
-be authoritative for ACCURACY regardless of tone, but if you want the bot to
-discuss religion respectfully, also soften that persona line.
-"""
+"""Seed the knowledge base with operator-reviewed religion content."""
 
 import argparse
 import os

@@ -1,16 +1,4 @@
-"""Server-rules enforcement with human-in-the-loop approval.
-
-Scans messages only in guilds which explicitly enable the rules preset and
-matches them against the server ruleset. Every detected violation posts an
-approval request with the offender/evidence and
-**Approve** / **Deny** buttons — to a private channel. Approving executes the
-rule's action (ban / kick / timeout / warn), denying does nothing.
-
-Warn rules accumulate strikes (persisted via the KV store); hitting the rule's
-strike limit escalates to a kick, and a repeat offence after that escalates to
-a ban. Subjective rules rely on keyword heuristics — the approval step is what
-keeps false positives harmless.
-"""
+"""Server-rules enforcement with staff approval."""
 
 import collections
 import datetime
@@ -375,11 +363,7 @@ _LEET = str.maketrans(
 
 
 def normalize_for_rules(content: str) -> str:
-    """Expose common Unicode, separator, leetspeak, and repeat bypasses.
-
-    The normalized value is used only for deterministic candidate detection;
-    staff still approve every resulting action and see the original evidence.
-    """
+    """Normalize common Unicode, separator, leetspeak, and repeat bypasses."""
     value = unicodedata.normalize("NFKC", str(content or "")).translate(_CONFUSABLES)
     value = (
         "".join(char for char in value if unicodedata.category(char) not in {"Cf", "Cc", "Cs"})
@@ -917,13 +901,7 @@ async def _directed_at_owner(client: typing.Any, message: discord.Message) -> bo
 
 
 async def _llm_confirm_request(message: discord.Message, rule: Rule) -> bool:
-    """Ask Safety GPT whether the message really violates the rule (fail-open).
-
-    The classifier is trained to detect jokes first, then apply rule-specific
-    logic: joke-targeted rules (epstein / genocide) count jokes as violations,
-    'kys' counts only attacks aimed at other people (never self-harm), and
-    other rules ignore plain banter.
-    """
+    """Ask the safety model whether a message violates a rule."""
     try:
         joke_guidance = (
             "If the rule targets jokes (Epstein jokes, jokes about genocide/mass murder): "

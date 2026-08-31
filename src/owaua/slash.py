@@ -1,12 +1,4 @@
-"""Slash-command layer — makes owaua usable as a USER-INSTALLABLE app.
-
-Once the app is user-installed (Developer Portal -> Installation -> User Install),
-these commands work in DMs, group DMs, and any server, even ones the bot isn't a
-member of. They reuse the exact same brain, per-user memory, mood, and community
-commands as the message path.
-
-Wire-up: call setup(client, track) from bot.py, then `await tree.sync()` on ready.
-"""
+"""Slash-command runtime for bot and user installations."""
 
 import asyncio
 import collections
@@ -865,13 +857,7 @@ class _BlockingTree(app_commands.CommandTree):
     async def _finish_failed_interaction(
         self, interaction: discord.Interaction, message: str
     ) -> None:
-        """Complete a failed command even when it has already been deferred.
-
-        Commands commonly defer before calling an external service.  Discord
-        does not automatically replace that deferred response if command code
-        later raises, so use the original response for deferred channel
-        messages and a private follow-up for all other completed responses.
-        """
+        """Complete a failed command after any deferred response."""
         try:
             response = interaction.response
             if not response.is_done():

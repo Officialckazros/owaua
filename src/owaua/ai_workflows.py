@@ -1,9 +1,4 @@
-"""Bounded, privacy-conscious AI utilities shared by prefix and slash commands.
-
-The workflows in this module are deliberately read-only.  They transform text,
-summarise live Discord context, or produce advisory analysis; they never create
-assistant actions and never persist their source material.
-"""
+"""Read-only AI utilities shared by prefix and slash commands."""
 
 from __future__ import annotations
 

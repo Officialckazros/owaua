@@ -509,10 +509,6 @@ q("#case-create").onsubmit=createCase;q("#digest-config").onsubmit=saveDigest;q(
 """
 
 
-def _client_key(request: web.Request) -> str:
-    return request.remote or "unknown"
-
-
 def _form_limited(key: str) -> bool:
     now = time.monotonic()
     attempts = _form_attempts[key]
@@ -1547,7 +1543,7 @@ def attach_dashboard_routes(
         return response
 
     async def form_post(request: web.Request) -> web.Response:
-        if _form_limited("form:" + _client_key(request)):
+        if _form_limited("form:" + (request.remote or "unknown")):
             raise web.HTTPTooManyRequests(text="too many form submissions")
         guild = require_connected_guild(request.match_info["guild_id"])
         configured = configured_form(guild["id"], request.match_info["slug"])

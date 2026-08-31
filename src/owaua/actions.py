@@ -1,18 +1,4 @@
-"""Execution of AI-emitted actions, with permission gating.
-
-The model can *ask* for moderation/admin actions, but the bot only performs
-them when the REQUESTING user actually holds the matching Discord permission
-(and the bot does too). Instructions in other people's messages can never
-trigger an action — only what the requester is entitled to do themselves.
-This is the only thing standing between "full server control" and any random
-member pinging the bot into doing something destructive — do not weaken it.
-
-All model-emitted actions, including reactions, are proposals until a caller
-explicitly marks the request as human-confirmed.  This fail-closed default is
-intentional: callers which render confirmation UI must bind that UI to the
-requesting member and re-resolve permissions immediately before calling this
-module with ``confirmed=True``.
-"""
+"""Permission-gated execution of AI-emitted Discord action proposals."""
 
 import datetime
 import json
@@ -249,13 +235,7 @@ def _role_name(value: object) -> str:
 
 
 def assistant_proposals(raw_actions: object) -> List[dict[typing.Any, typing.Any]]:
-    """Return up to five valid assistant proposals, or fail closed.
-
-    Each proposal is still confirmed and executed separately.  The small batch
-    limit lets one request express related work without turning Confirm into a
-    blanket approval.  Internal dependency fields are derived here, never
-    trusted from model output.
-    """
+    """Return up to five valid assistant proposals, or fail closed."""
     if isinstance(raw_actions, dict):
         candidates: typing.Any = [raw_actions]
     elif (
@@ -298,13 +278,7 @@ def assistant_proposals(raw_actions: object) -> List[dict[typing.Any, typing.Any
 def bind_assistant_channel_scope(
     proposal: dict[typing.Any, typing.Any], user_text: str
 ) -> Optional[dict[typing.Any, typing.Any]]:
-    """Bind omitted channel targets to the live confirmation channel.
-
-    Models occasionally copy a visible user or guild id into the optional
-    ``channel`` field.  For actions documented to default to the current
-    channel, trust a target only when the user supplied that exact channel id
-    or mention.  Otherwise omit it so confirmation-time context is authoritative.
-    """
+    """Bind omitted channel targets to the live confirmation channel."""
     canonical = action_type(proposal)
     if canonical not in _CURRENT_CHANNEL_DEFAULT_ACTIONS:
         return dict(proposal)
@@ -325,11 +299,7 @@ def bind_assistant_channel_scope(
 
 
 def looks_like_action_request(text: str) -> bool:
-    """Conservatively identify imperative Discord-action requests.
-
-    Merely discussing an action (for example, ``how does slowmode work?``) must
-    not replace a useful answer with an action-resolution error.
-    """
+    """Identify imperative Discord-action requests."""
     value = str(text or "").strip()
     if not _ACTION_REQUEST_RE.search(value):
         return False
@@ -415,13 +385,7 @@ def _duration_seconds(match: re.Match[str]) -> int:
 
 
 def infer_assistant_proposal(text: str) -> Optional[dict[typing.Any, typing.Any]]:
-    """Recover a small set of unambiguous proposals from plain user text.
-
-    This is a resilience fallback for malformed/missing model ``actions``.  It
-    deliberately covers only requests whose parameters can be read exactly;
-    the returned action still goes through Confirm and all live permission and
-    hierarchy checks before anything changes.
-    """
+    """Recover unambiguous proposals from plain user text."""
     value = " ".join(str(text or "").strip().split())
     if not value or not looks_like_action_request(value):
         return None
@@ -553,13 +517,7 @@ def resolve_assistant_output(
     leak_blocked: bool = False,
     raw_plan: object | None = None,
 ) -> tuple[str, List[dict[typing.Any, typing.Any]]]:
-    """Resolve one assistant turn into safe copy and an ordered proposal batch.
-
-    Prefix and slash commands share this boundary so model-output quirks cannot
-    make the two public assistant interfaces behave differently.  A proposal
-    remains inert here: callers must still render an invoker-bound confirmation
-    and execute it with ``confirmed=True``.
-    """
+    """Resolve an assistant turn into safe copy and ordered proposals."""
     response = str(model_response or "").strip()
     if leak_blocked:
         return response, []
@@ -717,12 +675,7 @@ def _role_id(raw: typing.Any) -> Optional[int]:
 
 
 def chart_url(raw_chart: object) -> Optional[str]:
-    """Build a bounded QuickChart URL from a small, data-only chart schema.
-
-    Arbitrary Chart.js options are deliberately ignored so model output cannot
-    inject scriptable callbacks or make an unbounded URL. Invalid charts simply
-    render without an image.
-    """
+    """Build a bounded QuickChart URL from a data-only chart schema."""
     if not isinstance(raw_chart, dict):
         return None
     chart_type = str(typing.cast(typing.Any, raw_chart).get("type") or "bar")
@@ -790,12 +743,7 @@ def chart_url(raw_chart: object) -> Optional[str]:
 
 
 def _has(member: discord.Member, perm: Optional[str], channel: typing.Any = None) -> bool:
-    """Whether *member* holds *perm*.
-
-    Guild owner and administrator always pass. When *channel* is given, use
-    effective channel overwrites (not just guild-level flags) so a denied
-    override in #mod-only can't be bypassed via the bot.
-    """
+    """Return whether *member* holds *perm* in the given context."""
     if perm is None:
         return True
     if member is None or not isinstance(member, discord.Member):
@@ -962,11 +910,7 @@ async def _resolve_member(
 async def _resolve_channel(
     guild: typing.Any, current_channel: typing.Any, raw_name: typing.Any, *, fresh: bool = False
 ):
-    """Look up a channel by name or id.
-
-    An omitted target uses the request channel.  An explicit but unknown target
-    fails closed instead of silently applying a mutation to the request channel.
-    """
+    """Look up a channel by name or ID."""
     name = str(raw_name or "").strip()
     channel_id = _channel_id(name) if name else getattr(current_channel, "id", None)
     if channel_id is None:
@@ -1257,11 +1201,7 @@ async def finalize_inverse(
 def _resolve_emoji(
     guild: typing.Any, raw: typing.Any
 ) -> Optional[Union[str, discord.Emoji, discord.PartialEmoji]]:
-    """Turn model output into something message.add_reaction accepts.
-
-    Accepts unicode ('😂'), :name: / name for server custom emoji, raw id,
-    or full Discord markup <:name:id> / <a:name:id>.
-    """
+    """Resolve model output for ``message.add_reaction``."""
     if raw is None:
         return None
     s = str(raw).strip()
@@ -1395,14 +1335,7 @@ async def execute_all(
     confirmed: bool = False,
     batch_actions: Optional[List[dict[typing.Any, typing.Any]]] = None,
 ) -> List[str]:
-    """Run each action; return short human-readable result lines for the embed.
-
-    `requester` is the member/user who triggered the exchange; `guild` is the
-    server it happened in (None in a DM); `channel` is where the request was
-    made (used as the default target for channel-scoped actions).
-    `source_message` is the triggering Discord message (for react_message).
-    Works from both the message path and the slash-command path.
-    """
+    """Run each action and return short result lines for the embed."""
     rid = getattr(requester, "id", None) if requester is not None else None
     if rid is not None and config.is_blocked(rid):
         return []
@@ -1625,10 +1558,7 @@ async def _one(
             if len(existing) + len(additions) > 500:
                 return "blocked: this server already has the maximum 500 blocked phrases"
             settings["banned_phrases"] = [*existing, *additions]
-            # An explicit request to block a phrase is also an explicit request
-            # to enforce it.  Older guild configurations may have Automod or its
-            # deletion switch disabled, which otherwise leaves the confirmation
-            # successful but the phrase ineffective.
+            # Older configurations may need both switches enabled for an explicit block.
             settings["delete"] = True
             verb = "added"
             changed = additions

@@ -1,18 +1,4 @@
-"""Voice-channel features.
-
-* ``/join`` / ``/leave`` — connect / disconnect (uses ``VoiceRecvClient`` so
-  live transcription is possible; falls back to the stock voice client).
-* ``/say`` — Orpheus English TTS (Groq) played from an in-memory buffer via
-  ``discord.FFmpegPCMAudio(pipe=True)``.
-* ``/stt`` — toggle live transcription: voice receive via
-  ``discord-ext-voice-recv`` is sliced into utterances with simple energy-based
-  VAD, each utterance is transcribed with Whisper Large v3 Turbo (Groq) and
-  posted to the text channel the command was used in.
-
-Voice receive requires ``discord-ext-voice-recv`` (and ``audioop-lts`` on
-Python >= 3.13) — if it's missing the STT half degrades gracefully while
-``/join`` / ``/leave`` / ``/say`` keep working.
-"""
+"""Voice connection, text-to-speech, and transcription features."""
 
 import asyncio
 import contextlib
@@ -226,11 +212,7 @@ class _UtteranceSinkBase:
 if _VOICE_RECV_OK:
 
     class UtteranceSink(typing.cast(typing.Any, voice_recv).BasicSink):
-        """Buffers PCM per user and emits WAV utterances on silence / max length.
-
-        Runs on the voice-receive thread; hands finished utterances to the asyncio
-        loop via a thread-safe enqueue callback.
-        """
+        """Buffer PCM per user and emit WAV utterances."""
 
         def __init__(
             self,
@@ -298,11 +280,7 @@ if _VOICE_RECV_OK:
                     pass
 
         def flush_stale(self, now_ms: Optional[float] = None) -> None:
-            """Flush any buffer whose last voice packet predates the silence window.
-
-            Safety net for when silence packets stop arriving entirely (the normal
-            flush only happens on the next packet).
-            """
+            """Flush buffers older than the silence window."""
             with self._buffer_lock:
                 if not self._accepting_audio:
                     return

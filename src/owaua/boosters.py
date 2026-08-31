@@ -1,9 +1,4 @@
-"""Dashboard-configured server booster tracking and perks.
-
-Discord exposes new boost system messages and the all-or-nothing Server Booster
-role transition.  It does not expose a reliable event when one of several boosts
-is removed, so managers can correct the durable count with ``booster adjust``.
-"""
+"""Dashboard-configured server booster tracking and perks."""
 
 from __future__ import annotations
 
@@ -49,7 +44,7 @@ def config_for(guild: discord.Guild | int | str) -> dict[typing.Any, typing.Any]
 
 
 def _ids(values: typing.Any) -> set[int]:
-    output: typing.Any = typing.cast(typing.Any, set())
+    output: set[int] = set()
     for value in typing.cast(
         typing.Iterable[typing.Any], values if isinstance(values, list) else []
     ):

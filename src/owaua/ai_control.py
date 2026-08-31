@@ -1,8 +1,4 @@
-"""Shared routing, policy, tracing, budgeting, and context controls for AI calls.
-
-The module deliberately stores metadata only.  Prompt and response contents never
-enter traces, provider-health state, or usage counters.
-"""
+"""AI routing, tracing, budgeting, and context controls."""
 
 from __future__ import annotations
 
@@ -307,11 +303,7 @@ def _budget_error(
 
 
 def check_request_budget(scope_id: str | None, task: str, *, user_id: str | None = None) -> None:
-    """Atomically admit one logical AI request across shared hard ceilings (minute, hour, day).
-
-    The task is accepted for trace/caller compatibility but deliberately is not
-    part of any key: switching features must never multiply a user's allowance.
-    """
+    """Admit one AI request across shared minute, hour, and day ceilings."""
     del task
     scope = str(scope_id or "").strip()
     user = str(user_id or "").strip()
@@ -586,10 +578,7 @@ def estimate_chat_tokens(system: str, messages: object) -> int:
         if isinstance(value, str):
             return estimate_tokens(value)
         if isinstance(value, list):
-            return typing.cast(
-                typing.Any,
-                sum(_parts(item) for item in typing.cast(typing.Iterable[typing.Any], value)),
-            )
+            return sum(_parts(item) for item in value)
         if isinstance(value, dict):
             part_type = str(typing.cast(typing.Any, value).get("type") or "")
             if part_type in {"image_url", "input_image", "image"}:
@@ -622,11 +611,7 @@ def assemble_context(
     *,
     max_chars: int,
 ) -> str:
-    """Build a deterministic, priority-aware prompt without dropping hard rules.
-
-    Lower numeric priorities are retained first. Required sections are never
-    removed; optional context is deduplicated and fitted around them.
-    """
+    """Build a priority-aware prompt without dropping required sections."""
     hard = [str(part).strip() for part in required if str(part).strip()]
     budget = max(sum(len(part) for part in hard) + 16, int(max_chars))
     remaining = max(0, budget - sum(len(part) + 2 for part in hard))

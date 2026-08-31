@@ -1,12 +1,4 @@
-"""owaua — a self-improving, Airo-style AI Discord bot.
-
-* Mention / DM -> structured JSON brain (smart model)
-* Per-user memory, short-term conversation, relationships, mood
-* Community commands, quotes, recap, lurk, games, export, config
-* Vision for image attachments; dual model routing (smart/fast/vision)
-
-Run: python bot.py
-"""
+"""Main Discord client and prefix-command runtime."""
 
 import asyncio
 import collections
@@ -189,7 +181,7 @@ class owauaClient(discord.Client):
 
 client = owauaClient()
 
-_recent: typing.Any = typing.cast(typing.Any, collections.OrderedDict())
+_recent: typing.Any = collections.OrderedDict()
 _RECENT_MAX = 500
 _last_activity: dict[typing.Any, typing.Any] = {}
 _lurk_channels: dict[typing.Any, typing.Any] = {}
@@ -198,10 +190,6 @@ _lurk_channels: dict[typing.Any, typing.Any] = {}
 UP, DOWN = "\U0001f44d", "\U0001f44e"
 
 _CLI_ACTIVE_TTL = 90
-
-
-def _cli_claims_user(user_id: int) -> bool:
-    return dm.is_cli_conversation_active(user_id, _CLI_ACTIVE_TTL)
 
 
 def _track(mid: int, user_msg: str, bot_msg: str, author: str) -> None:
@@ -474,15 +462,10 @@ def _is_image_attachment(a: typing.Any) -> bool:
 
 
 def _image_urls(message: typing.Any, *, _seen: typing.Any = None) -> List[str]:
-    """Collect image URLs from attachments, embeds, stickers, and replied-to msgs.
-
-    Link previews (X/Twitter embeds, image hosts, etc.) live on embeds, not
-    attachments — only checking attachments is why vision used to miss most
-    "what is this image" pings.
-    """
+    """Collect image URLs from messages and replies."""
     if message is None:
         return []
-    seen: typing.Any = typing.cast(typing.Any, _seen if _seen is not None else set())
+    seen: set[str] = _seen if _seen is not None else set()
     urls: List[str] = []
 
     def _add(u: Optional[str]) -> None:
@@ -524,9 +507,8 @@ def _image_urls(message: typing.Any, *, _seen: typing.Any = None) -> List[str]:
 
 
 def _embed_context(message: typing.Any) -> str:
-    """Plain-text dump of link embeds (X posts, articles) so the brain can
-    still answer when Discord only unfurled a link and vision has nothing."""
-    lines: list[typing.Any] = []
+    """Return plain-text context from link embeds."""
+    lines: list[str] = []
     for e in typing.cast(typing.Iterable[typing.Any], message.embeds or []):
         bits: list[typing.Any] = []
         if e.author and e.author.name:
@@ -623,6 +605,11 @@ async def on_ready():
     )
     print(f"Level: {brain.skill()['title']}")
     try:
+        for guild in list(client.guilds):
+            try:
+                community.configure_support_guild(guild)
+            except Exception:
+                _LOG.exception("support guild setup failed for %s", guild.id)
         registered = community.register_persistent_views(client)
         if registered:
             print(f"[components] registered {registered} persistent ticket/onboarding/role view(s)")
@@ -1147,12 +1134,13 @@ async def on_message(message: discord.Message):
     }
     if config.is_blocked(message.author.id) and command_name not in privacy_commands:
         return
-    if message.guild is None and _cli_claims_user(message.author.id):
+    if message.guild is None and dm.is_cli_conversation_active(message.author.id, _CLI_ACTIVE_TTL):
         return
 
     if message.guild is not None and message.content:
         client.tasks.start_transient(boosters.handle_mentions(message))
         client.tasks.start_transient(_handle_swear_jar(message, guild_id, content))
+        community.track_ticket_activity(message)
         if await community.handle_message(message):
             return
         client.tasks.start_transient(moderation.safety_check(message))
@@ -3620,11 +3608,7 @@ async def _cmd_ai_channel(
 async def _cmd_assistant(
     message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any
 ):
-    """One-shot helpful mode with confirmed Discord actions for this request.
-
-    Normal @mentions / DMs stay full owaua. Sticky mode is intentionally
-    gone — people hated a permanent corporate-assistant tone.
-    """
+    """Run one assistant request with confirmed Discord actions."""
     p = _prefix_for_scope(guild_id)
     raw = (arg or "").strip()
     has_text_attachment = any(
@@ -4849,8 +4833,7 @@ async def _cmd_import(
 
 
 async def _cmd_kb(message: typing.Any, arg: typing.Any, guild_id: typing.Any, author: typing.Any):
-    """Reference knowledge base. `!kb` stats · `!kb search <q>` (anyone) ·
-    `!kb add <topic> | <text>` / attach a .md/.txt · `!kb clear [topic]` (mods)."""
+    """Handle knowledge-base commands."""
     p = _prefix_for_scope(guild_id)
     sub, _, rest = arg.partition(" ")
     sub = sub.lower().strip()
