@@ -1,9 +1,4 @@
-"""Dashboard-driven community-management runtime.
-
-This module intentionally keeps enforcement deterministic.  Dashboard rules
-are data, never Python or template code, and every destructive operation still
-depends on Discord's native permissions and hierarchy.
-"""
+"""Dashboard-driven community-management runtime."""
 
 from __future__ import annotations
 
@@ -72,6 +67,92 @@ def _component_slug(value: object, fallback: str) -> str:
 def _bot_role_allows(guild: discord.Guild, role: discord.Role) -> bool:
     me = guild.me
     return bool(me and role < me.top_role and role.id != guild.default_role.id)
+
+
+_OPEN_TICKET_STATUSES: Final = frozenset({"active", "open", "waiting"})
+
+
+def _ticket_channel_name(settings: dict[typing.Any, typing.Any], member: discord.Member) -> str:
+    template = str(settings.get("channel_name") or "ticket-{user.name}")
+    rendered = _render(template, member=member, guild=member.guild)
+    base = re.sub(r"[^a-z0-9-]", "-", rendered.casefold()).strip("-")[:72]
+    if not base or base == "ticket":
+        base = f"ticket-{re.sub(r'[^a-z0-9-]', '-', member.name.casefold()).strip('-')[:40]}"
+    return f"{base[:84].rstrip('-')}-{secrets.randbelow(10000):04d}"[:100]
+
+
+def _ticket_record(guild: discord.Guild, channel_id: int | str) -> dict[typing.Any, typing.Any] | None:
+    key = str(channel_id)
+    return next(
+        (
+            item
+            for item in db.community_records("ticket", _scope(guild), status=None, limit=5_000)
+            if item.get("record_key") == key and item["status"] in _OPEN_TICKET_STATUSES
+        ),
+        None,
+    )
+
+
+def _ticket_staff(member: discord.Member, guild: discord.Guild) -> bool:
+    if member.guild_permissions.administrator or member.guild_permissions.manage_channels:
+        return True
+    settings = _cfg(guild, "tickets")["settings"]
+    return bool(_member_roles(member) & _ids(settings.get("staff_role_ids")))
+
+
+async def _send_ticket_transcript(
+    guild: discord.Guild, channel: typing.Any, ticket: dict[typing.Any, typing.Any]
+) -> None:
+    destination = _channel(guild, _cfg(guild, "tickets")["settings"].get("transcript_channel_id"))
+    if destination is None:
+        return
+    lines: list[str] = []
+    try:
+        async for entry in channel.history(limit=1_000, oldest_first=True):
+            lines.append(f"[{entry.created_at.isoformat()}] {entry.author}: {entry.clean_content}")
+    except (discord.Forbidden, discord.HTTPException, AttributeError):
+        return
+    payload = "\n".join(lines).encode("utf-8")[:2_000_000]
+    try:
+        await destination.send(
+            content=f"Transcript for ticket #{ticket['id']} ({getattr(channel, 'name', 'ticket')})",
+            file=discord.File(io.BytesIO(payload), filename=f"ticket-{ticket['id']}.txt"),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    except (discord.Forbidden, discord.HTTPException):
+        return
+
+
+async def _close_ticket(
+    guild: discord.Guild,
+    channel: typing.Any,
+    ticket: dict[typing.Any, typing.Any],
+    *,
+    resolved: bool = False,
+    reason: str = "Ticket closed",
+) -> bool:
+    await _send_ticket_transcript(guild, channel, ticket)
+    db.community_record_update(ticket["id"], status="resolved" if resolved else "closed")
+    await _safe_send(channel, "Ticket closed. This channel will be deleted in 5 seconds.")
+    await asyncio.sleep(5)
+    try:
+        await channel.delete(reason=reason[:500])
+    except (discord.Forbidden, discord.HTTPException, AttributeError):
+        return False
+    return True
+
+
+def track_ticket_activity(message: discord.Message) -> None:
+    """Keep ticket auto-close timers tied to real member or staff activity."""
+    guild = message.guild
+    if guild is None or message.author.bot:
+        return
+    ticket = _ticket_record(guild, message.channel.id)
+    if ticket is None:
+        return
+    data = dict(ticket["data"])
+    data["last_activity"] = time.time()
+    db.community_record_update(ticket["id"], data=data)
 
 
 async def _create_ticket_from_interaction(
@@ -153,23 +234,31 @@ async def _create_ticket_from_interaction(
             view_channel=True, send_messages=True, read_message_history=True
         ),
     }
+    staff_roles: list[discord.Role] = []
     for role_id in typing.cast(
         typing.Iterable[typing.Any], typing.cast(typing.Any, staff_ids)[:20]
     ):
         role = guild.get_role(int(role_id)) if str(role_id).isdigit() else None
-        if role:
+        if role and _bot_role_allows(guild, role):
+            staff_roles.append(role)
             overwrites[role] = discord.PermissionOverwrite(
                 view_channel=True, send_messages=True, read_message_history=True
             )
     assigned_member = guild.get_member(int(assigned_to)) if assigned_to.isdigit() else None
+    if not staff_roles and assigned_member is None:
+        await interaction.followup.send(
+            "This ticket panel has no staff role or assignee configured. Ask a server admin to fix it in the dashboard.",
+            ephemeral=True,
+        )
+        return
     if assigned_member is not None:
         overwrites[assigned_member] = discord.PermissionOverwrite(
             view_channel=True, send_messages=True, read_message_history=True
         )
-    safe_name = re.sub(r"[^a-z0-9-]", "-", member.name.lower())[:40]
+    safe_name = _ticket_channel_name(settings, member)
     try:
         channel = await guild.create_text_channel(
-            f"ticket-{safe_name}-{secrets.randbelow(10000):04d}",
+            safe_name,
             category=category if isinstance(category, discord.CategoryChannel) else None,
             overwrites=typing.cast(typing.Any, overwrites),
             reason="Persistent ticket panel opened",
@@ -224,6 +313,7 @@ async def _create_ticket_from_interaction(
     await _safe_send(
         channel,
         f"Ticket #{record_id} opened by {member.mention}.\n{answer_text or '**Subject:** ' + subject}\n{staff_mentions}",
+        view=TicketControlView(guild.id, channel.id),
     )
     await interaction.followup.send(
         f"Your private ticket is ready: {channel.mention}", ephemeral=True
@@ -285,6 +375,145 @@ class TicketIntakeModal(discord.ui.Modal):
             for field, item in self.fields
         ]
         await _create_ticket_from_interaction(interaction, self.panel, answers)
+
+
+class TicketCloseConfirmation(discord.ui.View):
+    def __init__(self, guild_id: int, channel_id: int, ticket_id: int, resolved: bool) -> None:
+        super().__init__(timeout=120)
+        self.guild_id = guild_id
+        self.channel_id = channel_id
+        self.ticket_id = ticket_id
+        self.resolved = resolved
+
+    @discord.ui.button(label="Confirm close", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, _: discord.ui.Button[typing.Any]) -> None:
+        guild = interaction.guild
+        channel = interaction.channel
+        actor = interaction.user
+        if (
+            guild is None
+            or channel is None
+            or not isinstance(actor, discord.Member)
+            or guild.id != self.guild_id
+            or channel.id != self.channel_id
+        ):
+            await interaction.response.send_message("That ticket is no longer available.", ephemeral=True)
+            return
+        ticket = _ticket_record(guild, channel.id)
+        if ticket is None or int(ticket["id"]) != self.ticket_id:
+            await interaction.response.send_message("That ticket is already closed.", ephemeral=True)
+            return
+        allowed = _ticket_staff(actor, guild) or (
+            str(actor.id) == str(ticket.get("user_id"))
+            and bool(_cfg(guild, "tickets")["settings"].get("allow_member_close", True))
+        )
+        if not allowed:
+            await interaction.response.send_message("Only the opener or ticket staff can close this.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        deleted = await _close_ticket(
+            guild,
+            channel,
+            ticket,
+            resolved=self.resolved,
+            reason=f"Ticket closed by {actor}",
+        )
+        await interaction.followup.send(
+            "Ticket closed." if deleted else "Ticket was marked closed, but I could not delete the channel.",
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, _: discord.ui.Button[typing.Any]) -> None:
+        await interaction.response.edit_message(content="Ticket close cancelled.", view=None)
+
+
+class TicketControlView(discord.ui.View):
+    """Durable controls attached to each created ticket channel."""
+
+    def __init__(self, guild_id: int, channel_id: int) -> None:
+        super().__init__(timeout=None)
+        self.guild_id = int(guild_id)
+        self.channel_id = int(channel_id)
+        claim: typing.Any = typing.cast(
+            typing.Any,
+            discord.ui.Button(
+                label="Claim",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"owaua:ticket:claim:{self.guild_id}:{self.channel_id}",
+            ),
+        )
+        close: typing.Any = typing.cast(
+            typing.Any,
+            discord.ui.Button(
+                label="Close",
+                style=discord.ButtonStyle.danger,
+                custom_id=f"owaua:ticket:close:{self.guild_id}:{self.channel_id}",
+            ),
+        )
+        claim.callback = self.claim
+        close.callback = self.close
+        self.add_item(claim)
+        self.add_item(close)
+
+    def _matches(self, interaction: discord.Interaction) -> bool:
+        return interaction.guild_id == self.guild_id and interaction.channel_id == self.channel_id
+
+    async def claim(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        channel = interaction.channel
+        actor = interaction.user
+        if not self._matches(interaction) or guild is None or channel is None or not isinstance(actor, discord.Member):
+            await interaction.response.send_message("This ticket control belongs to another channel.", ephemeral=True)
+            return
+        if not _ticket_staff(actor, guild):
+            await interaction.response.send_message("Only configured ticket staff can claim tickets.", ephemeral=True)
+            return
+        ticket = _ticket_record(guild, channel.id)
+        if ticket is None:
+            await interaction.response.send_message("This ticket is already closed.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await typing.cast(typing.Any, channel).set_permissions(
+                actor,
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
+                reason=f"Ticket claimed by {actor}",
+            )
+        except (discord.Forbidden, discord.HTTPException, AttributeError):
+            await interaction.followup.send("I could not grant you ticket access.", ephemeral=True)
+            return
+        data = dict(ticket["data"])
+        data.update({"assigned_to": str(actor.id), "assigned_by": str(actor.id), "last_activity": time.time()})
+        db.community_record_update(ticket["id"], data=data, status="active")
+        await _safe_send(channel, f"Ticket claimed by {actor.mention}.")
+        await interaction.followup.send(f"You claimed ticket #{ticket['id']}.", ephemeral=True)
+
+    async def close(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        channel = interaction.channel
+        actor = interaction.user
+        if not self._matches(interaction) or guild is None or channel is None or not isinstance(actor, discord.Member):
+            await interaction.response.send_message("This ticket control belongs to another channel.", ephemeral=True)
+            return
+        ticket = _ticket_record(guild, channel.id)
+        if ticket is None:
+            await interaction.response.send_message("This ticket is already closed.", ephemeral=True)
+            return
+        allowed = _ticket_staff(actor, guild) or (
+            str(actor.id) == str(ticket.get("user_id"))
+            and bool(_cfg(guild, "tickets")["settings"].get("allow_member_close", True))
+        )
+        if not allowed:
+            await interaction.response.send_message("Only the opener or ticket staff can close this.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            "Close this ticket and delete its channel after saving any configured transcript?",
+            view=TicketCloseConfirmation(guild.id, channel.id, int(ticket["id"]), False),
+            ephemeral=True,
+        )
 
 
 class PersistentTicketPanel(discord.ui.View):
@@ -651,6 +880,14 @@ def register_persistent_views(client: discord.Client) -> int:
                         view, message_id=int(message_id) if message_id.isdigit() else None
                     )
                     count += 1
+            for ticket in db.community_records("ticket", _scope(guild), status=None, limit=5_000):
+                if ticket["status"] not in _OPEN_TICKET_STATUSES:
+                    continue
+                channel_id = str(ticket["data"].get("channel_id") or ticket.get("record_key") or "")
+                if not channel_id.isdigit():
+                    continue
+                client.add_view(TicketControlView(guild.id, int(channel_id)))
+                count += 1
         reaction = _cfg(guild, "reaction_roles")
         if reaction["enabled"]:
             for menu in reaction["settings"].get("menus", [])[:100]:
@@ -747,18 +984,81 @@ def _cfg(guild: discord.Guild | int, module: str) -> dict[typing.Any, typing.Any
     return db.module_config(_scope(guild), module)
 
 
+def configure_support_guild(guild: discord.Guild) -> bool:
+    """Apply the small, idempotent owaua support-server ticket baseline."""
+    if str(guild.id) not in bot_config.SUPPORT_GUILDS:
+        return False
+    category = next(
+        (
+            channel
+            for channel in guild.channels
+            if isinstance(channel, discord.CategoryChannel)
+            and channel.name.casefold() == "get help"
+        ),
+        None,
+    )
+    staff_roles = [
+        role
+        for role in guild.roles
+        if role.name.casefold() in {"moderators", "support team", "helpers"}
+    ]
+    if category is None or not staff_roles:
+        log.warning("support guild %s is missing its GET HELP category or staff roles", guild.id)
+        return False
+    role_ids = [str(role.id) for role in sorted(staff_roles, key=lambda role: role.position, reverse=True)]
+    state = _cfg(guild, "tickets")
+    # Apply the baseline only before the guild saves ticket settings.
+    if state["updated"] is not None:
+        return False
+    settings = dict(state["settings"])
+    panel = {
+        "id": "default",
+        "title": "Need help with owaua?",
+        "description": (
+            "Open a private support ticket. Include what happened and what you expected. "
+            "Never share passwords, tokens, or private personal data."
+        ),
+        "button_label": "Open a support ticket",
+        "category_id": str(category.id),
+        "staff_role_ids": role_ids,
+        "intake_fields": [
+            {
+                "id": "subject",
+                "label": "How can staff help?",
+                "required": True,
+                "style": "paragraph",
+                "max_length": 500,
+            }
+        ],
+        "routing_rules": [],
+    }
+    settings.update(
+        {
+            "category_id": str(category.id),
+            "staff_role_ids": role_ids,
+            "panels": [panel],
+            "require_intake": True,
+            "channel_name": "ticket-{user.name}",
+        }
+    )
+    db.module_config_set(
+        str(guild.id),
+        "tickets",
+        enabled=True,
+        settings=settings,
+        actor_id="owaua-support-setup",
+    )
+    log.info("configured support tickets for guild %s", guild.id)
+    return True
+
+
 def _channel(guild: discord.Guild, raw: object):
     value = str(raw or "")
     return guild.get_channel(int(value)) if value.isdigit() else None
 
 
 def _ids(values: object) -> set[str]:
-    return typing.cast(
-        typing.Any,
-        {str(value) for value in typing.cast(typing.Iterable[typing.Any], values)}
-        if isinstance(values, list)
-        else set(),
-    )
+    return {str(value) for value in values} if isinstance(values, list) else set()
 
 
 def _member_roles(member: object) -> set[str]:
@@ -804,6 +1104,7 @@ async def _safe_send(
     *,
     embed: typing.Any = None,
     files: typing.Any = None,
+    view: typing.Any = None,
     everyone: bool = False,
 ):
     if channel is None or not hasattr(channel, "send"):
@@ -813,6 +1114,7 @@ async def _safe_send(
             content=content[:2000] or None,
             embed=embed,
             files=files or None,
+            view=view,
             allowed_mentions=discord.AllowedMentions(
                 everyone=everyone, users=True, roles=everyone, replied_user=False
             ),
@@ -848,12 +1150,7 @@ def _previewable_attachment(attachment: discord.Attachment) -> bool:
 
 
 async def _log_media_files(message: discord.Message) -> list[discord.File]:
-    """Copy previewable deleted-message media into the configured private log.
-
-    Attachment CDN URLs can disappear after a deletion. Re-uploading the same
-    media to the action-log message lets Discord render its normal image, audio,
-    or video UI, without storing attachment bytes in the bot database.
-    """
+    """Copy previewable deleted-message media into the private log."""
     files: list[discord.File] = []
     for attachment in list(getattr(message, "attachments", None) or [])[:10]:
         if not _previewable_attachment(attachment):
@@ -1452,9 +1749,7 @@ def _native_automod_keywords(settings: dict[typing.Any, typing.Any]) -> list[str
     seen: set[str] = set()
     for raw in settings.get("banned_phrases", []):
         value = str(raw).strip()
-        # Discord's keyword trigger rejects empty/oversized entries. Keep the
-        # native rule bounded rather than allowing one bad dashboard value to
-        # prevent the rest of the guild sync.
+        # Discord rejects empty or oversized keyword triggers.
         if not value or len(value) > 60 or value.casefold() in seen:
             continue
         seen.add(value.casefold())
@@ -1465,12 +1760,7 @@ def _native_automod_keywords(settings: dict[typing.Any, typing.Any]) -> list[str
 
 
 async def sync_native_automod(guild: discord.Guild) -> bool:
-    """Mirror configured blocked phrases into one managed Discord AutoMod rule.
-
-    The rule is deliberately limited to phrases already configured by the
-    server owner. It is not created for an empty configuration, and rules
-    belonging to other apps or administrators are never modified.
-    """
+    """Mirror configured blocked phrases into a managed AutoMod rule."""
     config = _cfg(guild, "automod")
     if not config["enabled"]:
         return False
@@ -2973,7 +3263,9 @@ async def handle_prefix_command(message: discord.Message, name: str, arg: str) -
         action, _, detail = arg.partition(" ")
         settings = _cfg(guild, "tickets")["settings"]
         existing = [
-            x for x in db.community_records("ticket", scope, user_id=uid) if x["status"] == "active"
+            x
+            for x in db.community_records("ticket", scope, user_id=uid, status=None, limit=5_000)
+            if x["status"] in _OPEN_TICKET_STATUSES
         ]
         if action.lower() in {"open", "create"}:
             maximum = max(1, min(100, int(settings.get("max_open_per_member") or 5)))
@@ -2993,16 +3285,24 @@ async def handle_prefix_command(message: discord.Message, name: str, arg: str) -
                     view_channel=True, send_messages=True, read_message_history=True
                 ),
             }
+            staff_roles: list[discord.Role] = []
             for role_id in settings.get("staff_role_ids", [])[:20]:
                 role = guild.get_role(int(role_id)) if str(role_id).isdigit() else None
-                if role:
+                if role and _bot_role_allows(guild, role):
+                    staff_roles.append(role)
                     overwrites[role] = discord.PermissionOverwrite(
                         view_channel=True, send_messages=True, read_message_history=True
                     )
-            safe_name = re.sub(r"[^a-z0-9-]", "-", message.author.name.lower())[:40]
+            if not staff_roles:
+                await _safe_send(
+                    message.channel,
+                    "Tickets need at least one configured staff role. Ask a server admin to configure Tickets in the dashboard.",
+                )
+                return True
+            safe_name = _ticket_channel_name(settings, typing.cast(discord.Member, message.author))
             try:
                 channel = await guild.create_text_channel(
-                    f"ticket-{safe_name}-{secrets.randbelow(10000):04d}",
+                    safe_name,
                     category=category if isinstance(category, discord.CategoryChannel) else None,
                     overwrites=typing.cast(typing.Any, overwrites),
                     reason="Support ticket opened",
@@ -3013,9 +3313,18 @@ async def handle_prefix_command(message: discord.Message, name: str, arg: str) -
             record_id = db.community_record_create(
                 "ticket",
                 scope,
-                {"channel_id": str(channel.id), "subject": detail[:500]},
+                {
+                    "channel_id": str(channel.id),
+                    "subject": detail[:500],
+                    "staff_role_ids": [str(role.id) for role in staff_roles],
+                    "last_activity": time.time(),
+                    "sla_due": time.time()
+                    + max(1, min(720, int(settings.get("sla_hours") or 24))) * 3600,
+                    "sla_alerted": False,
+                },
                 user_id=uid,
                 record_key=str(channel.id),
+                due=time.time() + max(1, min(720, int(settings.get("sla_hours") or 24))) * 3600,
             )
             mentions = " ".join(
                 f"<@&{role_id}>" for role_id in settings.get("staff_role_ids", [])[:20]
@@ -3023,56 +3332,31 @@ async def handle_prefix_command(message: discord.Message, name: str, arg: str) -
             await _safe_send(
                 channel,
                 f"Ticket #{record_id} opened by {message.author.mention}.\n**Subject:** {detail or 'No subject'}\n{mentions}",
+                view=TicketControlView(guild.id, channel.id),
             )
             await _safe_send(message.channel, f"Your ticket is ready: {channel.mention}")
             return True
         if action.lower() in {"close", "resolve"}:
-            item = next(
-                (
-                    x
-                    for x in db.community_records("ticket", scope, status=None, limit=5000)
-                    if x.get("record_key") == str(message.channel.id)
-                ),
-                None,
-            )
+            item = _ticket_record(guild, message.channel.id)
             if not item:
                 await _safe_send(message.channel, "This is not a tracked ticket channel.")
                 return True
             if (
-                item.get("user_id") != uid
-                and not typing.cast(typing.Any, message).author.guild_permissions.manage_channels
+                not _ticket_staff(typing.cast(discord.Member, message.author), guild)
+                and (
+                    item.get("user_id") != uid
+                    or not bool(settings.get("allow_member_close", True))
+                )
             ):
                 await _safe_send(message.channel, "Only the ticket owner or staff can close it.")
                 return True
-            lines: list[typing.Any] = []
-            try:
-                async for entry in message.channel.history(limit=1000, oldest_first=True):
-                    lines.append(
-                        f"[{entry.created_at.isoformat()}] {entry.author}: {entry.clean_content}"
-                    )
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-            transcript_channel = _channel(guild, settings.get("transcript_channel_id"))
-            if transcript_channel:
-                payload = "\n".join(lines).encode("utf-8")[:2_000_000]
-                try:
-                    await typing.cast(typing.Any, transcript_channel).send(
-                        content=f"Transcript for ticket #{item['id']} ({typing.cast(typing.Any, message).channel.name})",
-                        file=discord.File(io.BytesIO(payload), filename=f"ticket-{item['id']}.txt"),
-                    )
-                except (discord.Forbidden, discord.HTTPException):
-                    pass
-            db.community_record_update(
-                item["id"], status="resolved" if action.lower() == "resolve" else "closed"
+            await _close_ticket(
+                guild,
+                message.channel,
+                item,
+                resolved=action.lower() == "resolve",
+                reason=f"Ticket closed by {message.author}",
             )
-            await _safe_send(
-                message.channel, "Ticket closed. This channel will be deleted in 5 seconds."
-            )
-            await asyncio.sleep(5)
-            try:
-                await typing.cast(typing.Any, message).channel.delete(reason="Ticket closed")
-            except (discord.Forbidden, discord.HTTPException):
-                pass
             return True
         await _safe_send(message.channel, "Use `!ticket open <subject>` or `!ticket close`.")
         return True
@@ -3708,6 +3992,27 @@ async def scheduler_tick(client: discord.Client) -> None:
             db.community_record_update(
                 ticket["id"], data={**data, "sla_alerted": True}, status="waiting"
             )
+        ticket_settings = _cfg(guild, "tickets")["settings"]
+        auto_close_hours = max(0, min(8_760, int(ticket_settings.get("auto_close_hours") or 0)))
+        if auto_close_hours:
+            cutoff = timestamp - auto_close_hours * 3_600
+            for ticket in db.community_records("ticket", scope, status=None, limit=5_000):
+                if ticket["status"] not in _OPEN_TICKET_STATUSES:
+                    continue
+                data = ticket["data"]
+                last_activity = float(data.get("last_activity") or ticket.get("updated") or ticket["created"])
+                if last_activity > cutoff:
+                    continue
+                channel = _channel(guild, data.get("channel_id") or ticket.get("record_key"))
+                if channel is None:
+                    db.community_record_update(ticket["id"], status="closed")
+                    continue
+                await _close_ticket(
+                    guild,
+                    channel,
+                    ticket,
+                    reason="Ticket closed after configured inactivity period",
+                )
         for item in db.community_records("reminder", scope, due_before=timestamp, limit=500):
             user = (
                 guild.get_member(int(item["user_id"]))
