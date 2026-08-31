@@ -1,9 +1,4 @@
-"""Async LLM services for owaua's modular AI features.
-
-Exposes a single reusable :class:`LLMClient` (httpx-based, OpenAI-compatible)
-plus a process-wide shared instance used by the moderation, vision, multilingual,
-tool-calling (/act) and voice (STT/TTS) features.
-"""
+"""Shared async LLM services."""
 
 from owaua.services.llm_client import (
     LLMClient,

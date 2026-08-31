@@ -1,14 +1,4 @@
-"""Thin async wrapper around the Groq API (OpenAI-compatible chat completions).
-
-Everything runs in a thread pool because the Groq SDK is sync and we live inside
-discord.py's event loop.
-
-Model routing
--------------
-* smart  — main brain / chat / recap / hard tasks  (MODEL_SMART)
-* fast   — cheap tasks: custom cmds, lurk one-liners, simple tools (MODEL_FAST)
-* vision — image understanding when attachments are present (MODEL_VISION)
-"""
+"""Async model routing and provider fallbacks."""
 
 import asyncio
 import concurrent.futures
@@ -216,13 +206,7 @@ def _http_error(exc: urllib.error.HTTPError, provider: str) -> RuntimeError:
 
 
 def _choice_text(payload: typing.Any, provider: str) -> str:
-    """Pull the assistant text out of an OpenAI-style chat completion body.
-
-    DeepSeek V4 (and some OpenRouter/Cerebras hosts) can return HTTP 200 with
-    an ``error`` object, ``content: null``, or reasoning-only output. Those
-    must raise so the caller retries or fails over instead of treating silence
-    as a successful reply.
-    """
+    """Extract text from an OpenAI-style chat completion body."""
     if not isinstance(payload, dict):
         raise RuntimeError(f"{provider} returned a malformed response")
     err: typing.Any = typing.cast(typing.Any, payload).get("error")
@@ -632,13 +616,7 @@ def _cerebras_generate(
     max_tokens: typing.Any,
     temperature: typing.Any,
 ) -> str:
-    """Cerebras (OpenAI-compatible, very fast).
-
-    Two quirks worth keeping: a User-Agent header is REQUIRED (Cloudflare
-    rejects urllib's default with a misleading `error code 1010` that looks
-    like a bad key), and reasoning-style models can return a message with a
-    `reasoning` field but no `content` — which must raise, not return empty.
-    """
+    """Generate through the OpenAI-compatible Cerebras API."""
     if not config.CEREBRAS_API_KEY:
         raise RuntimeError("no cerebras api key configured")
 
@@ -689,8 +667,7 @@ def _is_openrouter(model: str) -> bool:
 
 
 def _openrouter_key(model: str) -> str:
-    """OpenRouter key for a model. DeepSeek models use their own key
-    (DEEPSEEK_API_KEY) so !ask / assistant don't eat the main OpenRouter quota."""
+    """Return the configured OpenRouter or DeepSeek key for a model."""
     if "deepseek/" in str(model).lower():
         return config.DEEPSEEK_API_KEY or config.OPENROUTER_API_KEY
     return config.OPENROUTER_API_KEY
@@ -710,15 +687,7 @@ def _openrouter_generate(
     max_tokens: typing.Any,
     temperature: typing.Any,
 ) -> str:
-    """OpenRouter (free tier), OpenAI-compatible.
-
-    Free models share upstream capacity and fail intermittently. Critically,
-    OpenRouter reports those failures as HTTP 200 with an {"error": ...} body,
-    and some models return content: null — both must raise so the fallback
-    chain moves on instead of returning an empty reply.
-
-    Multimodal (vision) messages are forwarded as-is — do not strip image parts.
-    """
+    """Generate through the OpenAI-compatible OpenRouter API."""
     api_key = _openrouter_key(model)
     if not api_key:
         raise RuntimeError("no openrouter api key configured")
@@ -822,13 +791,7 @@ def _chat_without_thinking(
     provider: str,
     timeout: float = 45,
 ) -> str:
-    """OpenAI-style chat with DeepSeek thinking turned off.
-
-    V4 Flash thinks at high effort by default. Those reasoning tokens count
-    against max_tokens, so a growing Discord thread often comes back HTTP 200
-    with empty content — which used to surface as "brain hiccuped". Disable
-    thinking for chat; if the host 400s on the extra field, retry without it.
-    """
+    """Run OpenAI-style chat with DeepSeek thinking disabled."""
     payload = {
         "model": model,
         "max_tokens": max_tokens,
@@ -930,12 +893,7 @@ def _anthropic_generate(
     max_tokens: typing.Any,
     temperature: typing.Any,
 ) -> str:
-    """Anthropic call (paid — expert tier only). Uses the official SDK.
-
-    Note: Opus 4.8 rejects `temperature`/`top_p`/`top_k` with a 400, so the
-    temperature argument is deliberately ignored here. Adaptive thinking is on
-    because this path exists for correctness-sensitive teaching answers.
-    """
+    """Generate through the Anthropic SDK for the expert tier."""
     global _anthropic_client
     if not config.ANTHROPIC_API_KEY:
         raise RuntimeError("no anthropic api key configured")
@@ -985,15 +943,7 @@ def _generate(
     user_id: typing.Any = None,
     estimated_tokens: int = 1,
 ) -> str:
-    """Run the request down a fallback chain.
-
-    Quotas are per (provider, org, model), so when one is exhausted a different
-    model — or an entirely different provider — still has its own budget.
-
-    `fallbacks` lets a caller pick a different chain: the expert tier passes an
-    intelligence-ordered one so !cybersec degrades to the smartest remaining
-    model rather than the fastest.
-    """
+    """Run a request through its provider fallback chain."""
     pool = config.MODEL_FALLBACKS if fallbacks is None else fallbacks
     chain = [requested] + [m for m in pool if m != requested]
     last = None
@@ -1175,12 +1125,7 @@ async def chat(
     user_id: Optional[str] = None,
     prompt_version: Optional[str] = None,
 ) -> str:
-    """Run a chat completion and return the text.
-
-    `tier` selects smart/fast/vision when `model` is not set explicitly.
-    Message content may be a string or a list of multimodal content parts.
-    Pass `fallbacks=[]` to disable the default text-model chain (needed for vision).
-    """
+    """Run a chat completion and return its text."""
     decision = ai_control.route(
         task,
         requested_tier=tier,
@@ -1345,11 +1290,7 @@ async def describe_images(
     scope_id: Optional[str] = None,
     user_id: Optional[str] = None,
 ) -> str:
-    """Vision pass: short description of attached / embed image URLs.
-
-    Prefers inlined base64 data URLs so Groq (etc.) doesn't have to fetch
-    Discord CDN links themselves — those often 403 from datacenter IPs.
-    """
+    """Describe attached or embedded image URLs."""
     if not image_urls:
         return ""
 
@@ -1384,7 +1325,7 @@ async def describe_images(
         parts.append({"type": "image_url", "image_url": {"url": url}})
 
     vision_fallbacks = [config.MODEL_VISION] + list(config.MODEL_VISION_FALLBACKS or [])
-    seen: typing.Any = typing.cast(typing.Any, set())
+    seen: set[str] = set()
     vision_fallbacks = [m for m in vision_fallbacks if m and not (m in seen or seen.add(m))]
 
     for i, model in enumerate(vision_fallbacks):
@@ -1486,11 +1427,7 @@ def _search_backend(query: str, k: int) -> List[dict[typing.Any, typing.Any]]:
 async def search_context(
     query: str, k: int = 5
 ) -> tuple[str, list[dict[str, typing.Any]], str | None]:
-    """Raw keyless web search. Returns (context_str, sources, error_or_None).
-
-    context_str is a compact block of the top results for feeding to a model;
-    sources is [{"title","url"}...] taken straight from the engine.
-    """
+    """Return raw keyless web-search context, sources, and any error."""
 
     def _fetch() -> tuple[list[dict[typing.Any, typing.Any]], str | None]:
         try:
@@ -1522,11 +1459,7 @@ async def web_search(
     user_id: Optional[str] = None,
     scope_id: Optional[str] = None,
 ) -> dict[typing.Any, typing.Any]:
-    """Keyless web search that returns a self-contained {answer, sources}.
-
-    Used by the explicit /search and !search commands. Sources come straight
-    from the search engine, so their URLs are always real.
-    """
+    """Return a keyless web-search answer and its sources."""
     ai_control.check_search_budget(user_id)
     ctx, sources, err = await search_context(query, k)
     if err:

@@ -1,11 +1,4 @@
-"""Tool-calling registry for the /act command.
-
-Defines the JSON schemas handed to the tool-calling model (GPT OSS 20B /
-Qwen) plus the permission-gated executors. Every moderation executor checks
-that the *invoking member* has the matching Discord permission and that the
-target is actually actionable (role hierarchy, owner, self) before doing
-anything.
-"""
+"""Permission-gated tool registry for `/act`."""
 
 import datetime
 import json

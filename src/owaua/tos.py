@@ -1,13 +1,4 @@
-"""owaua Terms of Service — acceptance gate + violation detection.
-
-Canonical page:
-  https://wearegays.net/owaua/terms
-
-Users must open a short-lived Discord-bound link, read the public page, and
-accept the current version there before normal bot use.
-Clear ToS violations warn first; after TOS_STRIKE_LIMIT strikes the user is
-hard-blocked via blocked.py.
-"""
+"""Terms acceptance and violation enforcement."""
 
 from __future__ import annotations
 
@@ -137,18 +128,31 @@ def issue_acceptance_url(user_id: typing.Any) -> str:
     return f"{TOS_ACCEPT_URL}?token={quote(token, safe='')}"
 
 
-def consume_acceptance_challenge(token: str) -> str | None:
+def _challenge_digest(token: str) -> str | None:
     raw = str(token or "")
     if not re.fullmatch(r"[A-Za-z0-9_-]{40,80}", raw):
         return None
     if len(config.TOS_ACCEPTANCE_SECRET) < 32:
         return None
-    digest = hmac.new(
+    return hmac.new(
         config.TOS_ACCEPTANCE_SECRET.encode("utf-8"),
         raw.encode("ascii"),
         hashlib.sha256,
     ).hexdigest()
+
+
+def consume_acceptance_challenge(token: str) -> str | None:
+    digest = _challenge_digest(token)
+    if digest is None:
+        return None
     return db.tos_challenge_consume(digest, TOS_VERSION)
+
+
+def peek_acceptance_challenge(token: str) -> str | None:
+    digest = _challenge_digest(token)
+    if digest is None:
+        return None
+    return db.tos_challenge_peek(digest, TOS_VERSION)
 
 
 def network_fingerprint(address: str) -> str:
@@ -168,45 +172,80 @@ def network_fingerprint(address: str) -> str:
     return hmac.new(key, normalized.encode("ascii"), hashlib.sha256).hexdigest()
 
 
-def record_web_acceptance(user_id: str, client_address: str) -> str:
-    """Apply the disclosed acceptance/risk decision without storing a raw IP."""
+def inspect_web_network(user_id: str, client_address: str) -> tuple[str, str]:
+    """Check a visitor network against live blocks without storing its IP."""
     uid = _uid(user_id)
-    if not uid.isdigit() or config.is_blocked(uid):
-        return "blocked"
     try:
         fingerprint = network_fingerprint(client_address)
     except (ValueError, RuntimeError):
-        return "unavailable"
+        return "unavailable", ""
+    if uid and config.is_bot_owner(uid):
+        return "ok", fingerprint
 
-    network_cutoff = time.time() - _NETWORK_RETENTION_SECONDS
-    blocked_match = db.tos_acceptance_network_has_dynamic_block(
-        fingerprint,
-        since=network_cutoff,
-        exclude_user_id=uid,
-    )
-    if not blocked_match:
-        recent_users = db.tos_acceptance_network_users(
-            fingerprint,
-            since=network_cutoff,
-        )
-        blocked_match = any(other != uid and config.is_blocked(other) for other in recent_users)
-    needs_review = blocked_match
-    status = "review" if needs_review else "accepted"
+    try:
+        network_cutoff = time.time() - _NETWORK_RETENTION_SECONDS
+        blocked_match = db.tos_blocked_network_is_blocked(fingerprint, since=network_cutoff)
+        if not blocked_match:
+            blocked_match = db.tos_acceptance_network_has_dynamic_block(
+                fingerprint,
+                since=network_cutoff,
+                exclude_user_id=uid,
+            )
+        if not blocked_match:
+            recent_users = db.tos_acceptance_network_users(
+                fingerprint,
+                since=network_cutoff,
+            )
+            blocked_match = any(
+                other != uid and config.is_blocked(other) for other in recent_users
+            )
+
+        if uid and config.is_blocked(uid):
+            db.tos_blocked_network_remember(fingerprint, uid)
+            return "blocked", fingerprint
+        if not blocked_match:
+            return "ok", fingerprint
+        if uid.isdigit():
+            db.tos_acceptance_set(
+                uid,
+                TOS_VERSION,
+                status="rejected",
+                network_hash=fingerprint,
+                risk_code="blocked_network_match",
+            )
+            db.user_flag_set(uid, "tos_accepted", "")
+            db.user_flag_set(uid, "tos_review_pending", "")
+            db.tos_blocked_network_remember(fingerprint, uid)
+            hard_block(
+                uid,
+                "block evasion: Terms acceptance from a blocked network",
+                category="block_evasion",
+                trigger_source="tos_web",
+            )
+        return "blocked", fingerprint
+    except Exception:
+        return "unavailable", fingerprint
+
+
+def record_web_acceptance(user_id: str, client_address: str) -> str:
+    """Apply the disclosed acceptance/risk decision without storing a raw IP."""
+    uid = _uid(user_id)
+    if not uid.isdigit():
+        return "blocked"
+    decision, fingerprint = inspect_web_network(uid, client_address)
+    if decision != "ok":
+        return decision
     db.tos_acceptance_set(
         uid,
         TOS_VERSION,
-        status=status,
+        status="accepted",
         network_hash=fingerprint,
-        risk_code="blocked_network_match" if needs_review else "",
+        risk_code="",
     )
-    if needs_review:
-        db.user_flag_set(uid, "tos_accepted", "")
-        db.user_flag_set(uid, "tos_review_pending", "1")
-        return status
     db.user_flag_set(uid, "tos_review_pending", "")
     db.user_flag_set(uid, "tos_accepted", TOS_VERSION)
     db.user_flag_set(uid, "tos_accepted_at", str(time.time()))
-    return status
+    return "accepted"
 
 
 def has_accepted(user_id: typing.Any) -> bool:
@@ -278,13 +317,7 @@ def need_accept_message(prefix: str = "!") -> str:
 
 
 class AcceptanceView(discord.ui.View):
-    """Short-lived web link plus invoker-bound acceptance controls.
-
-    The web URL is deliberately not a Discord link button.  Link buttons do
-    not produce interactions, so anybody who can see the message could open
-    the bearer URL.  A regular button lets ``interaction_check`` enforce the
-    Discord user binding before the URL is disclosed.
-    """
+    """Invoker-bound controls for short-lived web acceptance links."""
 
     def __init__(self, user_id: int | str) -> None:
         super().__init__(timeout=float(_ACCEPTANCE_CHALLENGE_SECONDS))
@@ -349,7 +382,12 @@ class AcceptanceView(discord.ui.View):
             self.stop()
             return
         record = db.tos_acceptance_get(str(self.user_id))
-        if record and record.get("status") == "review":
+        if config.is_blocked(self.user_id):
+            message = (
+                "this Discord account is blocked from owaua. "
+                f"Contact {config.PRIVACY_CONTACT} to appeal."
+            )
+        elif record and record.get("status") == "review":
             message = (
                 "your acceptance needs a manual abuse-prevention review. "
                 f"Contact {config.PRIVACY_CONTACT}; ordinary commands stay locked for now."
@@ -539,14 +577,7 @@ def clear_block_state(user_id: typing.Any) -> None:
 
 
 def check_message(user_id: typing.Any, text: str):
-    """
-    Run ToS detectors on a user message.
-
-    Returns (action, reason, strikes) with action "warn" or "block", or None
-    if no violation. Hard violations warn for the first TOS_STRIKE_LIMIT - 1
-    strikes and only block on the TOS_STRIKE_LIMIT-th. Callers should reply
-    with the warning on "warn" and hard_block + blocked reply on "block".
-    """
+    """Run ToS detectors and return any enforcement action."""
     uid = _uid(user_id)
     if not uid or config.is_bot_owner(uid):
         return None
@@ -562,10 +593,7 @@ def check_message(user_id: typing.Any, text: str):
 
 
 def handle_model_tos_flag(user_id: typing.Any, flag: typing.Any) -> Optional[str]:
-    """
-    Model may emit tos_violation: {\"reason\": \"...\"} or a plain string.
-    Returns block reason if actionable.
-    """
+    """Return an actionable reason from a model ToS flag."""
     if not flag:
         return None
     if config.is_bot_owner(user_id):

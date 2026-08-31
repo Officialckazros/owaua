@@ -128,22 +128,20 @@ def parse_posts(payload: object, amount: int) -> list[Post]:
 
     posts: list[Post] = []
     seen: set[str] = set()
-    for item in typing.cast(typing.Iterable[typing.Any], payload):
+    for item in payload:
         if not isinstance(item, dict):
             continue
-        tags = {
-            tag.casefold() for tag in str(typing.cast(typing.Any, item).get("tags") or "").split()
-        }
+        tags = {tag.casefold() for tag in str(item.get("tags") or "").split()}
         if tags & _MINOR_TAGS:
             continue
         try:
-            post_id = int(typing.cast(typing.Any, item).get("id"))
+            post_id = int(item.get("id"))
         except (TypeError, ValueError):
             continue
         if post_id <= 0:
             continue
-        image_url = _rule34_image_url(typing.cast(typing.Any, item).get("sample_url"))
-        image_url = image_url or _rule34_image_url(typing.cast(typing.Any, item).get("file_url"))
+        image_url = _rule34_image_url(item.get("sample_url"))
+        image_url = image_url or _rule34_image_url(item.get("file_url"))
         if not image_url or image_url in seen:
             continue
         seen.add(image_url)

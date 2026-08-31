@@ -1,10 +1,4 @@
-"""Community-requested commands.
-
-A user describes a command in plain English; the AI turns that into a *command
-spec* — a name, a description, and a behavior prompt. The spec is stored and
-becomes instantly invocable as <prefix><name>. Crucially, the generated command
-is DATA (a prompt), never executable code.
-"""
+"""Stored community-requested commands."""
 
 import re
 from typing import Optional, Tuple

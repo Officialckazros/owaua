@@ -1,10 +1,4 @@
-"""Owner-only `!ckazros` / `/ckazros` command.
-
-The configured bot operator can make a verified one-turn request. Legacy
-standing orders are retained only so they can be inspected and removed; they
-are never inserted into a model prompt. User-authored text must not become
-privileged, persistent model instructions.
-"""
+"""Owner-only `!ckazros` and `/ckazros` commands."""
 
 from __future__ import annotations
 
@@ -99,8 +93,6 @@ _STOP = re.compile(
 
 @dataclass(frozen=True)
 class Dispatch:
-    """Result of handling a !ckazros invocation."""
-
     message: str
     execute: bool = False
     query: str = ""
@@ -120,8 +112,8 @@ def list_directives() -> List[str]:
         return []
     if not isinstance(data, list):
         return []
-    out: List[str] = []
-    for item in typing.cast(typing.Iterable[typing.Any], data):
+    out: list[str] = []
+    for item in data:
         text = str(item or "").strip()
         if text:
             out.append(text[:MAX_DIRECTIVE_CHARS])
@@ -129,8 +121,8 @@ def list_directives() -> List[str]:
 
 
 def set_directives(items: List[str]) -> List[str]:
-    cleaned: List[str] = []
-    seen: typing.Any = typing.cast(typing.Any, set())
+    cleaned: list[str] = []
+    seen: set[str] = set()
     for item in items:
         text = " ".join(str(item or "").split())
         if not text:
@@ -172,8 +164,8 @@ def remove_matching(needle: str) -> List[str]:
     if not tokens:
         return []
     lowered = [t.casefold() for t in tokens]
-    kept: List[str] = []
-    removed: List[str] = []
+    kept: list[str] = []
+    removed: list[str] = []
     for item in list_directives():
         hay = item.casefold()
         if any(tok in hay for tok in lowered):
@@ -186,19 +178,13 @@ def remove_matching(needle: str) -> List[str]:
 
 
 def prompt_block() -> str:
-    """Return no legacy directive text.
-
-    Old versions placed free-form, database-backed owner text in every system
-    prompt. That made a typo, compromised owner account, or hostile content
-    persist as privileged instructions. Keep the records removable via the
-    command's maintenance controls, but make them inert in all model calls.
-    """
+    """Keep stored legacy directives out of model prompts."""
     return ""
 
 
 def apply(system: str, *, owner_command: bool = False) -> str:
-    """Prefix a system prompt with sticky orders and/or the owner-turn block."""
-    bits: list[typing.Any] = []
+    """Add the verified owner-turn block to a system prompt."""
+    bits: list[str] = []
     block = prompt_block()
     if block:
         bits.append(block)
@@ -264,7 +250,6 @@ def interpret(raw: str) -> Dispatch:
 
 
 def dispatch(user_id: typing.Any, raw: str, *, prefix: str = "!") -> Dispatch:
-    """Authorize, apply standing-order changes, and decide whether to chat."""
     p = prefix or config.PREFIX
     if not is_authorized(user_id):
         return Dispatch(
@@ -321,7 +306,5 @@ def dispatch(user_id: typing.Any, raw: str, *, prefix: str = "!") -> Dispatch:
             )
         return Dispatch(op="do", execute=True, query=decision.query, message="")
     if decision.op == "sticky":
-        # Treat wording such as "from now on" as part of this request, never
-        # as a request to elevate untrusted free-form text for future prompts.
         return Dispatch(op="do", execute=True, query=decision.query, message="")
     return Dispatch(op="do", execute=True, query=decision.query, message="")

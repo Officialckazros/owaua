@@ -1,5 +1,4 @@
-"""Embed helpers. Every user-facing message goes out as an embed, and all text
-is run through de_emoji() so the bot never emits emoji (per design)."""
+"""Discord embed helpers and text cleanup."""
 
 import datetime
 import re

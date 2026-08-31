@@ -1,20 +1,4 @@
-"""Async OpenAI-compatible LLM client used by owaua's modular AI features.
-
-One async wrapper for every model the bot talks to:
-
-* ``chat``            — text completions (GPT OSS 120B, Llama 3.3 70B, …)
-* ``chat_with_tools`` — function/tool-calling completions (GPT OSS 20B, Qwen)
-* ``vision``          — image understanding (Qwen vision)
-* ``moderate``        — passive content moderation (Safety GPT OSS 20B)
-* ``transcribe``      — speech-to-text (Whisper Large v3 Turbo, Groq)
-* ``speak``           — text-to-speech (Orpheus, Groq)
-
-Everything is built on :mod:`httpx` with automatic retries + backoff and
-timeout handling, and every call is async so the Discord gateway is never
-blocked. The base URL / API key are configurable per call, defaulting to the
-generic ``OWAUA_LLM_BASE_URL`` / ``OWAUA_LLM_API_KEY`` env vars — point those
-at whatever inference provider actually serves the models.
-"""
+"""Async OpenAI-compatible client for modular AI features."""
 
 import asyncio
 import base64
@@ -141,11 +125,7 @@ def _is_public_ip(value: str) -> bool:
 
 
 async def _validate_download_url(url: str) -> bool:
-    """Allow only ordinary public HTTP(S) URLs.
-
-    This keeps the user-facing image URL feature from becoming an SSRF proxy
-    into localhost, cloud metadata endpoints, or private network services.
-    """
+    """Allow only public HTTP or HTTPS URLs."""
     try:
         parsed = urlsplit(url)
         port = parsed.port
@@ -383,11 +363,7 @@ class LLMClient:
         scope_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> Tuple[str, List[Dict[str, str]]]:
-        """Chat completion with tool-calling.
-
-        Returns ``(text, tool_calls)`` where ``tool_calls`` is a list of
-        ``{"name", "arguments"}`` dicts (arguments is a JSON string).
-        """
+        """Return text and tool calls from a chat completion."""
         msgs = list(messages)
         if system:
             msgs = [{"role": "system", "content": system}, *msgs]
@@ -523,11 +499,7 @@ class LLMClient:
     async def get_image(
         self, url: str, *, max_bytes: Optional[int] = None
     ) -> Optional[Tuple[bytes, str]]:
-        """Safely download a small public raster image.
-
-        Redirect targets are revalidated, bodies are streamed with a hard size
-        cap, and the actual bytes must match a supported image signature.
-        """
+        """Download a bounded public raster image."""
         limit = max_bytes or config.VISION_MAX_IMAGE_BYTES
         current = (url or "").strip()
         headers = {"User-Agent": "Mozilla/5.0 (compatible; owaua/1.0)"}

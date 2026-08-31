@@ -1,9 +1,4 @@
-"""Canonical privacy boundaries for persisted bot data.
-
-Historically owaua used the literal ``"dm"`` for every direct message.  That
-made unrelated users share one tenant.  ``Scope`` makes the boundary explicit
-and gives every persistence call a stable, non-ambiguous key.
-"""
+"""Canonical privacy scopes for persisted bot data."""
 
 from __future__ import annotations
 

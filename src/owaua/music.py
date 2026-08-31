@@ -1,8 +1,4 @@
-"""Safe music discovery.
-
-owaua deliberately does not download, convert, or redistribute media. The
-command returns a normal YouTube search URL that the user may open themselves.
-"""
+"""Music discovery through YouTube search URLs."""
 
 from __future__ import annotations
 

@@ -1,14 +1,4 @@
-"""Multilingual routing and reply-language preference.
-
-Uses a lightweight language detector (langdetect — never the LLM, to save
-cost) to spot non-English messages, and only when the message is in a
-designated multilingual channel (``OWAUA_MULTILINGUAL_CHANNELS``) routes the
-reply to Groq GPT-OSS 20B, which answers back in the user's language.
-
-`!language` / `/language` stores a per-user preference (and an optional
-server default). The brain is then told to write the visible reply in that
-language.
-"""
+"""Multilingual routing and reply-language preferences."""
 
 from __future__ import annotations
 
@@ -206,10 +196,7 @@ async def maybe_multilingual_reply(
     scope_id: str | None = None,
     user_id: str | None = None,
 ) -> Optional[str]:
-    """Return a Groq GPT-OSS 20B reply in the message's language, or None.
-
-    Only fires inside a designated multilingual channel for non-English text.
-    """
+    """Return a multilingual-channel reply, or `None`."""
     if not lang or lang == "en":
         return None
     if guild is None or channel is None:
@@ -503,10 +490,7 @@ def set_from_text(raw: str) -> Tuple[Optional[Language], str]:
 
 
 def parse_arg(arg: str) -> Tuple[str, str]:
-    """Split `!language` args into (op, rest).
-
-    ops: status, list, reset, set, server_set, server_reset, help
-    """
+    """Split `!language` arguments into operation and value."""
     text = _strip_filler(arg or "").strip()
     if not text:
         return "status", ""

@@ -1,9 +1,4 @@
-"""Declarative catalog for every community-management module.
-
-The catalog is shared by Discord runtime code and the web dashboard.  Keeping
-defaults and validation metadata in one place prevents the dashboard from
-claiming a setting that the bot cannot understand.
-"""
+"""Community-module defaults and validation metadata."""
 
 from __future__ import annotations
 
@@ -940,9 +935,7 @@ def merge_settings(name: str, value: object) -> dict[typing.Any, typing.Any]:
             value: typing.Any = typing.cast(typing.Any, {**value, "channel_id": migrated})
     if len(typing.cast(typing.Any, value)) > 200:
         raise ValueError("too many settings")
-    # These switches were added after the numeric thresholds. Treat an older
-    # saved threshold as an explicit opt-in, while new configurations stay off
-    # until the dashboard switch is enabled.
+    # Existing thresholds predate the matching enable switches.
     if name == "automod":
         legacy = typing.cast(typing.Any, value)
         if "max_caps_enabled" not in legacy and "max_caps_percent" in legacy:

@@ -1,14 +1,4 @@
-"""Interactive CLI for DMing Discord users through the owaua bot account.
-
-Full interactive shell (recommended):
-    PYTHONPATH=src python -m owaua.dm
-
-Jump straight into a chat with one user:
-    PYTHONPATH=src python -m owaua.dm <user_id>
-
-Fire a single message and exit, no shell:
-    PYTHONPATH=src python -m owaua.dm <user_id> "message text"
-"""
+"""Interactive CLI for DMing Discord users through owaua."""
 
 import argparse
 import asyncio
@@ -253,8 +243,7 @@ def is_cli_conversation_active(user_id: int, ttl_seconds: float = 90.0) -> bool:
 
 
 def message_text(msg: discord.Message) -> str:
-    """owaua's own replies go out as embeds, so message.content is often
-    empty — fall back to the embed's title/description/fields for those."""
+    """Return visible message text, including embed content."""
     if msg.content:
         return _safe_terminal_text(msg.content)
     parts: list[typing.Any] = []
@@ -398,9 +387,7 @@ class DMShell(discord.Client):
         print("-- Left chat. --\n")
 
     async def _heartbeat(self, user_id: int, session_id: str) -> None:
-        """Keep re-marking this user active so bot.py's staleness check
-        (see bot.py's _CLI_ACTIVE_TTL) doesn't let the AI take back over
-        mid-conversation."""
+        """Keep the active CLI conversation from expiring."""
         try:
             while True:
                 await asyncio.sleep(ACTIVE_HEARTBEAT_SECONDS)

@@ -1,19 +1,4 @@
-"""Per-user XP/levels and every server-booster perk in one place.
-
-Levels
-------
-Every guild message grants XP (cooldown-gated per user).  Boosters earn
-1.5x XP.  Level-ups are announced in-channel.
-
-Booster perks
--------------
-- 1.5x chat XP multiplier
-- +50% work pay and a 30s (instead of 60s) work cooldown
-- Better gamble odds (55% vs 40%)
-- Bigger daily stipend ($250 vs $100) plus streak tracking
-- A bot-managed custom role (own name + color) via ``!boosterrole``
-- Automatic removal of that role when boosting stops
-"""
+"""Per-user XP, levels, and server-booster perks."""
 
 import secrets
 import typing

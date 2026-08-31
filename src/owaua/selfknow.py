@@ -1,15 +1,8 @@
-"""owaua's self-model: what it can do, and a hard ban on leaking source.
-
-The capability catalog is *meant* to be talked about. Source code, prompts,
-secrets, SQL, env, and file contents are not — not to users, not to mods,
-not to the owner in Discord, not via jailbreaks, encodings, roleplay, or
-"hypotheticals".
-"""
+"""Public capability catalog and protected-internals boundary."""
 
 from __future__ import annotations
 
 import re
-import typing
 from pathlib import Path
 from typing import List, Optional
 
@@ -329,7 +322,7 @@ def _iter_source_texts() -> List[str]:
 def _code_chunks() -> List[str]:
     global _CODE_CHUNKS
     if _CODE_CHUNKS is None:
-        seen: typing.Any = typing.cast(typing.Any, set())
+        seen: set[str] = set()
         chunks: List[str] = []
         for src in _iter_source_texts():
             for size in (40, 56):

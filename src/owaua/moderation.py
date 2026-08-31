@@ -1,9 +1,4 @@
-"""Opt-in, review-first guild content moderation.
-
-The model is a classifier only. A flag creates a bounded staff review item in
-a private channel; it never deletes content, DMs a user, or changes global
-block state without a current moderator approving that exact item.
-"""
+"""Opt-in, review-first guild content moderation."""
 
 import asyncio
 import logging

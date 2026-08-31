@@ -1,13 +1,4 @@
-"""Public web surface for owaua legal/health endpoints and static sites.
-
-The Discord client owns :class:`WebService` in production and supplies a
-readiness callback for its Discord and database state.  Keeping the HTTP
-surface here avoids importing Discord or the bot's configuration at module
-import time, which also makes health checks safe during partial startup.
-
-When a ``sites/`` tree is present, Host-based virtual hosts serve kozzyx.org,
-kirmy.org, and wearegays.net from that tree. Legal routes stay on ``/owaua``.
-"""
+"""Public legal, health, acceptance, and static-site HTTP routes."""
 
 from __future__ import annotations
 
@@ -28,7 +19,7 @@ from typing import Final, TypeAlias
 
 from aiohttp import web
 
-from owaua import config, tos
+from owaua import config, network_risk, tos
 from owaua.dashboard import (
     DASHBOARD_PREFIX,
     DashboardAuthConfig,
@@ -136,14 +127,6 @@ def _landing_page() -> str:
     )
 
 
-def _terms_page(contact: str) -> str:
-    return _document("Terms of Service", terms_inner(contact))
-
-
-def _privacy_page(contact: str) -> str:
-    return _document("Privacy Notice", privacy_inner(contact))
-
-
 def _acceptance_page(contact: str, token: str) -> str:
     safe_token = html.escape(token, quote=True)
     safe_contact = html.escape(contact)
@@ -152,13 +135,15 @@ def _acceptance_page(contact: str, token: str) -> str:
         + f"""
 <section class="card" aria-labelledby="accept-heading">
   <h2 id="accept-heading">Accept this version</h2>
-  <p>For abuse and block-evasion prevention, this submission processes your
-  client IP address together with your Discord account id. The raw address is
-  not stored: owaua stores a keyed network token for at most 30 days. A match to
-  a currently blocked account places access into manual review regardless of
-  Discord account age; it does not automatically hard-block the matching account.
-  Shared, mobile, school, workplace, and VPN networks can be inaccurate. You can
-  contact {safe_contact} to appeal a review.</p>
+  <p>For abuse and block-evasion prevention, opening or submitting this page
+  processes your client IP address together with your Discord account id. The
+  raw address is not stored: owaua stores a keyed network token for at most 30
+  days. Cloudflare also supplies the network ASN and organization name, which
+  owaua uses in memory to refuse VPN, proxy, Tor, and hosting/datacenter
+  networks. Those values are not stored. A match to a currently blocked account
+  hard-blocks this Discord account regardless of Discord account age. Shared,
+  mobile, school, and workplace networks can be inaccurate. You can contact
+  {safe_contact} to appeal a block.</p>
   <form method="post" action="/owaua/terms/accept">
     <input type="hidden" name="token" value="{safe_token}">
     <label class="accept"><input type="checkbox" name="agree" value="yes" required>
@@ -183,6 +168,44 @@ def _acceptance_result(title: str, message: str) -> str:
 
 def _html_response(content: str) -> web.Response:
     return web.Response(text=content, content_type="text/html", charset="utf-8")
+
+
+def _trusted_proxy(request: web.Request) -> bool:
+    supplied_secret = request.headers.get("X-Owaua-Origin-Auth", "")
+    try:
+        return bool(
+            config.TOS_PROXY_SECRET
+            and supplied_secret
+            and hmac.compare_digest(config.TOS_PROXY_SECRET, supplied_secret)
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _trusted_client_address(request: web.Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For", "").split(",", 1)[0].strip()
+    try:
+        return str(ipaddress.ip_address(forwarded)) if _trusted_proxy(request) else ""
+    except ValueError:
+        return ""
+
+
+def _trusted_network_hints(request: web.Request) -> tuple[int, str]:
+    if not _trusted_proxy(request):
+        return 0, ""
+    return (
+        network_risk.parse_asn(request.headers.get("X-Owaua-ASN", "")),
+        network_risk.parse_organization(request.headers.get("X-Owaua-AS-Org", "")),
+    )
+
+
+def _vpn_refusal_page(contact: str) -> str:
+    return _acceptance_result(
+        "VPN or hosting network blocked",
+        "Acceptance is not available from a VPN, proxy, Tor, or hosting/"
+        "datacenter network. Turn that off, then open your Discord acceptance "
+        f"link again. Contact {contact} if this is a mistake.",
+    )
 
 
 def _apply_dashboard_headers(response: web.StreamResponse) -> None:
@@ -373,12 +396,12 @@ def create_app(
     async def terms(request: web.Request) -> web.Response:
         if redirect := legacy_legal_redirect(request):
             raise redirect
-        return _html_response(_terms_page(contact))
+        return _html_response(_document("Terms of Service", terms_inner(contact)))
 
     async def privacy(request: web.Request) -> web.Response:
         if redirect := legacy_legal_redirect(request):
             raise redirect
-        return _html_response(_privacy_page(contact))
+        return _html_response(_document("Privacy Notice", privacy_inner(contact)))
 
     async def accept_terms_get(request: web.Request) -> web.Response:
         if redirect := legacy_legal_redirect(request):
@@ -391,6 +414,28 @@ def create_app(
                     "This link is invalid. Return to Discord and request a new one with /tos.",
                 )
             )
+        try:
+            client_address = _trusted_client_address(request)
+            if client_address:
+                user_id = tos.peek_acceptance_challenge(token) or ""
+                asn, organization = _trusted_network_hints(request)
+                if not config.is_bot_owner(user_id) and network_risk.is_restricted_network(
+                    asn=asn, organization=organization
+                ):
+                    return _html_response(_vpn_refusal_page(contact))
+                decision, _fingerprint = tos.inspect_web_network(user_id, client_address)
+                if decision == "blocked":
+                    if user_id:
+                        tos.consume_acceptance_challenge(token)
+                    return _html_response(
+                        _acceptance_result(
+                            "Access unavailable",
+                            "Access is blocked because this Discord account or network "
+                            f"matches a current owaua block. Contact {contact} to appeal.",
+                        )
+                    )
+        except Exception:
+            log.exception("acceptance network check failed")
         return _html_response(_acceptance_page(contact, token))
 
     async def accept_terms_post(request: web.Request) -> web.Response:
@@ -402,17 +447,7 @@ def create_app(
         token = str(form.get("token") or "")
         if form.get("agree") != "yes":
             raise web.HTTPBadRequest(text="acceptance checkbox is required")
-        supplied_secret = request.headers.get("X-Owaua-Origin-Auth", "")
-        trusted_proxy = bool(
-            config.TOS_PROXY_SECRET
-            and supplied_secret
-            and hmac.compare_digest(config.TOS_PROXY_SECRET, supplied_secret)
-        )
-        forwarded = request.headers.get("X-Forwarded-For", "").split(",", 1)[0].strip()
-        try:
-            client_address = str(ipaddress.ip_address(forwarded)) if trusted_proxy else ""
-        except ValueError:
-            client_address = ""
+        client_address = _trusted_client_address(request)
         if not client_address:
             return web.Response(
                 text=_acceptance_result(
@@ -423,6 +458,12 @@ def create_app(
                 content_type="text/html",
                 charset="utf-8",
             )
+        peeked_user = tos.peek_acceptance_challenge(token) or ""
+        asn, organization = _trusted_network_hints(request)
+        if not config.is_bot_owner(peeked_user) and network_risk.is_restricted_network(
+            asn=asn, organization=organization
+        ):
+            return _html_response(_vpn_refusal_page(contact))
         user_id = tos.consume_acceptance_challenge(token)
         if user_id is None:
             return _html_response(
@@ -450,7 +491,8 @@ def create_app(
             return _html_response(
                 _acceptance_result(
                     "Access unavailable",
-                    f"This Discord account cannot use owaua. Contact {contact} to appeal.",
+                    "Access is blocked because this Discord account or network "
+                    f"matches a current owaua block. Contact {contact} to appeal.",
                 )
             )
         raise web.HTTPServiceUnavailable(text="acceptance temporarily unavailable")

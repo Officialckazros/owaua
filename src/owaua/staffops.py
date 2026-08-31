@@ -1,9 +1,4 @@
-"""Durable staff operations, moderation cases, incidents, health, and exports.
-
-This module deliberately stores structured metadata rather than message bodies.
-Every record is scoped to one guild and every mutating caller supplies the
-staff actor so the same event can be rendered in one consistent timeline.
-"""
+"""Guild-scoped staff operations, cases, incidents, health, and exports."""
 
 from __future__ import annotations
 

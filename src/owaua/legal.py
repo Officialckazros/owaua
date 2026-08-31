@@ -1,8 +1,4 @@
-"""Canonical owaua Terms of Service and Privacy Notice.
-
-These pages are generated from the running code's actual behaviour: storage
-tables, consent gates, provider calls, and deletion gaps. Keep them honest.
-"""
+"""Canonical owaua Terms of Service and Privacy Notice."""
 
 # ruff: noqa: S608
 
@@ -11,8 +7,8 @@ from __future__ import annotations
 import html
 from typing import Final
 
-LEGAL_VERSION: Final = "3.8"
-LEGAL_EFFECTIVE_DATE: Final = "27 August 2026"
+LEGAL_VERSION: Final = "3.10"
+LEGAL_EFFECTIVE_DATE: Final = "31 August 2026"
 PUBLIC_BASE_URL: Final = "https://wearegays.net/owaua"
 TERMS_URL: Final = f"{PUBLIC_BASE_URL}/terms"
 PRIVACY_URL: Final = f"{PUBLIC_BASE_URL}/privacy"
@@ -43,14 +39,15 @@ ordinary commands. <code>/privacy</code>, <code>/tos</code>, <code>/help</code>,
 can read this, export or delete data, and refuse the service.</p>
 <p>Accepting these Terms is <strong>not</strong> consent to store raw message
 history. That is a separate opt-in described in the Privacy Notice.</p>
-<p>The acceptance submission processes your client IP address with your Discord
-user id for abuse and block-evasion prevention. The raw address is not stored;
-a keyed network token is retained for at most 30 days. A network match alone
-does not prove identity, so it does not create an automatic hard block. A match
-to a currently blocked account places acceptance into manual owner review,
-regardless of Discord account age. Shared, workplace, school, mobile-carrier,
-and VPN networks can be inaccurate. Contact the address above to appeal a
-review.</p>
+<p>Opening or submitting the acceptance page processes your client IP address
+with your Discord user id for abuse and block-evasion prevention. The raw
+address is not stored; a keyed network token is retained for at most 30 days.
+Cloudflare also supplies the network ASN and organization name. owaua uses
+those in memory to refuse VPN, proxy, Tor, and hosting/datacenter networks; it
+does not store the ASN or organization name. A match to a currently blocked
+account hard-blocks the visiting Discord account regardless of Discord account
+age. Shared, workplace, school, and mobile-carrier networks can be inaccurate,
+and VPN classification can be wrong. Contact the address above to appeal.</p>
 </div>
 
 <h2>1. Who operates this</h2>
@@ -144,10 +141,19 @@ block but retains the user id, minimal malware category/evidence hash, and
 block state until the operator explicitly unblocks it.</p>
 <p>Web acceptance uses a random, single-use capability linked to the Discord
 account that requested it. It expires after 15 minutes. Recent keyed network
-tokens may be compared against accounts that are currently blocked. A combined
-network match places acceptance into owner review regardless of Discord account
-age; it does not automatically hard-block the matching account. Accounts that
-accepted before the block are also moved into review when the block is created.</p>
+tokens are compared against accounts that are currently blocked. Visiting or
+submitting the acceptance page from a matching network hard-blocks that Discord
+account regardless of Discord account age. When a block is created, the blocked
+account's network token is retained so the website can refuse later visits from
+the same network. Accounts that already accepted from that network before the
+block are moved into owner review rather than auto-blocked; they stay locked
+until the operator allows them. Unblocking the source account forgets that
+network token.</p>
+<p>Acceptance from a VPN, proxy, Tor exit, or hosting/datacenter network is
+refused. That decision uses Cloudflare's ASN and organization name for the
+client IP. It does not hard-block the Discord account; turn the network off and
+open a fresh acceptance link. Classification misses some VPNs and can flag
+shared or unusual networks by mistake.</p>
 
 <h2>6. Owner access discretion</h2>
 <p>The bot owner/operator may refuse, restrict, suspend, or permanently end
@@ -273,13 +279,19 @@ code.</p>
 <p>That profile is assembled in memory for the reply. It is not written to
 its own table. Pieces of it can still land in stored memories, conversation
 turns, or audit rows if another feature saves them.</p>
-<p>When you open and submit the Discord-issued ToS acceptance page, Cloudflare
-and the bot web service receive your client IP address. The bot normalizes it
-(an IPv4 address or an IPv6 /64 network), immediately transforms it with a
-secret keyed hash, and stores only that network token. The acceptance record is
-linked to your Discord user id because the one-time link was issued inside
-Discord. Public Terms and Privacy pages without an acceptance link do not create
-an owaua acceptance record.</p>
+<p>When you open or submit the Discord-issued ToS acceptance page, Cloudflare
+and the bot web service receive your client IP address. Cloudflare also
+provides the ASN and organization name for that address. The bot normalizes
+the IP (an IPv4 address or an IPv6 /64 network), immediately transforms it with
+a secret keyed hash, and stores only that network token. ASN and organization
+name are classified in memory against a local VPN/proxy/Tor/hosting list and
+are not written to SQLite. If the network token matches a currently blocked
+account, the visiting Discord account is hard-blocked. If the network is
+classified as VPN, proxy, Tor, or hosting, acceptance is refused without
+creating a Discord hard-block. The acceptance record is linked to your Discord
+user id because the one-time link was issued inside Discord. Public Terms and
+Privacy pages without an acceptance link do not create an owaua acceptance
+record.</p>
 
 <h2>3. What we store in SQLite</h2>
 <p>The bot's brain is a local SQLite file (<code>OWAUA_DB</code>, default
@@ -290,6 +302,7 @@ an owaua acceptance record.</p>
 <tr><td>privacy_consents</td><td>Your user id, a scope id (exact guild or DM scope), opted-in flag, timestamp</td><td>When you <code>/privacy opt-in</code> or <code>opt-out</code></td></tr>
 <tr><td>tos_acceptance_challenges</td><td>A keyed token value, Discord user id, legal version, creation and expiry times</td><td>When Discord creates a single-use acceptance button; deleted on use or after 15 minutes</td></tr>
 <tr><td>tos_acceptances</td><td>Discord user id, legal version, accepted/review/rejected status, keyed network token, timestamps, and a short risk code when review is required</td><td>When the web acceptance form is submitted or the operator resolves a review</td></tr>
+<tr><td>tos_blocked_networks</td><td>A keyed network token, the blocked Discord user id that contributed it, and a timestamp</td><td>When a blocked account is created or that account visits the acceptance page from a network; removed when that account is unblocked or after at most 30 days</td></tr>
 <tr><td>server_messages</td><td>Message id, guild/channel ids and names, user id, username, display name, text content, optional bad-word flags, time</td><td>Under the ordinary dual consent gate, or for accessible text in an explicitly configured archival guild</td></tr>
 <tr><td>conversations</td><td>Short user/bot turns, truncated to 1500 characters, kept to about 20 turns each way by default</td><td>Same dual gate as raw history</td></tr>
 <tr><td>conversation_summaries</td><td>An AI-compressed continuity summary, user id, exact scope, source-through and update times</td><td>After enough new dual-consented turns; it never replaces durable memories</td></tr>
@@ -446,9 +459,11 @@ are size-bounded and redirects are refused.</li>
 <p>Providers see IP addresses of this server, not your home IP, except that
 Cloudflare and Discord see client IPs on the public website and the Discord
 client respectively. The website worker may forward
-<code>CF-Connecting-IP</code> as <code>X-Forwarded-For</code> to the bot's
-HTTP port. Health endpoints <code>/healthz</code> and <code>/readyz</code>
-do not include user, guild, or provider payloads.</p>
+<code>CF-Connecting-IP</code> as <code>X-Forwarded-For</code> and Cloudflare
+ASN/organization metadata to the bot's HTTP port on the acceptance route.
+Those extra fields are used only to refuse VPN, proxy, Tor, and hosting
+networks and are not stored. Health endpoints <code>/healthz</code> and
+<code>/readyz</code> do not include user, guild, or provider payloads.</p>
 
 <h2>6. Retention</h2>
 <ul>
@@ -478,7 +493,8 @@ until deleted.</li>
 body.</li>
 <li>Unused ToS acceptance links expire after 15 minutes. Keyed network tokens
 are cleared after at most 30 days; unresolved review records older than that are
-deleted by retention cleanup.</li>
+deleted by retention cleanup. Blocked-network tokens expire on the same window
+and are removed when the contributing account is unblocked.</li>
 <li>Malware scan temporary files are removed immediately after identification
 and scanning. Only a short SHA-256 prefix and verdict metadata enter an incident
 or block record; attachment bytes are not retained.</li>
@@ -499,14 +515,15 @@ DM-scoped AI trace metadata,
 relationships, quotes, feedback, interactions, raw messages, DM contact
 row, dynamic block metadata, and swear-jar totals. Oversized exports are
 gzip-compressed. The export includes your web ToS acceptance status and keyed
-network token while retained. Subject-linked cases, notes, appeals, incidents, tickets, and
+network token while retained, including any blocked-network token sourced from your id. Subject-linked cases, notes, appeals, incidents, tickets, and
 onboarding records use the same community-record ownership coverage. This is
 not a complete dump of the database.</li>
 <li><code>/privacy delete</code> — after a confirmation click, deletes
 your memories, conversations, conversation summaries, DM-scoped AI traces, relationships, quotes, feedback,
 interactions, raw messages, consents, authored community commands,
 economy, DM contact, CLI sessions, ToS web challenges/acceptance records,
-ordinary dynamic block row, and user flags
+blocked-network tokens sourced from your id unless a confirmed-malware security
+block is retained, ordinary dynamic block row, and user flags
 (including ToS acceptance and STT consent), plus swear-jar totals. It also
 revokes in-memory STT sessions. A confirmed-malware security block is minimized
 instead of deleted and continues to deny bot access.</li>
@@ -569,8 +586,10 @@ packet in code. If that is not acceptable, do not use the bot and use
 <p>We are not a law firm. In plain terms the operator relies on: performing
 the service you requested after ToS acceptance; consent for raw history and
 STT; legitimate interests in stopping CSAM, doxxing, token theft, prompt-leak
-abuse, and block evasion (hashed evidence, strike counters, and time-limited
-keyed network tokens); and Discord's
+abuse, and block evasion (hashed evidence, strike counters, time-limited
+keyed network tokens, hard-blocks of later acceptance visits from a matching
+network, and refusal of VPN, proxy, Tor, and hosting networks during web
+acceptance); and Discord's
 position as the platform you already have an account with. You can withdraw
 consent, reject the Terms, or delete as described above.</p>
 
