@@ -27,7 +27,7 @@ scanner failures fail closed without blocking the sender.
 | Fun | Core live | Coin, dice, RPS, media/info lookups, polls, coordinate distance, and credentialed Rule34 image lookup restricted to Discord age-restricted channels. |
 | Giveaways | Partial | Timed reaction entries, winner selection and reroll are live. Button/referral/daily entry modes and the public giveaway site are not. |
 | Highlights / Levels / Reminders | Core live | Phrase DMs, XP/rewards/multipliers/leaderboards and timed reminders. |
-| Message Embedder | Configuration only | Draft definitions are stored and audited; publish/edit management is not wired to Discord yet. |
+| Message Embedder | Core live | Dashboard definitions publish to Discord, update in place when edited, avoid duplicate posts, and use bounded embeds with safe URLs and no mentions. |
 | Moderation / Incident Center | Core live | Searchable cases, private notes, HTTPS evidence references, expiry, member appeals, assignment, consistent timelines, and a unified malware/automod/rules/assistant/ticket queue. Discord mutations remain confirmation-gated. |
 | Malware Scanner | Core live | Verified media exclusion, bounded local ClamAV scanning, fail-closed deletion, private incident reports and persistent bot-access blocks. |
 | Reaction Roles | Core live | Reaction add/remove plus persistent dashboard-configured select menus, safe bot-role hierarchy checks, and optional rules-ack gating. |

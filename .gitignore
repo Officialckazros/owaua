@@ -29,3 +29,7 @@ dist/
 *.tgz
 owaua-user-*.json
 owaua-user-*.json.gz
+AGENTS.md
+*.iso
+cloudflare-worker/.wrangler-dry-run*/
+cloudflare-worker/.wrangler-dry-run-israel/

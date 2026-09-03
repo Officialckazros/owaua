@@ -2861,11 +2861,12 @@ def ai_spend_reserve(
     input_tokens: int,
     max_output_tokens: int,
     reserved_microusd: int,
-    hourly_limit_microusd: int,
-    daily_limit_microusd: int,
-    monthly_limit_microusd: int,
+    hourly_limit_microusd: int | None,
+    daily_limit_microusd: int | None,
+    monthly_limit_microusd: int | None,
     user_daily_limit_microusd: int | None,
     scope_daily_limit_microusd: int | None,
+    total_limit_microusd: int | None = None,
     at: float | None = None,
 ) -> dict[typing.Any, typing.Any]:
     """Reserve estimated paid-provider cost across durable windows."""
@@ -2874,9 +2875,9 @@ def ai_spend_reserve(
     uid = str(user_id or "").strip() or None
     scope = str(scope_id or "").strip() or None
     dimensions: list[tuple[str, float, int | None, str, tuple[object, ...]]] = [
-        ("hourly", 3600.0, max(0, int(hourly_limit_microusd)), "", ()),
-        ("daily", 86400.0, max(0, int(daily_limit_microusd)), "", ()),
-        ("monthly", 30 * 86400.0, max(0, int(monthly_limit_microusd)), "", ()),
+        ("hourly", 3600.0, hourly_limit_microusd, "", ()),
+        ("daily", 86400.0, daily_limit_microusd, "", ()),
+        ("monthly", 30 * 86400.0, monthly_limit_microusd, "", ()),
     ]
     if uid and user_daily_limit_microusd is not None:
         dimensions.append(
@@ -2903,10 +2904,22 @@ def ai_spend_reserve(
     with _db_lock:
         try:
             c.execute("BEGIN IMMEDIATE")
-            c.execute(
-                "DELETE FROM ai_spend_reservations WHERE created<?",
-                (created - 31 * 86400.0,),
-            )
+            if total_limit_microusd is not None:
+                row = c.execute(
+                    "SELECT COALESCE(SUM(reserved_microusd),0) total "
+                    "FROM ai_spend_reservations"
+                ).fetchone()
+                used = int(row["total"] or 0)
+                total_limit = max(0, int(total_limit_microusd))
+                if used + cost > total_limit:
+                    c.rollback()
+                    return {
+                        "allowed": False,
+                        "window": "credit_cap",
+                        "used_microusd": used,
+                        "limit_microusd": total_limit,
+                        "retry_after": 0,
+                    }
             for name, window, limit, suffix, extra in dimensions:
                 cutoff = created - window
                 row = c.execute(
@@ -2916,7 +2929,7 @@ def ai_spend_reserve(
                     (cutoff, *extra),
                 ).fetchone()
                 used = int(row["total"] or 0)
-                if limit is not None and used + cost > limit:
+                if limit is not None and limit > 0 and used + cost > limit:
                     oldest = float(row["oldest"] or created)
                     retry_after = max(1, int(math.ceil(window - (created - oldest))))
                     c.rollback()

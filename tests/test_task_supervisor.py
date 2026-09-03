@@ -65,7 +65,7 @@ class TaskSupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(finished, 2)
 
     async def test_background_failure_keeps_existing_diagnostic(self) -> None:
-        supervisor = TaskSupervisor()
+        supervisor = TaskSupervisor(restart_base_seconds=10)
 
         async def worker() -> None:
             raise RuntimeError("boom")
@@ -76,4 +76,44 @@ class TaskSupervisorTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0)
 
         output.assert_called_once_with("[background] worker stopped: RuntimeError: boom")
+        await supervisor.close()
+
+    async def test_background_failure_restarts_with_health_record(self) -> None:
+        supervisor = TaskSupervisor(restart_base_seconds=0, restart_max_seconds=0)
+        attempts = 0
+        running = asyncio.Event()
+
+        async def worker() -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("temporary")
+            running.set()
+            await asyncio.Event().wait()
+
+        with mock.patch("builtins.print"):
+            supervisor.start_background("worker", worker)
+            await running.wait()
+
+        state = supervisor.health()
+        self.assertEqual(attempts, 2)
+        self.assertEqual(state["background"]["worker"]["failures"], 1)
+        self.assertTrue(state["background"]["worker"]["running"])
+        await supervisor.close()
+
+    async def test_transient_limit_closes_and_counts_rejected_work(self) -> None:
+        supervisor = TaskSupervisor(max_transient=1)
+        waiting = asyncio.Event()
+
+        async def worker() -> None:
+            await waiting.wait()
+
+        self.assertTrue(supervisor.start_transient(worker(), name="first"))
+        rejected = worker()
+        with mock.patch("builtins.print"):
+            self.assertFalse(supervisor.start_transient(rejected, name="second"))
+
+        state = supervisor.health()
+        self.assertEqual(state["transient_running"], 1)
+        self.assertEqual(state["transient_dropped"], 1)
         await supervisor.close()

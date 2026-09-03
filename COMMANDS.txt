@@ -15,17 +15,19 @@ Reply "correction: ..." Explicit correction stored in the exact scope.
 
 Notes:
 - Remembers facts about YOU (merged/deduped, importance-ranked).
-- Raw conversation history is off by default and requires scoped opt-in.
+- Raw conversation history is never stored until the individual member opts in for that exact scope.
+  The server-wide history gate starts enabled and administrators can turn it off.
 - Per-user relationship score, private nickname, grudge.
 - Reads only consented context when the guild history feature is enabled.
 - Every reply is an embed. Never uses emoji in its text.
-- One model for everything: DeepSeek V4 Flash via the official API (image vision uses a
-  separate free multimodal model).
+- GPT-5.6 Luna handles text and image requests through the OpenAI API.
 
 ------------------------------------------------------------------------------
  BUILT-IN COMMANDS
 ------------------------------------------------------------------------------
 !help                    Full command map.
+!doctor                  Private operator-safe readiness and configuration checks.
+!setup                   Safe server setup checklist (Manage Server in guilds).
 
 Dashboard-enabled community commands (available only when their module is on):
 !afk [reason]            Set AFK; `list`, `note @user text`, moderator `clear`.
@@ -117,7 +119,7 @@ Dashboard-enabled community commands (available only when their module is on):
 !lessons                 Lessons learned from feedback.
 !reflect                 Force a learning pass now.
 
-!ask <question>          Ask the DeepSeek V4 Flash model directly (no persona).
+!ask <question>          Ask GPT-5.6 Luna directly (no persona).
 !assistant <request>     ONE-SHOT helpful mode; Discord actions require Confirm.
 !assist <request>        Alias of !assistant.
 !assistant undo          Revert your latest reversible confirmed assistant action.
@@ -200,5 +202,5 @@ tos break unblock all    Unblock all ToS blocks (confirm) + DM each.
 
 ==============================================================================
  Growth axes: memories · lessons · commands · quotes · relationships · level
- Model: DeepSeek V4 Flash via the official API (default everywhere); vision = free multimodal
+ Model: GPT-5.6 Luna through the OpenAI API for text and image requests
 ==============================================================================

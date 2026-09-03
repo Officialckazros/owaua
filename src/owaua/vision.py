@@ -58,9 +58,9 @@ async def describe_bytes(
             f"that image is too large (limit: {config.VISION_MAX_IMAGE_BYTES // 1_000_000} MB).",
             {},
         )
-    if not config.LLM_API_KEY:
+    if not config.OPENAI_API_KEY:
         return (
-            "vision isn't configured — set `OWAUA_LLM_API_KEY` (and `OWAUA_VISION_MODEL`).",
+            "vision isn't configured — set `OPENAI_API_KEY`.",
             {},
         )
     text_prompt = prompt.strip() or _JSON_PROMPT
@@ -72,6 +72,8 @@ async def describe_bytes(
             mime=detected_mime,
             scope_id=scope_id,
             user_id=user_id,
+            base_url=config.OPENAI_BASE_URL,
+            api_key=config.OPENAI_API_KEY,
         )
     except ai_control.AIBudgetExceeded as e:
         return str(e), {}

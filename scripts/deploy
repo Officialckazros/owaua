@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
 WEBSITE_ROOT = ROOT.parent / "website"
+OWAUA_SITE_ROOT = ROOT / "owaua.com"
 CONFIG_DIR = Path.home() / ".config" / "owaua-deploy"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 STATE_FILE = CONFIG_DIR / "state.json"
@@ -878,6 +879,7 @@ def assemble_sites(destination):
     if robots.is_file() and not robots.is_symlink():
         shutil.copy2(robots, kozzyx / "robots.txt")
     _copy_tree(WEBSITE_ROOT / "kirmy.org", destination / "kirmy")
+    _copy_tree(OWAUA_SITE_ROOT, destination / "owaua")
     wearegays = destination / "wearegays"
     _copy_tree(WEBSITE_ROOT / "wearegays.net", wearegays)
     femsec_source = WEBSITE_ROOT / "wearegays.net" / "femsec"
@@ -896,11 +898,12 @@ def assemble_sites(destination):
                 shutil.copy2(source, status_dir / name)
     social = WEBSITE_ROOT / "social"
     if social.is_dir():
-        for site in ("kozzyx", "kirmy", "wearegays"):
+        for site in ("kozzyx", "kirmy", "owaua", "wearegays"):
             _copy_tree(social, destination / site / "social")
     required = [
         destination / "kozzyx" / "index.html",
         destination / "kirmy" / "index.html",
+        destination / "owaua" / "index.html",
         destination / "wearegays" / "index.html",
     ]
     if femsec_source.is_dir():

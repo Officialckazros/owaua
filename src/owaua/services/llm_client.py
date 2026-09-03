@@ -569,12 +569,25 @@ class LLMClient:
         model: str,
         text: str,
         *,
+        image_bytes: Optional[bytes] = None,
+        image_mime: str = "image/png",
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
         scope_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Passive content moderation. Returns ``{"flagged", "category", "reason", "confidence"}``."""
+        if model.startswith("omni-moderation"):
+            return await self._openai_moderate(
+                model,
+                text,
+                image_bytes=image_bytes,
+                image_mime=image_mime,
+                base_url=base_url,
+                api_key=api_key,
+                scope_id=scope_id,
+                user_id=user_id,
+            )
         system = (
             "You are a content moderation classifier for a Discord server that allows dark humor, "
             "edgy jokes, and NSFW text. Given a chat message, first decide whether it is a joke "
@@ -621,6 +634,129 @@ class LLMClient:
             "reason": str(result.get("reason") or "")[:500],
             "confidence": confidence,
         }
+
+    async def _openai_moderate(
+        self,
+        model: str,
+        text: str,
+        *,
+        image_bytes: Optional[bytes] = None,
+        image_mime: str = "image/png",
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        scope_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Classify text and one bounded image with OpenAI's moderation endpoint."""
+        base, key = self._resolve(base_url, api_key)
+        if not key:
+            raise LLMError("no API key configured for moderation")
+        inputs: List[Dict[str, Any]] = []
+        if text.strip():
+            inputs.append({"type": "text", "text": text[:4000]})
+        if image_bytes:
+            inputs.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": _data_url(image_bytes, image_mime)},
+                }
+            )
+        if not inputs:
+            return {"flagged": False, "category": "none", "reason": "", "confidence": 0.0}
+        ai_control.check_request_budget(scope_id, "moderation", user_id=user_id)
+        payload: Dict[str, Any] = {"model": model, "input": inputs}
+        data = await self._post_json(
+            f"{base}/moderations",
+            {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            payload,
+            scope_id=scope_id,
+            user_id=user_id,
+        )
+        results = data.get("results") or []
+        if not results or not isinstance(results[0], dict):
+            raise LLMError("moderation provider returned no results")
+        result = typing.cast(Dict[str, Any], results[0])
+        categories = typing.cast(Dict[str, Any], result.get("categories") or {})
+        scores = typing.cast(Dict[str, Any], result.get("category_scores") or {})
+        flagged_names = [name for name, value in categories.items() if coerce_bool(value)]
+
+        def _score(name: str) -> float:
+            try:
+                return max(0.0, min(1.0, float(scores.get(name) or 0.0)))
+            except (TypeError, ValueError):
+                return 0.0
+
+        strongest = max(flagged_names or list(scores), key=_score, default="none")
+        normalized = "none"
+        low = strongest.lower()
+        for prefix, category in (
+            ("harassment", "harassment"),
+            ("hate", "hate"),
+            ("sexual", "sexual"),
+            ("violence", "violence"),
+            ("self-harm", "self_harm"),
+        ):
+            if low.startswith(prefix):
+                normalized = category
+                break
+        reason = ", ".join(flagged_names[:5])
+        return {
+            "flagged": coerce_bool(result.get("flagged")),
+            "category": normalized,
+            "reason": f"OpenAI moderation categories: {reason}" if reason else "",
+            "confidence": _score(strongest),
+        }
+
+    async def embeddings(
+        self,
+        texts: List[str],
+        *,
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        scope_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> List[List[float]]:
+        """Create bounded OpenAI embeddings for semantic knowledge-base search."""
+        clean = [str(value or "")[:8_000] for value in texts[:32]]
+        if not clean:
+            return []
+        base, key = self._resolve(base_url, api_key)
+        if not key:
+            raise LLMError("no API key configured for embeddings")
+        ai_control.check_request_budget(scope_id, "embedding", user_id=user_id)
+        ai_control.reserve_openai_spend(
+            model=model or config.OPENAI_EMBEDDING_MODEL,
+            input_tokens=ai_control.estimate_tokens("\n".join(clean)),
+            max_output_tokens=0,
+            scope_id=scope_id,
+            user_id=user_id,
+        )
+        payload: Dict[str, Any] = {
+            "model": model or config.OPENAI_EMBEDDING_MODEL,
+            "input": clean,
+            "encoding_format": "float",
+        }
+        data = await self._post_json(
+            f"{base}/embeddings",
+            {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            payload,
+            scope_id=scope_id,
+            user_id=user_id,
+        )
+        rows = sorted(
+            (row for row in data.get("data") or [] if isinstance(row, dict)),
+            key=lambda row: int(row.get("index") or 0),
+        )
+        vectors: List[List[float]] = []
+        for row in rows:
+            vector = row.get("embedding")
+            if not isinstance(vector, list):
+                raise LLMError("embedding provider returned malformed data")
+            vectors.append([float(value) for value in vector])
+        if len(vectors) != len(clean):
+            raise LLMError("embedding provider returned the wrong number of vectors")
+        return vectors
 
     async def transcribe(
         self,

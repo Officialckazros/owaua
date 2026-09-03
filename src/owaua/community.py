@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import fnmatch
+import hashlib
 import html
 import io
 import json
@@ -985,7 +986,7 @@ def _cfg(guild: discord.Guild | int, module: str) -> dict[typing.Any, typing.Any
 
 
 def configure_support_guild(guild: discord.Guild) -> bool:
-    """Apply the small, idempotent owaua support-server ticket baseline."""
+    """Apply the small, idempotent owaua support-server baseline."""
     if str(guild.id) not in bot_config.SUPPORT_GUILDS:
         return False
     category = next(
@@ -1006,50 +1007,292 @@ def configure_support_guild(guild: discord.Guild) -> bool:
         log.warning("support guild %s is missing its GET HELP category or staff roles", guild.id)
         return False
     role_ids = [str(role.id) for role in sorted(staff_roles, key=lambda role: role.position, reverse=True)]
+    changed = False
     state = _cfg(guild, "tickets")
     # Apply the baseline only before the guild saves ticket settings.
-    if state["updated"] is not None:
-        return False
-    settings = dict(state["settings"])
-    panel = {
-        "id": "default",
-        "title": "Need help with owaua?",
-        "description": (
-            "Open a private support ticket. Include what happened and what you expected. "
-            "Never share passwords, tokens, or private personal data."
-        ),
-        "button_label": "Open a support ticket",
-        "category_id": str(category.id),
-        "staff_role_ids": role_ids,
-        "intake_fields": [
-            {
-                "id": "subject",
-                "label": "How can staff help?",
-                "required": True,
-                "style": "paragraph",
-                "max_length": 500,
-            }
-        ],
-        "routing_rules": [],
-    }
-    settings.update(
-        {
+    if state["updated"] is None:
+        settings = dict(state["settings"])
+        panel = {
+            "id": "default",
+            "title": "Need help with owaua?",
+            "description": (
+                "Open a private support ticket. Include what happened and what you expected. "
+                "Never share passwords, tokens, or private personal data."
+            ),
+            "button_label": "Open a support ticket",
             "category_id": str(category.id),
             "staff_role_ids": role_ids,
-            "panels": [panel],
-            "require_intake": True,
-            "channel_name": "ticket-{user.name}",
+            "intake_fields": [
+                {
+                    "id": "subject",
+                    "label": "How can staff help?",
+                    "required": True,
+                    "style": "paragraph",
+                    "max_length": 500,
+                }
+            ],
+            "routing_rules": [],
         }
+        settings.update(
+            {
+                "category_id": str(category.id),
+                "staff_role_ids": role_ids,
+                "panels": [panel],
+                "require_intake": True,
+                "channel_name": "ticket-{user.name}",
+            }
+        )
+        db.module_config_set(
+            str(guild.id),
+            "tickets",
+            enabled=True,
+            settings=settings,
+            actor_id="owaua-support-setup",
+        )
+        changed = True
+        log.info("configured support tickets for guild %s", guild.id)
+
+    partnerships = _cfg(guild, "partnerships")
+    partnership_channel = next(
+        (
+            channel
+            for channel in guild.channels
+            if isinstance(channel, discord.TextChannel)
+            and channel.name.casefold() == "partnerships"
+        ),
+        None,
     )
-    db.module_config_set(
-        str(guild.id),
-        "tickets",
-        enabled=True,
-        settings=settings,
-        actor_id="owaua-support-setup",
+    if partnership_channel is not None and (
+        partnerships["updated"] is None
+        or any(
+            isinstance(item, dict)
+            and item.get("id") == "ergo"
+            and not item.get("revision")
+            for item in partnerships["settings"].get("items", [])
+        )
+    ):
+        current_items = [
+            item
+            for item in partnerships["settings"].get("items", [])
+            if isinstance(item, dict) and item.get("id") != "ergo"
+        ]
+        db.module_config_set(
+            str(guild.id),
+            "partnerships",
+            enabled=True,
+            settings={
+                "channel_id": str(partnership_channel.id),
+                "items": current_items
+                + [
+                    {
+                        "id": "ergo",
+                        "revision": 2,
+                        "enabled": True,
+                        "name": "E.R.G.O",
+                        "title": "E.R.G.O × owaua",
+                        "description": (
+                            "A new partnership spotlight from owaua.\n\n"
+                            "Meet E.R.G.O, then drop into Meros Basement to find the community "
+                            "behind the partnership."
+                        ),
+                        "color": "5865f2",
+                        "author_name": "E.R.G.O",
+                        "author_url": "https://discord.com/oauth2/authorize?client_id=1522897643506896926&permissions=4504701286599686&integration_type=0&scope=bot+applications.commands",
+                        "url": "https://discord.com/oauth2/authorize?client_id=1522897643506896926&permissions=4504701286599686&integration_type=0&scope=bot+applications.commands",
+                        "footer_text": "owaua partnerships · E.R.G.O",
+                        "timestamp": True,
+                        "fields": [
+                            {
+                                "name": "Visit Meros Basement",
+                                "value": "[Join the server](https://discord.gg/PQEnSh5r9E)",
+                                "inline": True,
+                            },
+                            {
+                                "name": "Invite E.R.G.O",
+                                "value": "[Add E.R.G.O to your server](https://discord.com/oauth2/authorize?client_id=1522897643506896926&permissions=4504701286599686&integration_type=0&scope=bot+applications.commands)",
+                                "inline": True,
+                            },
+                            {
+                                "name": "Partnership note",
+                                "value": "A community partnership shared with permission.",
+                                "inline": False,
+                            }
+                        ],
+                    }
+                ],
+                "published_message_ids": {},
+                "published_revisions": {},
+            },
+            actor_id="owaua-support-setup",
+        )
+        changed = True
+        log.info("configured E.R.G.O partnership for guild %s", guild.id)
+    return changed
+
+
+async def publish_configured_partnerships(guild: discord.Guild) -> int:
+    """Publish configured partnership embeds once, preserving dashboard edits."""
+    state = _cfg(guild, "partnerships")
+    if not state["enabled"]:
+        return 0
+    settings = state["settings"]
+    published = dict(settings.get("published_message_ids") or {})
+    published_revisions = dict(settings.get("published_revisions") or {})
+    count = 0
+    for item in settings.get("items", [])[:100]:
+        if not isinstance(item, dict) or item.get("enabled") is False:
+            continue
+        item_id = str(item.get("id") or item.get("name") or "").strip().lower()
+        channel = _channel(guild, item.get("channel_id") or settings.get("channel_id"))
+        if not item_id or channel is None or not isinstance(channel, discord.TextChannel):
+            continue
+        message_id = str(published.get(item_id) or "")
+        if message_id.isdigit():
+            try:
+                existing = await channel.fetch_message(int(message_id))
+                revision = str(item.get("revision") or "")
+                if revision and published_revisions.get(item_id) != revision:
+                    await existing.edit(
+                        embed=embeds.partnership(item),
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                    published_revisions[item_id] = revision
+                    count += 1
+                continue
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                published.pop(item_id, None)
+        marker = f"owaua partnerships · {item_id}"
+        try:
+            async for message in channel.history(limit=100):
+                if any(marker.casefold() in str(embed.footer.text or "").casefold() for embed in message.embeds):
+                    published[item_id] = str(message.id)
+                    break
+            else:
+                embed_item = dict(item)
+                embed_item["footer_text"] = str(item.get("footer_text") or marker)
+                sent = await channel.send(embed=embeds.partnership(embed_item), allowed_mentions=discord.AllowedMentions.none())
+                published[item_id] = str(sent.id)
+                if item.get("revision"):
+                    published_revisions[item_id] = str(item["revision"])
+                count += 1
+        except (discord.Forbidden, discord.HTTPException):
+            log.exception("could not publish partnership %s in guild %s", item_id, guild.id)
+    if (
+        published != settings.get("published_message_ids")
+        or published_revisions != settings.get("published_revisions")
+    ):
+        settings = dict(settings)
+        settings["published_message_ids"] = published
+        settings["published_revisions"] = published_revisions
+        db.module_config_set(
+            str(guild.id),
+            "partnerships",
+            enabled=True,
+            settings=settings,
+            actor_id="owaua-partnership-publisher",
+        )
+    return count
+
+
+def _managed_embed(item: dict[typing.Any, typing.Any]) -> discord.Embed:
+    """Build one bounded managed embed using the shared safe URL handling."""
+    payload = dict(item)
+    payload["footer_text"] = str(item.get("footer") or "")
+    payload.setdefault("name", "Managed message")
+    return typing.cast(
+        discord.Embed,
+        embeds.partnership(payload),  # pyright: ignore[reportUnknownMemberType]
     )
-    log.info("configured support tickets for guild %s", guild.id)
-    return True
+
+
+def _managed_embed_hash(item: dict[typing.Any, typing.Any]) -> str:
+    visible = {
+        key: item.get(key)
+        for key in (
+            "enabled",
+            "channel_id",
+            "title",
+            "description",
+            "color",
+            "footer",
+            "image_url",
+            "thumbnail_url",
+        )
+    }
+    encoded = json.dumps(visible, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
+
+
+async def publish_configured_embeds(guild: discord.Guild, *, verify: bool = False) -> int:
+    """Create or update dashboard-managed embeds without duplicate publishing."""
+    state = _cfg(guild, "embedder")
+    if not state["enabled"]:
+        return 0
+    settings = typing.cast(dict[typing.Any, typing.Any], state["settings"])
+    published: dict[typing.Any, typing.Any] = dict(
+        settings.get("published_message_ids") or {}
+    )
+    published_hashes: dict[typing.Any, typing.Any] = dict(
+        settings.get("published_payload_hashes") or {}
+    )
+    count = 0
+    raw_items = settings.get("embeds")
+    items: list[typing.Any] = (
+        typing.cast(list[typing.Any], raw_items) if isinstance(raw_items, list) else []
+    )
+    for raw_item in items[:100]:
+        if not isinstance(raw_item, dict):
+            continue
+        item = typing.cast(dict[typing.Any, typing.Any], raw_item)
+        if item.get("enabled") is False:
+            continue
+        item_id = _component_slug(item.get("id"), "")
+        channel = _channel(guild, item.get("channel_id"))
+        if not item_id or channel is None or not isinstance(channel, discord.TextChannel):
+            continue
+        payload_hash = _managed_embed_hash(item)
+        message_id = str(published.get(item_id) or "")
+        if message_id.isdigit() and published_hashes.get(item_id) == payload_hash and not verify:
+            continue
+        try:
+            if message_id.isdigit():
+                try:
+                    existing = await channel.fetch_message(int(message_id))
+                    if published_hashes.get(item_id) != payload_hash:
+                        await existing.edit(
+                            embed=_managed_embed(item),
+                            allowed_mentions=discord.AllowedMentions.none(),
+                        )
+                        count += 1
+                    published_hashes[item_id] = payload_hash
+                    continue
+                except discord.NotFound:
+                    published.pop(item_id, None)
+                    published_hashes.pop(item_id, None)
+            sent = await channel.send(
+                embed=_managed_embed(item),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            published[item_id] = str(sent.id)
+            published_hashes[item_id] = payload_hash
+            count += 1
+        except (discord.Forbidden, discord.HTTPException):
+            log.exception("could not publish managed embed %s in guild %s", item_id, guild.id)
+    if (
+        published != settings.get("published_message_ids")
+        or published_hashes != settings.get("published_payload_hashes")
+    ):
+        settings = dict(settings)
+        settings["published_message_ids"] = published
+        settings["published_payload_hashes"] = published_hashes
+        db.module_config_set(
+            str(guild.id),
+            "embedder",
+            enabled=True,
+            settings=settings,
+            actor_id="owaua-embed-publisher",
+        )
+    return count
 
 
 def _channel(guild: discord.Guild, raw: object):
@@ -1540,7 +1783,9 @@ async def _handle_afk(message: discord.Message) -> None:
 def _filter_matches(message: discord.Message, item: dict[typing.Any, typing.Any]) -> bool:
     content = message.content or ""
     lowered = content.casefold()
-    kind = str(item.get("type") or "").lower()
+    # ``kind`` was emitted by an older dashboard editor. Keep it working while
+    # the current purpose-built panel writes the runtime's canonical ``type``.
+    kind = str(item.get("type") or item.get("kind") or "").lower()
     value = str(item.get("value") or "")
     has_link = bool(_URL_RE.search(content))
     has_invite = bool(_INVITE_RE.search(content))
@@ -3262,6 +3507,74 @@ async def handle_prefix_command(message: discord.Message, name: str, arg: str) -
     if name == "ticket" and _cfg(guild, "tickets")["enabled"]:
         action, _, detail = arg.partition(" ")
         settings = _cfg(guild, "tickets")["settings"]
+        if action.lower() in {"summary", "triage", "reply"}:
+            permissions = typing.cast(typing.Any, message).author.guild_permissions
+            if not (
+                guild.owner_id == message.author.id
+                or permissions.administrator
+                or permissions.manage_channels
+            ):
+                await _safe_send(message.channel, "Manage Channels is required.")
+                return True
+            item = _ticket_record(guild, message.channel.id)
+            if not item:
+                await _safe_send(message.channel, "This is not an open tracked ticket channel.")
+                return True
+            from owaua import ai_workflows
+
+            limit = ai_workflows.channel_context_limit(scope)
+            try:
+                recent = [entry async for entry in message.channel.history(limit=limit)]
+            except (discord.Forbidden, discord.HTTPException, AttributeError):
+                await _safe_send(message.channel, "I could not read this ticket's messages.")
+                return True
+            recent.reverse()
+            recent = [
+                entry
+                for entry in recent
+                if entry.author.bot or db.privacy_opted_in(str(entry.author.id), scope)
+            ]
+            source = ai_workflows.format_channel_messages(
+                recent, ai_workflows.max_input_chars(scope)
+            )
+            if not source:
+                await _safe_send(
+                    message.channel,
+                    "No ticket messages are eligible for AI processing; members must opt in.",
+                )
+                return True
+            workflow = {
+                "summary": "summarize",
+                "triage": "moderation_triage",
+                "reply": "reply_draft",
+            }[action.lower()]
+            ticket_subject = str(item.get("data", {}).get("subject") or "")[:500]
+            direction = "\n".join(
+                part
+                for part in (
+                    f"Ticket subject: {ticket_subject}" if ticket_subject else "",
+                    detail.strip()[:800],
+                )
+                if part
+            )
+            try:
+                result = await ai_workflows.run_workflow(
+                    scope,
+                    workflow,
+                    source,
+                    extra_instruction=direction,
+                    is_staff=True,
+                    user_id=uid,
+                )
+            except Exception:
+                log.exception("ticket AI assistance failed")
+                await _safe_send(message.channel, "Ticket assistance is unavailable right now.")
+                return True
+            await _safe_send(
+                message.channel,
+                embed=embeds.say(result.text, title=f"ticket · {result.label}"),
+            )
+            return True
         existing = [
             x
             for x in db.community_records("ticket", scope, user_id=uid, status=None, limit=5_000)
@@ -3358,7 +3671,11 @@ async def handle_prefix_command(message: discord.Message, name: str, arg: str) -
                 reason=f"Ticket closed by {message.author}",
             )
             return True
-        await _safe_send(message.channel, "Use `!ticket open <subject>` or `!ticket close`.")
+        await _safe_send(
+            message.channel,
+            "Use `!ticket open <subject>`, `!ticket close`, or staff-only "
+            "`!ticket summary|triage|reply`.",
+        )
         return True
     if name == "form" and _cfg(guild, "forms")["enabled"]:
         settings = _cfg(guild, "forms")["settings"]

@@ -56,7 +56,22 @@ jobs:
           OWAUA_SAFETY_ENABLED: "0"
           OWAUA_STT_ENABLED: "0"
           OWAUA_SYNC_COMMANDS: "0"
+          OWAUA_LOAD_DOTENV: "0"
         run: python -m unittest discover -s tests -v
+
+      - name: Run deterministic AI control-plane evals
+        env:
+          DISCORD_TOKEN: eval-token
+          PYTHONPATH: src
+          OWAUA_LOAD_DOTENV: "0"
+        run: python scripts/run_ai_evals.py
+
+      - name: Check generated slash-command reference
+        env:
+          DISCORD_TOKEN: documentation-token
+          PYTHONPATH: src
+          OWAUA_LOAD_DOTENV: "0"
+        run: python scripts/generate_slash_reference.py --check
 
       - name: Validate deployment manifest without remote access
         run: python scripts/deploy owaua --dry-run

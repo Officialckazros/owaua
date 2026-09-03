@@ -93,15 +93,34 @@ class AbuseHardeningTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ai_control.AIBudgetExceeded):
                 ai_control.check_request_budget("guild:1", "chat", user_id="123")
 
-    def test_multi_window_token_budget(self) -> None:
-        """Verify token reservations adhere to sliding window ceilings."""
+    def test_user_request_limit_is_exactly_twenty_five_with_forty_five_second_cooldown(self) -> None:
+        with (
+            mock.patch.object(config, "AI_REQUESTS_PER_MINUTE", 100),
+            mock.patch.object(config, "AI_REQUESTS_PER_HOUR", 200),
+            mock.patch.object(config, "AI_REQUESTS_PER_DAY", 500),
+            mock.patch.object(config, "AI_USER_REQUESTS_PER_MINUTE", 25),
+            mock.patch.object(config, "AI_USER_REQUESTS_PER_HOUR", 100),
+            mock.patch.object(config, "AI_USER_REQUESTS_PER_DAY", 500),
+            mock.patch.object(config, "AI_USER_REQUEST_WINDOW_SECONDS", 45.0),
+            mock.patch.object(ai_control.time, "monotonic", return_value=100.0),
+        ):
+            for _ in range(25):
+                ai_control.check_request_budget("guild:1", "chat", user_id="123")
+            with self.assertRaisesRegex(
+                ai_control.AIBudgetExceeded, r"AI prompt limit reached \(25 per 45s\); retry in 45s"
+            ):
+                ai_control.check_request_budget("guild:1", "chat", user_id="123")
+            with mock.patch.object(ai_control.time, "monotonic", return_value=145.0):
+                ai_control.check_request_budget("guild:1", "chat", user_id="123")
+
+    def test_token_usage_does_not_preempt_the_prompt_window(self) -> None:
+        """Provider-token accounting must not become a second prompt cooldown."""
         with (
             mock.patch.object(config, "AI_TOKEN_BUDGET_PER_MINUTE", 50_000),
             mock.patch.object(config, "AI_USER_TOKEN_BUDGET_PER_MINUTE", 10_000),
         ):
             ai_control.reserve_provider_attempt(user_id="123", estimated_tokens=6_000)
-            with self.assertRaises(ai_control.AIBudgetExceeded):
-                ai_control.reserve_provider_attempt(user_id="123", estimated_tokens=6_000)
+            ai_control.reserve_provider_attempt(user_id="123", estimated_tokens=6_000)
 
     def test_owner_exempt_from_user_budgets(self) -> None:
         """Verify bot owner is exempt from user-level rate and token budgets."""

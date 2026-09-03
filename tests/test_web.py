@@ -76,6 +76,7 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("typed <code>tos accept</code> command no longer", terms)
         self.assertIn("keyed network token", terms)
         self.assertIn("regardless of Discord account age", terms)
+        self.assertIn("VPN, proxy, Tor, and hosting/datacenter networks", terms)
         self.assertIn("consent to store raw message", terms)
         self.assertIn("OWAUA_OWNER_ID", terms)
         self.assertIn("TOS_STRIKE_LIMIT = 3", terms)
@@ -125,7 +126,24 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("already used or expired", await replay.text())
 
-    async def test_blocked_network_requires_review_for_established_account(self) -> None:
+    def _proxy_headers(
+        self,
+        address: str,
+        *,
+        asn: str = "",
+        organization: str = "",
+    ) -> dict[str, str]:
+        headers = {
+            "X-owaua-Origin-Auth": config.TOS_PROXY_SECRET,
+            "X-Forwarded-For": address,
+        }
+        if asn:
+            headers["X-Owaua-ASN"] = asn
+        if organization:
+            headers["X-Owaua-AS-Org"] = organization
+        return headers
+
+    async def test_blocked_network_hard_blocks_established_account_on_submit(self) -> None:
         address = "198.51.100.9"
         blocked_user = "175928847299117063"
         fingerprint = tos.network_fingerprint(address)
@@ -148,16 +166,14 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post(
             "/owaua/terms/accept",
             data={"token": token, "agree": "yes"},
-            headers={
-                "X-owaua-Origin-Auth": config.TOS_PROXY_SECRET,
-                "X-Forwarded-For": address,
-            },
+            headers=self._proxy_headers(address),
         )
         self.assertEqual(response.status, 200)
-        self.assertIn("submitted for review", await response.text())
+        self.assertIn("Access unavailable", await response.text())
         self.assertFalse(tos.has_accepted(established_user))
+        self.assertTrue(config.is_blocked(established_user))
         record = db.tos_acceptance_get(established_user)
-        self.assertEqual("review", typing.cast(typing.Any, record)["status"])
+        self.assertEqual("rejected", typing.cast(typing.Any, record)["status"])
         self.assertEqual("blocked_network_match", typing.cast(typing.Any, record)["risk_code"])
 
     async def test_blocking_account_reviews_preaccepted_network_peer(self) -> None:
@@ -185,6 +201,78 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(tos.allow_review(peer_user))
         self.assertTrue(tos.has_accepted(peer_user))
 
+    async def test_visiting_acceptance_page_from_blocked_network_hard_blocks(self) -> None:
+        address = "198.51.100.88"
+        blocked_user = "175928847299117063"
+        visitor = "275928847299117063"
+        self.assertEqual("accepted", tos.record_web_acceptance(blocked_user, address))
+        blocked.block_user(blocked_user, reason="tos: test block", block_source="tos")
+
+        token = parse_qs(urlparse(tos.issue_acceptance_url(visitor)).query)["token"][0]
+        page = await self.client.get(
+            f"/owaua/terms/accept?token={token}",
+            headers=self._proxy_headers(address),
+        )
+        body = await page.text()
+        self.assertEqual(page.status, 200)
+        self.assertIn("Access unavailable", body)
+        self.assertNotIn("Accept and return to Discord", body)
+        self.assertTrue(config.is_blocked(visitor))
+        self.assertFalse(tos.has_accepted(visitor))
+
+        replay = await self.client.post(
+            "/owaua/terms/accept",
+            data={"token": token, "agree": "yes"},
+            headers=self._proxy_headers(address),
+        )
+        self.assertIn("already used or expired", await replay.text())
+
+    async def test_blocked_network_visit_without_trusted_proxy_does_not_block(self) -> None:
+        address = "198.51.100.89"
+        blocked_user = "175928847299117063"
+        visitor = "275928847299117063"
+        self.assertEqual("accepted", tos.record_web_acceptance(blocked_user, address))
+        blocked.block_user(blocked_user, reason="tos: test block", block_source="tos")
+        token = parse_qs(urlparse(tos.issue_acceptance_url(visitor)).query)["token"][0]
+
+        page = await self.client.get(
+            f"/owaua/terms/accept?token={token}",
+            headers={"X-Forwarded-For": address},
+        )
+        body = await page.text()
+        self.assertIn("Accept and return to Discord", body)
+        self.assertFalse(config.is_blocked(visitor))
+
+    async def test_blocked_account_visit_from_new_ip_blocks_later_visitors(self) -> None:
+        old_address = "198.51.100.91"
+        new_address = "198.51.100.92"
+        blocked_user = "175928847299117063"
+        later_visitor = "375928847299117063"
+        self.assertEqual("accepted", tos.record_web_acceptance(blocked_user, old_address))
+        blocked.block_user(blocked_user, reason="tos: test block", block_source="tos")
+
+        token = parse_qs(urlparse(tos.issue_acceptance_url(blocked_user)).query)["token"][0]
+        page = await self.client.get(
+            f"/owaua/terms/accept?token={token}",
+            headers=self._proxy_headers(new_address),
+        )
+        self.assertIn("Access unavailable", await page.text())
+
+        self.assertEqual("blocked", tos.record_web_acceptance(later_visitor, new_address))
+        self.assertTrue(config.is_blocked(later_visitor))
+
+    async def test_unblocking_source_account_allows_later_acceptance(self) -> None:
+        address = "198.51.100.90"
+        blocked_user = "175928847299117063"
+        visitor = "275928847299117063"
+        self.assertEqual("accepted", tos.record_web_acceptance(blocked_user, address))
+        blocked.block_user(blocked_user, reason="tos: test block", block_source="tos")
+        self.assertTrue(blocked.unblock_user(blocked_user, expected_source="tos"))
+
+        self.assertEqual("accepted", tos.record_web_acceptance(visitor, address))
+        self.assertTrue(tos.has_accepted(visitor))
+        self.assertFalse(config.is_blocked(visitor))
+
     async def test_blocked_match_cannot_hide_beyond_bounded_user_lookup(self) -> None:
         address = "198.51.100.77"
         fingerprint = tos.network_fingerprint(address)
@@ -207,8 +295,69 @@ class WebApplicationTests(unittest.IsolatedAsyncioTestCase):
             )
 
         candidate = "475928847299117063"
-        self.assertEqual("review", tos.record_web_acceptance(candidate, address))
+        self.assertEqual("blocked", tos.record_web_acceptance(candidate, address))
         self.assertFalse(tos.has_accepted(candidate))
+        self.assertTrue(config.is_blocked(candidate))
+
+    async def test_acceptance_get_survives_network_check_failure(self) -> None:
+        user_id = "175928847299117063"
+        token = parse_qs(urlparse(tos.issue_acceptance_url(user_id)).query)["token"][0]
+        with mock.patch.object(tos, "inspect_web_network", side_effect=RuntimeError("db down")):
+            page = await self.client.get(
+                f"/owaua/terms/accept?token={token}",
+                headers=self._proxy_headers("198.51.100.99"),
+            )
+        self.assertEqual(page.status, 200)
+        self.assertIn("Accept and return to Discord", await page.text())
+        self.assertFalse(config.is_blocked(user_id))
+
+    async def test_vpn_network_cannot_accept_and_does_not_consume_the_link(self) -> None:
+        user_id = "175928847299117063"
+        token = parse_qs(urlparse(tos.issue_acceptance_url(user_id)).query)["token"][0]
+        headers = self._proxy_headers(
+            "198.51.100.20",
+            asn="13335",
+            organization="Cloudflare, Inc.",
+        )
+        page = await self.client.get(
+            f"/owaua/terms/accept?token={token}",
+            headers=headers,
+        )
+        self.assertEqual(page.status, 200)
+        self.assertIn("VPN or hosting network blocked", await page.text())
+        self.assertFalse(tos.has_accepted(user_id))
+        self.assertFalse(config.is_blocked(user_id))
+
+        refused = await self.client.post(
+            "/owaua/terms/accept",
+            data={"token": token, "agree": "yes"},
+            headers=headers,
+        )
+        self.assertEqual(refused.status, 200)
+        self.assertIn("VPN or hosting network blocked", await refused.text())
+        self.assertFalse(tos.has_accepted(user_id))
+        self.assertEqual(tos.peek_acceptance_challenge(token), user_id)
+
+        accepted = await self.client.post(
+            "/owaua/terms/accept",
+            data={"token": token, "agree": "yes"},
+            headers=self._proxy_headers("198.51.100.20"),
+        )
+        self.assertIn("Terms accepted", await accepted.text())
+        self.assertTrue(tos.has_accepted(user_id))
+
+    async def test_spoofed_vpn_headers_without_proxy_secret_are_ignored(self) -> None:
+        user_id = "175928847299117063"
+        token = parse_qs(urlparse(tos.issue_acceptance_url(user_id)).query)["token"][0]
+        page = await self.client.get(
+            f"/owaua/terms/accept?token={token}",
+            headers={
+                "X-Forwarded-For": "198.51.100.21",
+                "X-Owaua-ASN": "13335",
+                "X-Owaua-AS-Org": "Mullvad VPN AB",
+            },
+        )
+        self.assertIn("Accept and return to Discord", await page.text())
 
     async def test_untrusted_forwarded_address_fails_closed(self) -> None:
         user_id = "175928847299117063"
@@ -470,9 +619,9 @@ class PublicSiteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Owner access discretion", body)
         self.assertIn("at any time, for any reason or no stated reason", body)
         self.assertIn("including where that person has not violated these Terms", body)
-        self.assertIn("Version 3.8", body)
+        self.assertIn(f"Version {LEGAL_VERSION}", body)
 
-    async def test_legacy_legal_host_redirects_to_wearegays(self) -> None:
+    async def test_legacy_legal_host_redirects_to_owaua(self) -> None:
         response = await self.client.get(
             "/owaua/terms?source=bookmark",
             headers={"Host": "kozzyx.org"},
@@ -481,7 +630,7 @@ class PublicSiteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 308)
         self.assertEqual(
             response.headers["Location"],
-            "https://wearegays.net/owaua/terms?source=bookmark",
+            "https://owaua.com/owaua/terms?source=bookmark",
         )
 
     async def test_dotfiles_and_traversal_are_rejected(self) -> None:

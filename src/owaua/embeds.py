@@ -1,8 +1,5 @@
-"""Discord embed helpers and text cleanup."""
-
 import datetime
 import re
-import typing
 from urllib.parse import urlsplit
 
 import discord
@@ -31,8 +28,7 @@ def de_emoji(text: str) -> str:
     return re.sub(r"[ ]{2,}", " ", text).strip()
 
 
-def fmt_ts(ts: typing.Any) -> str:
-    """Format a unix timestamp (seconds) as UTC 'YYYY-MM-DD HH:MM'."""
+def fmt_ts(ts) -> str:
     if not ts:
         return "?"
     try:
@@ -52,7 +48,7 @@ def _markdown_label(text: str) -> str:
     return re.sub(r"([\\\[\]\(\)])", r"\\\1", de_emoji(text or "source"))
 
 
-def _safe_url(value: str) -> str | None:
+def _safe_url(value: str | None) -> str | None:
     try:
         parsed = urlsplit(str(value or ""))
     except ValueError:
@@ -64,8 +60,18 @@ def _safe_url(value: str) -> str | None:
     return str(value)
 
 
+def _source_lines(sources, n=70):
+    lines = []
+    for i, s in enumerate(sources or [], 1):
+        title = _markdown_label(s.get("title") or s.get("url") or "source")[:n]
+        url = _safe_url(s.get("url"))
+        if url:
+            lines.append(f"{i}. [{title}]({url})")
+    return lines
+
+
 def fit_total(embed: discord.Embed, maximum: int = 6000) -> discord.Embed:
-    """Keep an embed under Discord's aggregate character limit."""
+    # discord kills embeds over 6000
     overflow = len(embed) - maximum
     if overflow <= 0:
         return embed
@@ -76,12 +82,12 @@ def fit_total(embed: discord.Embed, maximum: int = 6000) -> discord.Embed:
         fields = list(embed.fields)
         last = fields[-1]
         overflow = len(embed) - maximum
-        keep = max(0, len(typing.cast(typing.Any, last.value)) - overflow - 1)
+        keep = max(0, len(last.value) - overflow - 1)
         if keep:
             embed.set_field_at(
                 len(fields) - 1,
                 name=last.name,
-                value=_clip(typing.cast(typing.Any, last.value), keep),
+                value=_clip(last.value, keep),
                 inline=last.inline,
             )
             break
@@ -111,6 +117,48 @@ def say(
     return fit_total(e)
 
 
+def partnership(item: dict) -> discord.Embed:
+    """Build a complete, bounded Discord embed from a partnership record."""
+    def text(key: str, limit: int) -> str:
+        return _clip(str(item.get(key) or "").strip(), limit)
+
+    color = item.get("color", "5865f2")
+    try:
+        color_value = int(str(color).replace("#", ""), 16)
+    except (TypeError, ValueError):
+        color_value = config.EMBED_COLOR
+    e = discord.Embed(
+        title=text("title", 256) or text("name", 256) or "Partnership",
+        description=text("description", 4096) or None,
+        url=_safe_url(text("url", 2048)) if text("url", 2048) else None,
+        color=max(0, min(0xFFFFFF, color_value)),
+    )
+    author_name = text("author_name", 256) or text("name", 256)
+    author_url = _safe_url(text("author_url", 2048)) if text("author_url", 2048) else None
+    author_icon = _safe_url(text("author_icon_url", 2048)) if text("author_icon_url", 2048) else None
+    if author_name:
+        e.set_author(name=author_name, url=author_url, icon_url=author_icon)
+    thumbnail = _safe_url(text("thumbnail_url", 2048)) if text("thumbnail_url", 2048) else None
+    image = _safe_url(text("image_url", 2048)) if text("image_url", 2048) else None
+    if thumbnail:
+        e.set_thumbnail(url=thumbnail)
+    if image:
+        e.set_image(url=image)
+    footer = text("footer_text", 2048)
+    footer_icon = _safe_url(text("footer_icon_url", 2048)) if text("footer_icon_url", 2048) else None
+    if footer:
+        e.set_footer(text=footer, icon_url=footer_icon)
+    if item.get("timestamp") is True:
+        e.timestamp = datetime.datetime.now(datetime.timezone.utc)
+    for field in item.get("fields", []):
+        if not isinstance(field, dict):
+            continue
+        name = _clip(str(field.get("name") or "Field"), 256)
+        value = _clip(str(field.get("value") or "—"), 1024)
+        e.add_field(name=name, value=value, inline=bool(field.get("inline", False)))
+    return fit_total(e)
+
+
 def error(description: str) -> discord.Embed:
     return say(description, title="Error", color=0xED4245)
 
@@ -120,7 +168,6 @@ def ok(description: str, title: str | None = None) -> discord.Embed:
 
 
 def add_support_resources(embed: discord.Embed) -> discord.Embed:
-    """Attach real crisis resources. Added by the bot, never left to the model."""
     embed.add_field(
         name="if you need someone right now",
         value=(
@@ -135,46 +182,26 @@ def add_support_resources(embed: discord.Embed) -> discord.Embed:
     return fit_total(embed)
 
 
-def add_sources(embed: discord.Embed, sources: list[typing.Any]) -> discord.Embed:
-    """Append just a clickable sources list (answer already woven into the reply)."""
-    links: list[typing.Any] = []
-    for i, s in enumerate(sources or [], 1):
-        title = _markdown_label(s.get("title") or s.get("url") or "source")[:70]
-        url = _safe_url(s.get("url"))
-        if url:
-            links.append(f"{i}. [{title}]({url})")
+def add_sources(embed: discord.Embed, sources) -> discord.Embed:
+    links = _source_lines(sources)
     if links:
         embed.add_field(name="sources", value=_clip("\n".join(links), 1024), inline=False)
     return fit_total(embed)
 
 
-def add_search(embed: discord.Embed, res: dict[typing.Any, typing.Any]) -> discord.Embed:
-    """Append grounded web-search results (answer + sources) to an existing embed."""
-    ans = (res or {}).get("answer") or ""
+def add_search(embed: discord.Embed, res) -> discord.Embed:
+    res = res or {}
+    ans = res.get("answer") or ""
     if ans:
         embed.add_field(name="from the web", value=_clip(de_emoji(ans), 1024), inline=False)
-    links: list[typing.Any] = []
-    for i, s in enumerate((res or {}).get("sources") or [], 1):
-        title = _markdown_label(s.get("title") or s.get("url") or "source")[:70]
-        url = _safe_url(s.get("url"))
-        if url:
-            links.append(f"{i}. [{title}]({url})")
-    if links:
-        embed.add_field(name="sources", value=_clip("\n".join(links), 1024), inline=False)
-    return fit_total(embed)
+    return add_sources(embed, res.get("sources"))
 
 
-def search(query: str, answer: str, sources: list[typing.Any]) -> discord.Embed:
-    """Render a grounded web-search answer with a clickable sources list."""
+def search(query: str, answer: str, sources) -> discord.Embed:
     e = say(answer or "no answer.", title="web search")
     if query:
         e.set_footer(text=_clip(de_emoji(f"searched: {query}"), 2048))
-    links: list[typing.Any] = []
-    for i, s in enumerate(sources or [], 1):
-        title = _markdown_label(s.get("title") or s.get("url") or "source")[:80]
-        url = _safe_url(s.get("url"))
-        if url:
-            links.append(f"{i}. [{title}]({url})")
+    links = _source_lines(sources, 80)
     if links:
         e.add_field(name="sources", value=_clip("\n".join(links), 1024), inline=False)
     return fit_total(e)

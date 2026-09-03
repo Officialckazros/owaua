@@ -62,20 +62,173 @@ class ChoiceTextTest(unittest.TestCase):
 
 
 class DeepseekModelTest(unittest.TestCase):
-    def test_legacy_inferx_aliases_migrate_to_official_model(self) -> None:
+    def test_legacy_inferx_aliases_migrate_to_luna(self) -> None:
         self.assertEqual(
             config.canonical_model("ix:deepseek-v4-flash-0731"),
-            "deepseek-v4-flash",
+            "gpt-5.6-luna",
         )
         self.assertEqual(
             config.canonical_model("deepseek-v4-flash-0371"),
-            "deepseek-v4-flash",
+            "gpt-5.6-luna",
         )
 
-    def test_official_api_id_is_the_0731_checkpoint(self) -> None:
+    def test_legacy_deepseek_id_is_not_selectable(self) -> None:
         self.assertEqual(config.OFFICIAL_DEEPSEEK_MODEL, "deepseek-v4-flash")
         self.assertEqual(config.OFFICIAL_DEEPSEEK_MODEL_VERSION, "DeepSeek-V4-Flash-0731")
-        self.assertIn("0731", config.model_display(config.DEFAULT_MODEL))
+        self.assertEqual(config.model_display(config.OFFICIAL_DEEPSEEK_MODEL), config.model_display(config.DEFAULT_MODEL))
+
+
+class OpenAIModelTest(unittest.TestCase):
+    def test_luna_is_the_default_model(self) -> None:
+        self.assertEqual(config.DEFAULT_MODEL, "gpt-5.6-luna")
+        self.assertEqual(config.MODEL_SMART, "gpt-5.6-luna")
+        self.assertEqual(config.MODEL_FAST, "gpt-5.6-luna")
+        self.assertEqual(config.MODEL_EXPERT, "gpt-5.6-luna")
+        self.assertIn("GPT-5.6 Luna", config.model_display(config.DEFAULT_MODEL))
+
+    def test_responses_refusal_content_is_returned_as_text(self) -> None:
+        payload = {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "refusal",
+                            "refusal": "i can't do sexual roleplay with you",
+                        }
+                    ],
+                }
+            ]
+        }
+        self.assertEqual(
+            ai._response_text(payload, "openai"),
+            "i can't do sexual roleplay with you",
+        )
+
+    def test_luna_is_the_only_selectable_chat_model(self) -> None:
+        model_ids = {model_id for model_id, _label in config.OPENAI_CHAT_MODELS}
+        self.assertEqual(model_ids, {"gpt-5.6-luna"})
+        self.assertEqual(config.canonical_model("deepseek-v4-flash"), "gpt-5.6-luna")
+
+    def test_openai_responses_request(self) -> None:
+        captured: dict[typing.Any, typing.Any] = {}
+
+        def fake_urlopen(req: typing.Any, timeout: int = 0):
+            captured["url"] = req.full_url
+            captured["timeout"] = timeout
+            captured["headers"] = dict(req.headers)
+            captured["body"] = json.loads(req.data.decode())
+            payload = json.dumps(
+                {
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "hello"}],
+                        }
+                    ]
+                }
+            ).encode()
+            return mock.MagicMock(
+                __enter__=typing.cast(
+                    typing.Callable[..., typing.Any],
+                    typing.cast(typing.Callable[[typing.Any], typing.Any], lambda self: self),
+                ),
+                __exit__=mock.Mock(return_value=False),
+                read=lambda n=-1: payload,
+            )
+
+        with (
+            mock.patch("owaua.ai.urllib.request.urlopen", fake_urlopen),
+            mock.patch.object(config, "OPENAI_API_KEY", "test-key"),
+        ):
+            text = ai._openai_generate(
+                "gpt-5.6-luna",
+                "system",
+                [{"role": "user", "content": "hi"}],
+                200,
+                0.4,
+            )
+        self.assertEqual(text, "hello")
+        self.assertEqual(captured["url"], "https://api.openai.com/v1/responses")
+        self.assertEqual(captured["body"]["model"], "gpt-5.6-luna")
+        self.assertEqual(captured["body"]["reasoning"], {"effort": "none"})
+        self.assertFalse(captured["body"]["store"])
+        self.assertEqual(captured["headers"]["Authorization"], "Bearer test-key")
+        self.assertGreaterEqual(captured["timeout"], 45)
+
+    def test_openai_responses_request_preserves_images(self) -> None:
+        captured: dict[typing.Any, typing.Any] = {}
+
+        def fake_urlopen(req: typing.Any, timeout: int = 0):
+            captured["body"] = json.loads(req.data.decode())
+            payload = json.dumps(
+                {"output": [{"type": "message", "content": [{"type": "output_text", "text": "seen"}]}]}
+            ).encode()
+            return mock.MagicMock(
+                __enter__=typing.cast(typing.Callable[..., typing.Any], lambda self: self),
+                __exit__=mock.Mock(return_value=False),
+                read=lambda n=-1: payload,
+            )
+
+        image_url = "data:image/png;base64,iVBORw0KGgo="
+        with (
+            mock.patch("owaua.ai.urllib.request.urlopen", fake_urlopen),
+            mock.patch.object(config, "OPENAI_API_KEY", "test-key"),
+        ):
+            self.assertEqual(
+                ai._openai_generate(
+                    "gpt-5.6-luna",
+                    "system",
+                    [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "what is this?"},
+                                {"type": "image_url", "image_url": {"url": image_url}},
+                            ],
+                        }
+                    ],
+                    200,
+                    0.4,
+                ),
+                "seen",
+            )
+
+        self.assertEqual(
+            captured["body"]["input"][0]["content"],
+            [
+                {"type": "input_text", "text": "what is this?"},
+                {"type": "input_image", "image_url": image_url},
+            ],
+        )
+
+    def test_legacy_openai_model_id_is_forced_to_luna(self) -> None:
+        captured: dict[typing.Any, typing.Any] = {}
+
+        def fake_urlopen(req: typing.Any, timeout: int = 0):
+            captured["body"] = json.loads(req.data.decode())
+            payload = json.dumps(
+                {"output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}]}
+            ).encode()
+            return mock.MagicMock(
+                __enter__=typing.cast(
+                    typing.Callable[..., typing.Any],
+                    typing.cast(typing.Callable[[typing.Any], typing.Any], lambda self: self),
+                ),
+                __exit__=mock.Mock(return_value=False),
+                read=lambda n=-1: payload,
+            )
+
+        with (
+            mock.patch("owaua.ai.urllib.request.urlopen", fake_urlopen),
+            mock.patch.object(config, "OPENAI_API_KEY", "test-key"),
+        ):
+            self.assertEqual(
+                ai._openai_generate("gpt-4.1", "system", [{"role": "user", "content": "hi"}], 200, 0.4),
+                "ok",
+            )
+        self.assertEqual(captured["body"]["model"], "gpt-5.6-luna")
+        self.assertEqual(captured["body"]["reasoning"], {"effort": "none"})
 
 
 class InferxModelTest(unittest.TestCase):

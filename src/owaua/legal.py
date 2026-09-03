@@ -7,9 +7,9 @@ from __future__ import annotations
 import html
 from typing import Final
 
-LEGAL_VERSION: Final = "3.10"
-LEGAL_EFFECTIVE_DATE: Final = "31 August 2026"
-PUBLIC_BASE_URL: Final = "https://wearegays.net/owaua"
+LEGAL_VERSION: Final = "3.11"
+LEGAL_EFFECTIVE_DATE: Final = "3 September 2026"
+PUBLIC_BASE_URL: Final = "https://owaua.com/owaua"
 TERMS_URL: Final = f"{PUBLIC_BASE_URL}/terms"
 PRIVACY_URL: Final = f"{PUBLIC_BASE_URL}/privacy"
 
@@ -68,6 +68,11 @@ dates of birth and does not independently verify age. If you are not allowed
 to use Discord, you are not allowed to use owaua.</p>
 <p>You may only use owaua in servers and channels where you are permitted to
 be, and only with a Discord account you are authorized to use.</p>
+<p>Adult, freaky, NSFW, and Rule34 features are for people aged 18 or older
+only and are limited to Discord-marked age-restricted server channels. A
+Discord channel flag is not independent proof of a user's age. These features
+are not available in DMs. If you are under 18, or cannot lawfully access
+age-restricted content where you live, do not use them.</p>
 
 <h2>3. The service, honestly</h2>
 <p>owaua is a Discord assistant. It can chat, remember facts you or
@@ -90,6 +95,10 @@ content involving minors; no doxxing; no credential theft; no malware
 help.</li>
 <li>Model output can be wrong, invented, biased, or offensive. You are
 responsible for what you do with it.</li>
+<li>Do not rely on owaua or its model output for medical, legal, financial,
+emergency, employment, safety-critical, or other high-stakes decisions. Do not
+send passwords, tokens, private keys, financial details, medical records, or
+confidential workplace information to the bot.</li>
 <li>There is no uptime guarantee. Discord, Daki, Cloudflare, and configured AI
 providers can fail. The operator can turn the bot off.</li>
 </ul>
@@ -117,18 +126,25 @@ quote, test, or harmless request is not by itself counted as a leak attempt.</li
 <p>Automated detectors look for those categories with regular expressions and
 with optional model flags. Detectors miss things and also false-positive.
 A miss is not permission. A false positive can still warn or block you until
-the operator reviews it.</p>
+the operator reviews it. A model or pattern match is an enforcement signal,
+not a finding that the operator guarantees is correct. The operator may use
+automated warnings, message removal, temporary restrictions, or blocks where
+described below, and may manually review or reverse a decision.</p>
 
 <h2>5. Enforcement</h2>
 <p>Only clear, targeted detector hits on the categories above warn on the first two strikes
-and hard-block on the third (<code>TOS_STRIKE_LIMIT = 3</code>). A confirmed
+and hard-block on the third (<code>TOS_STRIKE_LIMIT = 3</code>). A single
+ambiguous model classification is not by itself treated as a confirmed
+violation. Repeated, consistent model-policy flags may enter the separate
+strike and block path described here. A confirmed
 ClamAV malware signature on a non-media attachment is the exception: the bot
 deletes the message where Discord permits, sends an incident report to a private
 staff channel, and immediately hard-blocks the non-bot sender. Scanner outages,
 timeouts, and file-size limits can remove an unscanned attachment under the
 fail-closed setting but do not block its sender. Prompt-leak
 attempts have their own strike counter (block at 3). Repeated model-policy
-flags can also block. Rate-limit noise does not add ToS strikes.</p>
+flags can also block under that separate path. Rate-limit noise does not add
+ToS strikes.</p>
 <p>A hard block stores your Discord user id, a reason, a category, guild and
 channel ids if known, a display tag, and a SHA-256 prefix plus length of the
 offending text — not the raw message. The operator can unblock ToS blocks
@@ -154,6 +170,12 @@ refused. That decision uses Cloudflare's ASN and organization name for the
 client IP. It does not hard-block the Discord account; turn the network off and
 open a fresh acceptance link. Classification misses some VPNs and can flag
 shared or unusual networks by mistake.</p>
+<p>To appeal a ToS, network, or malware-related restriction, contact the
+published privacy contact with your Discord user id, the approximate time, and
+the affected server if relevant. The operator may keep an urgent abuse or
+security restriction active while reviewing an appeal and may request enough
+information to distinguish an account from a block-evasion attempt. An appeal
+does not guarantee reinstatement.</p>
 
 <h2>6. Owner access discretion</h2>
 <p>The bot owner/operator may refuse, restrict, suspend, or permanently end
@@ -181,30 +203,52 @@ said so. Staff buttons and confirmation previews control model-proposed
 actions. Deterministic rules explicitly configured by administrators (for
 example an account-age autoban or banned-phrase automod rule) are a separate
 automation path.</p>
+<p>A server administrator who enables a module represents that they have
+authority to do so and are responsible for giving members any notice required
+by their rules or applicable law. This includes archives, action logs, voice
+transcription, moderation classifiers, forms, feeds, role changes, automatic
+deletions, and other workflows that inspect or act on member activity.</p>
 
 <h2>8. Third-party services</h2>
 <p>Using owaua means Discord delivers your content to the bot, and the bot
 may send the minimum needed prompt, image, or audio to whatever AI, search,
 speech, or chart providers this instance has configured. Those providers have
-their own terms. The Privacy Notice lists the classes of provider the code
+their own terms, retention practices, outages, and content policies. The
+operator may change or disable a provider without guaranteeing continuity or
+equivalent output. The Privacy Notice lists the classes of provider the code
 can call.</p>
 <p>Music commands only return a YouTube search URL. The bot does not
 download or rehost audio. Charts are rendered by constructing a QuickChart
 URL. Web search may call Tavily and/or DuckDuckGo.</p>
 
-<h2>9. Changes</h2>
+<h2>9. User content and limited permission</h2>
+<p>You keep any rights you have in messages, prompts, images, audio, form
+answers, feedback, and other material you submit. To operate the feature you
+requested, you give the operator a limited, non-exclusive permission to
+receive, format, temporarily process, store where a disclosed feature allows,
+send to configured providers, and return that material to the relevant
+Discord scope. This permission ends when the material is deleted, except for
+records the Privacy Notice says must be retained for security, audit, legal,
+or operational reasons.</p>
+<p>You are responsible for having the right to submit material and for not
+using owaua to expose another person's private or confidential information.
+The operator does not claim ownership of your content and does not use it to
+train a general model as an owaua feature. Discord visibility, server staff
+access, and a provider's own handling remain separate from this permission.</p>
+
+<h2>10. Changes</h2>
 <p>If this document's version string changes, previous acceptances stop
 working. You will have to read the new version and accept again before
 ordinary use. That is how the code works; it is not a courtesy email.</p>
 
-<h2>10. Termination</h2>
+<h2>11. Termination</h2>
 <p>You can stop using the bot, reject the Terms, or run
 <code>/privacy delete</code>. The operator can remove the bot, block you, or
 shut the instance down. Discord can remove the application. Data handling
 after that is described in the Privacy Notice, including what deletion does
 not erase.</p>
 
-<h2>11. No warranty</h2>
+<h2>12. No warranty</h2>
 <p>The service is provided as-is. The operator does not promise fitness for
 a particular purpose, uninterrupted availability, or that outputs are
 accurate or safe to follow. To the extent the law allows, the operator is
@@ -212,11 +256,23 @@ not liable for indirect or consequential loss arising from use of the bot.
 This does not exclude liability that cannot legally be excluded, including
 for death or personal injury caused by negligence where that rule applies.</p>
 
-<h2>12. Contact</h2>
+<h2>13. General terms</h2>
+<p>These Terms and the Privacy Notice describe the agreement for using this
+owaua instance. If a provision is unenforceable, the rest remains in effect.
+Failure to enforce a provision is not a waiver. The operator may transfer or
+end the service as part of shutting down or changing the instance, subject to
+rights that cannot legally be waived. Mandatory rights under the law that
+applies to you are not excluded. Disputes are subject to the courts and law
+that have jurisdiction over the operator, except where mandatory consumer or
+other local law requires a different forum or protection.</p>
+
+<h2>14. Contact</h2>
 <p>Questions, privacy requests, and reports: <span>{safe_contact}</span>.</p>
 <p>These Terms are meant to describe the running software. If a sentence
-here and the code disagree, the code is what the bot will do, and that is a
-bug in this page which you should report.</p>
+here and the running software disagree, report the discrepancy to the contact
+above. The published Terms and Privacy Notice govern the stated agreement;
+the operator will correct the documentation or software rather than treating
+an undocumented behavior as a new term.</p>
 """
 
 
@@ -268,7 +324,9 @@ changes, and bounded samples from bulk deletions. These embeds are sent back to
 the administrator-selected Discord log channel and are not copied into a separate
 owaua SQLite action-log table. Discord controls how long those channel messages
 remain. Administrators can disable event families, message content, attachment
-links, audit changes, bot events, or individual channels, roles and users.</p>
+links, audit changes, bot events, or individual channels, roles and users.
+Message content and attachment details start off and require an explicit
+dashboard choice.</p>
 <p>When the malware-scanner module is enabled, the bot inspects every attachment
 it receives in that server or DM before normal bot processing. The bytes are
 written to an owner-only temporary file. A file is excluded as media only when
@@ -338,8 +396,10 @@ record.</p>
 the version string you accepted plus the bounded web-acceptance record described
 above. It must be completed on the website from a one-time Discord button; typed
 commands cannot accept. It is not raw-history consent. The tests assert that.</li>
-<li><strong>Raw history</strong> is off by default. In a server it requires
-the administrator to enable <code>history_enabled</code> <em>and</em> you to
+<li><strong>Raw history</strong> is never stored for an ordinary member by default.
+The server-wide <code>history_enabled</code> gate starts enabled so a member can
+choose to opt in without waiting for an administrator, and an administrator can
+turn that gate off for everyone. Storage requires that server gate <em>and</em> you to
 <code>/privacy opt-in</code> for that exact guild id. In DMs, opt-in alone is
 enough (there is no guild admin). If either gate is off, conversation turns
 and conversation summaries and server_messages are not stored, and live channel context is not pulled
@@ -462,7 +522,9 @@ client respectively. The website worker may forward
 <code>CF-Connecting-IP</code> as <code>X-Forwarded-For</code> and Cloudflare
 ASN/organization metadata to the bot's HTTP port on the acceptance route.
 Those extra fields are used only to refuse VPN, proxy, Tor, and hosting
-networks and are not stored. Health endpoints <code>/healthz</code> and
+networks and are not stored by owaua. Cloudflare, Daki, or the reverse-proxy
+infrastructure may still receive or retain ordinary web access logs under
+their own systems and policies. Health endpoints <code>/healthz</code> and
 <code>/readyz</code> do not include user, guild, or provider payloads.</p>
 
 <h2>6. Retention</h2>
@@ -553,6 +615,11 @@ code does not upload the DB anywhere by itself).</li>
 relationship/intelligence in the current server. They cannot read other
 servers or your DMs through the bot. Memory is exact-scope: a guild cannot
 see another guild's facts.</p>
+<p>Where applicable, you may also request correction, restriction, objection,
+or portability by contacting the published privacy contact. You may complain
+to the data-protection supervisory authority in the country where you live or
+work. The operator may need to verify that a request comes from the relevant
+Discord account.</p>
 
 <h2>8. Children</h2>
 <p>owaua is not directed at children under Discord's minimum age. We do
@@ -590,8 +657,16 @@ abuse, and block evasion (hashed evidence, strike counters, time-limited
 keyed network tokens, hard-blocks of later acceptance visits from a matching
 network, and refusal of VPN, proxy, Tor, and hosting networks during web
 acceptance); and Discord's
-position as the platform you already have an account with. You can withdraw
-consent, reject the Terms, or delete as described above.</p>
+operational context from Discord's role as the platform you already use. The
+operator does not treat Discord's role alone as a separate legal basis. You
+can withdraw consent, reject the Terms, or delete as described above.</p>
+<p>Some abuse-prevention and moderation outcomes are assisted by automated
+patterns or model classifications. They can be inaccurate and are not
+presented as a statement that a person is legally culpable. The consequences
+can include a warning, content removal, restricted access, or a block. You
+may ask the operator for the category and a review through the contact route
+above; the operator may retain a minimal security record when deletion would
+immediately enable abuse or block evasion.</p>
 
 <h2>12. Changes</h2>
 <p>Material changes bump <code>LEGAL_VERSION</code>. Your previous
@@ -600,6 +675,8 @@ accept the new version. <code>/privacy</code> remains available.</p>
 
 <h2>13. Contact</h2>
 <p>Privacy and security: <span>{safe_contact}</span>.</p>
-<p>If this page and the running code disagree, the code wins and the page
-is wrong. Please report that.</p>
+<p>If this page and the running software disagree, report the discrepancy to
+the contact above. The published Terms and Privacy Notice govern the stated
+processing description; the operator will correct the documentation or
+software rather than treating an undocumented behavior as a new disclosure.</p>
 """

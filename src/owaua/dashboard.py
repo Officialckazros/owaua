@@ -19,7 +19,7 @@ from urllib.parse import urlencode, urlsplit
 
 from aiohttp import BasicAuth, ClientSession, ClientTimeout, web
 
-from owaua import ai_control, config, db, multilingual, staffops
+from owaua import ai_control, config, db, diagnostics, multilingual, staffops
 from owaua.module_catalog import MODULES, public_catalog, public_server_settings
 from owaua.scope import Scope
 
@@ -79,7 +79,7 @@ def _page(title: str, body: str, *, script: str = "") -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="robots" content="noindex,nofollow">
-  <title>{html.escape(title)} · owaua Control</title>
+  <title>{html.escape(title)} · owaua control</title>
   <link rel="stylesheet" href="/dashboard/assets/app.css">
   {app_script}
 </head>
@@ -90,7 +90,8 @@ def _page(title: str, body: str, *, script: str = "") -> str:
 _LOGIN_HTML: Final = """
 <main class="login-shell">
   <section class="login-card">
-    <a class="login-brand" href="/">owaua</a>
+    <a class="login-brand" href="/"><span class="brand-mark">o</span><span>owaua</span></a>
+    <p class="eyebrow">SERVER CONTROL / DISCORD ONLY</p>
     <h1>Dashboard</h1>
     <p class="muted">Sign in with Discord to manage servers where you have permission.</p>
     <!-- auth-status -->
@@ -103,7 +104,7 @@ _LOGIN_HTML: Final = """
 _APP_HTML: Final = """
 <div class="app-shell">
   <aside class="sidebar">
-    <a class="logo" href="/dashboard"><span class="brand-mark small">S</span><span>owaua</span></a>
+    <a class="logo" href="/dashboard"><span class="brand-mark small">o</span><span>owaua control</span></a>
     <nav aria-label="Dashboard sections">
       <button class="nav-item active" data-view="overview"><span aria-hidden="true">01</span>Overview</button>
       <button class="nav-item" data-view="modules"><span aria-hidden="true">02</span>Modules</button>
@@ -202,64 +203,67 @@ _APP_HTML: Final = """
 """
 
 _MONO_CSS: Final = r"""
-:root{color-scheme:dark;font-family:Arial,Helvetica,sans-serif;--black:#000;--white:#fff}
+:root{color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;--black:#000;--white:#fff;--soft:#111;--line:#4a4a4a;--quiet:#a9a9a9}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
-body{min-height:100vh;margin:0;background:var(--black);color:var(--white)}
+body{min-height:100vh;margin:0;background:var(--black);color:var(--white);line-height:1.5}
 button,input,select,textarea{font:inherit}
 button,a{color:inherit}
 button{cursor:pointer}
 h1,h2,h3,p{margin-top:0}
-h1,h2,h3{letter-spacing:0}
-.muted,.tiny,.page-description,.field small,.switch-row small,.activity-row small{color:var(--white);opacity:.65}
+h1,h2,h3{letter-spacing:-.025em;line-height:1.12}
+.muted,.tiny,.page-description,.field small,.switch-row small,.activity-row small{color:var(--quiet);opacity:1}
 .tiny{font-size:.75rem;line-height:1.5}
 .centered{text-align:center}
+.eyebrow{margin:0 0 .8rem;color:var(--quiet);font:700 .65rem/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.14em;text-transform:uppercase}
 
-.login-shell{min-height:100vh;display:grid;place-items:center;padding:1rem}
-.login-card{width:min(26rem,100%);padding:2rem;border:1px solid var(--white);background:var(--black)}
-.login-brand{display:inline-block;margin-bottom:3rem;text-decoration:none;font-weight:700}
-.login-card h1{font-size:2rem;margin-bottom:.75rem}
+.login-shell{min-height:100vh;display:grid;place-items:center;padding:clamp(1rem,5vw,4rem)}
+.login-card{position:relative;width:min(31rem,100%);padding:clamp(1.5rem,5vw,3rem);border:1px solid var(--line);border-top:8px solid var(--white);background:var(--black)}
+.login-brand{display:flex;align-items:center;gap:.7rem;margin-bottom:3.5rem;text-decoration:none;font-weight:750;letter-spacing:-.02em}
+.login-card h1{font-size:clamp(2.5rem,8vw,4.5rem);margin-bottom:1rem}
 .login-card .muted{line-height:1.55;margin-bottom:1.5rem}
-.discord-button{display:block;width:100%;padding:.85rem 1rem;border:1px solid var(--white);background:var(--white);color:var(--black);text-align:center;text-decoration:none;font-weight:700}
+.discord-button{display:block;width:100%;padding:1rem;border:1px solid var(--white);background:var(--white);color:var(--black);text-align:center;text-decoration:none;font-weight:750}
 .discord-button:hover,.discord-button:focus{background:var(--black);color:var(--white)}
-.auth-message{padding:.75rem;border:1px solid var(--white);margin-bottom:1rem}
+.auth-message{padding:.8rem 1rem;border-left:4px solid var(--white);margin-bottom:1rem;background:var(--soft)}
 .tiny a{text-decoration:underline}
 
-.app-shell{display:grid;grid-template-columns:13rem minmax(0,1fr);min-height:100vh}
-.sidebar{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;padding:1rem;border-right:1px solid var(--white);background:var(--black)}
+.app-shell{display:grid;grid-template-columns:15rem minmax(0,1fr);min-height:100vh}
+.sidebar{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;padding:1.25rem;border-right:1px solid var(--line);background:var(--black)}
 .logo{display:flex;align-items:center;gap:.65rem;padding:.25rem .5rem 2rem;color:var(--white);text-decoration:none;font-weight:700}
-.brand-mark{display:grid;place-items:center;width:2rem;height:2rem;border:1px solid var(--white);background:var(--white);color:var(--black);font-weight:700}
+.brand-mark{display:grid;place-items:center;width:2rem;height:2rem;border:1px solid var(--white);background:var(--white);color:var(--black);font-weight:800;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .brand-mark.small{width:1.5rem;height:1.5rem;font-size:.75rem}
 .sidebar nav{display:grid}
 .nav-item,.logout,.text-button,.configure,.icon-button{border:0;background:transparent;color:var(--white)}
-.nav-item,.logout{width:100%;padding:.75rem .5rem;text-align:left}
+.nav-item,.logout{width:100%;padding:.8rem .55rem;border-bottom:1px solid #222;text-align:left}
 .nav-item span{display:inline-block;width:2rem;opacity:.6}
 .nav-item:hover,.nav-item.active{background:var(--white);color:var(--black)}
 .side-bottom{margin-top:auto}
-.logout{border-top:1px solid var(--white)}
+.logout{border-top:1px solid var(--line);border-bottom:0}
 
-.content{width:100%;max-width:90rem;padding:2rem clamp(1rem,4vw,3rem) 4rem}
-.topbar{display:flex;align-items:end;justify-content:space-between;gap:1rem;padding-bottom:1rem;border-bottom:1px solid var(--white);margin-bottom:1.5rem}
-.topbar h1{margin:0;font-size:1.5rem}
+.content{width:100%;max-width:96rem;padding:2rem clamp(1rem,4vw,3.5rem) 4rem}
+.topbar{display:flex;align-items:end;justify-content:space-between;gap:1rem;padding-bottom:1.25rem;border-bottom:1px solid var(--line);margin-bottom:1.75rem}
+.topbar h1{margin:0;font-size:clamp(1.65rem,3vw,2.3rem)}
 .page-description{margin:.25rem 0 0;font-size:.8rem}
 .server-picker{display:grid;gap:.35rem;font-size:.75rem}
 .server-tools{display:flex;align-items:end;gap:1rem}.load-status{max-width:18rem;font-size:.72rem;opacity:.65;text-align:right}
 input[type=search],.editor-fields input,.editor-fields textarea,.editor-fields select,.server-picker select{width:100%;padding:.7rem;border:1px solid var(--white);border-radius:0;outline:0;background:var(--black);color:var(--white)}
 input:focus,textarea:focus,select:focus,button:focus-visible,a:focus-visible{outline:2px solid var(--white);outline-offset:2px}
 button:disabled,input:disabled,select:disabled,textarea:disabled{cursor:not-allowed;opacity:.45}
-.hero-panel{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1.25rem;border:1px solid var(--white)}
-.hero-panel h2{margin-bottom:.35rem;font-size:1.25rem}
+.hero-panel{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:clamp(1.25rem,3vw,2rem);border:1px solid var(--white);background:var(--white);color:var(--black)}
+.hero-panel h2{margin-bottom:.35rem;font-size:clamp(1.35rem,3vw,2rem)}
 .hero-panel p{margin:0;line-height:1.5}
+.hero-panel .primary{background:var(--black);color:var(--white)}
+.hero-panel .primary:hover{background:var(--white);color:var(--black)}
 .primary,.secondary,#editor-save,.public-form button{padding:.7rem .9rem;border:1px solid var(--white);border-radius:0;background:var(--white);color:var(--black);font-weight:700}
 .primary:hover,.secondary:hover,#editor-save:hover,.public-form button:hover{background:var(--black);color:var(--white)}
-.stats{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--white);border-top:0;margin:0 0 2rem}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--line);border-top:0;margin:0 0 2rem}
 #booster-stats{grid-template-columns:repeat(4,1fr)}
-.stat{padding:1rem;border-right:1px solid var(--white)}
+.stat{padding:1.15rem;border-right:1px solid var(--line)}
 .stat:last-child{border-right:0}
 .stat strong,.stat small{display:block}
-.stat strong{font-size:1.4rem}
+.stat strong{font-size:1.75rem;letter-spacing:-.04em}
 .stat small{margin-top:.2rem;font-size:.7rem;text-transform:uppercase}
-.section-head{display:flex;align-items:end;justify-content:space-between;margin:1rem 0}
+.section-head{display:flex;align-items:end;justify-content:space-between;margin:1.5rem 0 .85rem}
 .section-head h2{margin:0;font-size:1rem}
 .text-button,.configure{text-decoration:underline}
 .toolbar{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding-bottom:1rem;border-bottom:1px solid var(--white);margin-bottom:1rem}
@@ -268,19 +272,20 @@ button:disabled,input:disabled,select:disabled,textarea:disabled{cursor:not-allo
 .filter{padding:.5rem .65rem;border:1px solid var(--white);border-radius:0;background:var(--black);color:var(--white)}
 .filter.active,.filter:hover{background:var(--white);color:var(--black)}
 .module-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(17rem,1fr));gap:0;border-top:1px solid var(--white);border-left:1px solid var(--white)}
-.module-card{min-height:11rem;display:flex;flex-direction:column;padding:1rem;border-right:1px solid var(--white);border-bottom:1px solid var(--white);background:var(--black)}
+.module-card{min-height:11rem;display:flex;flex-direction:column;padding:1.15rem;border-right:1px solid var(--white);border-bottom:1px solid var(--white);background:var(--black)}
+.module-card:hover{background:var(--soft)}
 .module-card .category,.dialog-category{font-size:.65rem;text-transform:uppercase;text-decoration:underline}
 .module-card h3{margin:.65rem 0 .4rem}
 .module-card p{font-size:.8rem;line-height:1.5;opacity:.7}
 .module-card footer{display:flex;align-items:center;justify-content:space-between;gap:.75rem;margin-top:auto;font-size:.75rem}
-.status:before{content:"○ ";}.status.on:before{content:"● ";}
+.status:before{content:"○ ";}.status.ready:before{content:"● ";}.status.needs_setup:before{content:"◐ ";}.status.degraded:before{content:"! ";}
 .compact .module-card:nth-child(n+9){display:none}
 .notice{position:fixed;z-index:20;right:1rem;top:1rem;padding:.75rem;border:1px solid var(--white);background:var(--white);color:var(--black)}
 .notice.error{background:var(--black);color:var(--white)}
 .activity-list{border:1px solid var(--white)}
 .activity-row{display:grid;grid-template-columns:1.2fr 1fr .8fr;gap:1rem;padding:1rem;border-bottom:1px solid var(--white);font-size:.8rem}
 .activity-row:last-child{border-bottom:0}
-.ops-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;margin:1rem 0}.ops-panel{min-width:0;padding:1rem;border:1px solid var(--white)}.ops-panel>h3{margin-bottom:.4rem}.ops-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.65rem}.ops-form label{display:grid;gap:.3rem;font-size:.72rem}.ops-form .full{grid-column:1/-1}.ops-form input,.ops-form select,.ops-form textarea,.ops-filter select{width:100%;padding:.65rem;border:1px solid var(--white);background:var(--black);color:var(--white)}.ops-form textarea{min-height:5rem;resize:vertical}.ops-item{padding:.8rem;border-bottom:1px solid rgba(255,255,255,.5);font-size:.8rem}.ops-item:last-child{border-bottom:0}.ops-item header{display:flex;justify-content:space-between;gap:.5rem}.ops-item p{margin:.4rem 0;line-height:1.45}.ops-actions{display:flex;gap:.35rem;flex-wrap:wrap}.ops-actions button{padding:.35rem .5rem;border:1px solid var(--white);background:var(--black);color:var(--white);font-size:.7rem}.retention-panel{margin-top:1rem}.retention-panel table{width:100%;border-collapse:collapse;font-size:.75rem}.retention-panel th,.retention-panel td{padding:.65rem;border-bottom:1px solid rgba(255,255,255,.4);text-align:left;vertical-align:top}
+.ops-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;margin:1rem 0}.ops-panel{min-width:0;padding:1.15rem;border:1px solid var(--line);background:#050505}.ops-panel>h3{margin-bottom:.4rem}.ops-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.65rem}.ops-form label{display:grid;gap:.3rem;font-size:.72rem}.ops-form .full{grid-column:1/-1}.ops-form input,.ops-form select,.ops-form textarea,.ops-filter select{width:100%;padding:.65rem;border:1px solid var(--white);background:var(--black);color:var(--white)}.ops-form textarea{min-height:5rem;resize:vertical}.ops-item{padding:.8rem;border-bottom:1px solid rgba(255,255,255,.5);font-size:.8rem}.ops-item:last-child{border-bottom:0}.ops-item header{display:flex;justify-content:space-between;gap:.5rem}.ops-item p{margin:.4rem 0;line-height:1.45}.ops-actions{display:flex;gap:.35rem;flex-wrap:wrap}.ops-actions button{padding:.35rem .5rem;border:1px solid var(--white);background:var(--black);color:var(--white);font-size:.7rem}.retention-panel{margin-top:1rem}.retention-panel table{width:100%;border-collapse:collapse;font-size:.75rem}.retention-panel th,.retention-panel td{padding:.65rem;border-bottom:1px solid rgba(255,255,255,.4);text-align:left;vertical-align:top}
 .empty{padding:2rem;text-align:center;opacity:.65}
 
 dialog{width:min(64rem,calc(100% - 2rem));max-height:90vh;padding:0;border:1px solid var(--white);border-radius:0;background:var(--black);color:var(--white)}
@@ -296,24 +301,30 @@ dialog::backdrop{background:#000}
 .field{display:grid;grid-template-columns:minmax(0,1fr);min-width:0;gap:.4rem}.field.full{grid-column:1/-1}
 .field textarea{min-height:8rem;resize:vertical;font-family:monospace}
 .field select[multiple]{min-height:9rem}
-.structured-field{padding:.75rem;border:1px solid rgba(255,255,255,.55)}
-.structured-editor,.structured-node,.structured-children{display:grid;min-width:0;gap:.55rem}
-.structured-node{padding:.65rem;border-left:2px solid rgba(255,255,255,.55)}
-.structured-head{display:flex;align-items:center;justify-content:space-between;gap:.5rem}
-.structured-head>strong{font-size:.72rem;text-transform:uppercase;overflow-wrap:anywhere}
-.structured-kind{width:auto!important;min-width:7rem;padding:.4rem!important;font-size:.7rem}
-.structured-children{padding-left:.35rem}
-.structured-item,.structured-object-field{display:grid;grid-template-columns:minmax(0,1fr) auto;min-width:0;gap:.5rem;align-items:start;padding:.55rem;border:1px solid rgba(255,255,255,.35)}
-.structured-object-field{grid-template-columns:minmax(7rem,.45fr) minmax(0,1.55fr) auto}
-.structured-object-field>.structured-node,.structured-item>.structured-node{border-left:0;padding:0}
-.structured-object-key,.structured-value{width:100%;min-width:0;padding:.6rem;border:1px solid var(--white);background:var(--black);color:var(--white)}
+.structured-field{padding:.2rem 0;border:0}
+.structured-field>span{font-size:1rem;font-weight:700}.structured-field>small{line-height:1.45}
+.structured-editor,.structured-node,.structured-children{display:grid;min-width:0;gap:.65rem}
+.structured-node{min-width:0}.structured-node>.structured-head{margin-bottom:-.2rem}
+.structured-head{display:grid;gap:.2rem}
+.structured-head>strong{font-size:.76rem;overflow-wrap:anywhere}.structured-head>small{font-size:.68rem;line-height:1.4;opacity:.7}
+.structured-children{min-width:0}
+.structured-item{display:grid;min-width:0;gap:.75rem;padding:.85rem;border:1px solid rgba(255,255,255,.5);background:#050505}
+.structured-item-header{display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding-bottom:.55rem;border-bottom:1px solid rgba(255,255,255,.35)}
+.structured-item-header strong{font-size:.78rem}.structured-item-header .structured-remove{white-space:nowrap}
+.structured-object-field{display:grid;min-width:0;gap:.35rem;padding:.5rem 0}
+.structured-object-field.dynamic{grid-template-columns:minmax(10rem,.55fr) minmax(0,1.45fr) auto;align-items:end;padding:.65rem;border:1px solid rgba(255,255,255,.35)}
+.structured-object-field>.structured-node,.structured-item>.structured-node{min-width:0}
+.structured-object-key,.structured-value{width:100%;min-width:0;padding:.65rem;border:1px solid var(--white);background:var(--black);color:var(--white)}
 .structured-value{font-family:inherit!important}
 .structured-value[multiple]{min-height:7rem}
 .structured-actions{display:flex;flex-wrap:wrap;gap:.4rem}
 .structured-actions button,.structured-remove{padding:.45rem .6rem;border:1px solid var(--white);background:var(--black);color:var(--white);font-size:.7rem}
-.structured-empty{padding:.65rem;border:1px dashed rgba(255,255,255,.4);font-size:.72rem;opacity:.7}
+.structured-empty{padding:.8rem;border:1px dashed rgba(255,255,255,.4);font-size:.75rem;line-height:1.45;opacity:.75}
+.resource-checklist{display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:.35rem;max-height:12rem;overflow:auto;padding:.55rem;border:1px solid var(--white)}
+.resource-option,.check-control{display:flex;align-items:center;gap:.5rem;padding:.35rem;font-size:.75rem}.resource-option input,.check-control input{width:1rem!important;height:1rem;accent-color:var(--white)}
+.check-control{min-height:2.75rem;border:1px solid var(--white)}.check-control span:last-child:before{content:"Off"}.check-control input:checked+span:before{content:"On"}
 .module-config-group{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.8rem;min-width:0;margin:0;padding:1rem;border:1px solid rgba(255,255,255,.55)}
-.module-config-group legend{padding:0 .4rem;font-size:.72rem;text-transform:uppercase}
+.module-config-group legend{padding:0 .4rem;font-size:.82rem;font-weight:700}.module-config-group>.group-help{grid-column:1/-1;margin:-.15rem 0 .2rem;font-size:.72rem;line-height:1.45;opacity:.7}
 .settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border-top:1px solid var(--white);border-left:1px solid var(--white)}
 .settings-grid .field{min-height:8rem;padding:1rem;border-right:1px solid var(--white);border-bottom:1px solid var(--white);align-content:start}
 .settings-grid .field.full{grid-column:1/-1}
@@ -323,7 +334,7 @@ dialog::backdrop{background:#000}
 .booster-toolbar{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1rem}.booster-toolbar .switch-row{flex:1;margin:0}.booster-actions{display:flex;gap:.5rem;flex-wrap:wrap}
 .booster-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}.booster-group{border:1px solid var(--white);padding:1rem;align-content:start}.booster-group h3{margin-bottom:.25rem}.booster-group>p{font-size:.78rem;opacity:.65;line-height:1.45}.booster-group-fields{display:grid;grid-template-columns:1fr 1fr;gap:.8rem}.booster-group-fields .full{grid-column:1/-1}.collection{display:grid;min-width:0;gap:.5rem}.collection-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(8rem,1fr)) auto;min-width:0;gap:.5rem;align-items:end;padding:.65rem;border:1px solid rgba(255,255,255,.45)}.collection-row>*{min-width:0}.collection-row label{display:grid;gap:.3rem;font-size:.72rem}.collection-row input,.collection-row select,.collection-row textarea,.inline-form input,.inline-form select{width:100%;padding:.65rem;border:1px solid var(--white);background:var(--black);color:var(--white)}.collection-row textarea{resize:vertical}.collection-row select[multiple]{min-height:6rem}.remove-row{padding:.65rem;border:1px solid var(--white);background:var(--black)}.add-row{justify-self:start}.booster-records{margin-top:2rem}.inline-form{display:grid;grid-template-columns:minmax(12rem,2fr) minmax(7rem,1fr) auto;gap:.5rem;margin-bottom:1rem}.table-wrap{overflow:auto;border:1px solid var(--white)}.record-table{width:100%;border-collapse:collapse;font-size:.8rem}.record-table th,.record-table td{padding:.75rem;text-align:left;border-bottom:1px solid rgba(255,255,255,.4);white-space:nowrap}.record-table th{font-size:.68rem;text-transform:uppercase}.record-table tr:last-child td{border-bottom:0}
 .dialog-actions{display:flex;justify-content:flex-end;gap:.5rem;padding:1rem;border-top:1px solid var(--white)}
-.public-form{margin-top:1.5rem}.option-list{display:grid;gap:.5rem}
+.form-card{width:min(48rem,100%)}.public-form{margin-top:1.5rem}.option-list{display:grid;gap:.5rem}
 
 @media(max-width:800px){.app-shell{display:block}.sidebar{position:static;height:auto;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;border-right:0;border-bottom:1px solid var(--white)}.sidebar nav{display:flex;overflow-x:auto}.side-bottom{margin:0}.logout{width:auto;border:0;padding:.75rem}.logo{padding:0}.logo span:last-child,.nav-item span{display:none}.nav-item{width:auto;white-space:nowrap;font-size:.75rem}.content{padding:1rem}.topbar,.toolbar,.booster-toolbar{align-items:stretch;flex-direction:column}.server-tools{align-items:stretch;justify-content:space-between}.load-status{text-align:left}.filters{justify-content:flex-start}.activity-row{grid-template-columns:minmax(0,1fr)}.booster-layout,.ops-layout,.language-panel{grid-template-columns:minmax(0,1fr)}.language-contract{border-left:0;border-top:1px solid var(--white);padding-left:0;padding-top:1.25rem}.booster-group{min-width:0}}
 @media(max-width:520px){.login-card{padding:1.25rem}.hero-panel{display:block}.hero-panel .primary{width:100%;margin-top:1rem}.stats,#booster-stats{grid-template-columns:minmax(0,1fr)}.stat{border-right:0;border-bottom:1px solid var(--white)}.stat:last-child{border-right:0;border-bottom:0}.module-grid,.editor-fields,.settings-grid,.booster-group-fields,.collection-row,.ops-form,.structured-object-field,.module-config-group{grid-template-columns:minmax(0,1fr)}.settings-grid .field.full,.booster-group-fields .full,.ops-form .full{grid-column:auto}.inline-form{grid-template-columns:minmax(0,1fr)}.booster-actions{display:grid}.structured-children{padding-left:0}.structured-remove{justify-self:start}}
@@ -346,14 +357,16 @@ function setLoading(loading,message=""){state.loading=loading;q("#load-status").
 const viewCopy={overview:["Overview","Server configuration and activity"],modules:["Modules","Enable and configure server features"],language:["Language","Localize this guild's entire owaua experience"],boosters:["Booster Perks","Track boosts and manage every booster reward"],operations:["Incident Center","Cases, incidents, tickets, health and retention in one staff view"],settings:["Settings","Core AI, privacy, moderation, rules, voice and channel behavior"],activity:["Activity","Authenticated dashboard changes for this server"]};
 function showView(name,{updateHash=true}={}){if(!viewCopy[name])name="overview";qa(".view").forEach(x=>x.hidden=x.id!==`${name}-view`);qa(".nav-item").forEach(x=>{const active=x.dataset.view===name;x.classList.toggle("active",active);if(active)x.setAttribute("aria-current","page");else x.removeAttribute("aria-current")});q("#page-title").textContent=viewCopy[name][0];q(".topbar .page-description").textContent=viewCopy[name][1];if(updateHash&&location.hash!==`#${name}`)history.replaceState(null,"",`#${name}`);if(name==="activity")loadActivity();if(name==="boosters")loadBoosters().catch(e=>notice(e.message,true));if(name==="operations")loadOperations().catch(e=>notice(e.message,true))}
 function configFor(id){return state.configs.get(id)||{module:id,enabled:false,settings:{}}}
-function moduleCard(m){const c=configFor(m.id),coverage=m.implementation||"core live",disabled=!state.guildId||!state.guildReady||state.loading;return `<article class="module-card" data-id="${esc(m.id)}"><span class="category">${esc(m.category)}</span><h3>${esc(m.title)}</h3><p>${esc(m.description)}</p><footer><span class="status ${c.enabled?"on":""}" title="Implementation coverage">${c.enabled?"Enabled":"Disabled"} · ${esc(coverage)}</span><button class="configure" data-edit="${esc(m.id)}" ${disabled?'disabled':''}>Configure →</button></footer></article>`}
-function render(){const search=(q("#module-search")?.value||"").toLowerCase();const mods=state.catalog.filter(m=>(state.category==="All"||m.category===state.category)&&(`${m.title} ${m.description}`.toLowerCase().includes(search)));q("#module-grid").innerHTML=mods.map(moduleCard).join("")||'<div class="empty">No matching modules.</div>';q("#quick-modules").innerHTML=state.catalog.map(moduleCard).join("");qa("[data-edit]").forEach(b=>b.onclick=()=>b.dataset.edit==="boosters"?showView("boosters"):b.dataset.edit==="localization"?showView("language"):openEditor(b.dataset.edit));const enabled=[...state.configs.values()].filter(x=>x.enabled).length;q("#stats").innerHTML=[['Modules',state.catalog.length],['Enabled',enabled],['Categories',new Set(state.catalog.map(x=>x.category)).size]].map(([a,b])=>`<div class="stat"><strong>${esc(b)}</strong><small>${esc(a)}</small></div>`).join("")}
+function moduleCard(m){const c=configFor(m.id),coverage=m.implementation||"core live",runtime=c.state||(c.enabled?"ready":"disabled"),label=runtime==="needs_setup"?"Needs setup":runtime.charAt(0).toUpperCase()+runtime.slice(1),disabled=!state.guildId||!state.guildReady||state.loading;return `<article class="module-card" data-id="${esc(m.id)}"><span class="category">${esc(m.category)}</span><h3>${esc(m.title)}</h3><p>${esc(m.description)}</p><footer><span class="status ${esc(runtime)}" title="${esc(c.reason||coverage)}">${esc(label)} · ${esc(coverage)}</span><button class="configure" data-edit="${esc(m.id)}" ${disabled?'disabled':''}>Configure →</button></footer></article>`}
+function render(){const search=(q("#module-search")?.value||"").toLowerCase();const mods=state.catalog.filter(m=>(state.category==="All"||m.category===state.category)&&(`${m.title} ${m.description}`.toLowerCase().includes(search)));q("#module-grid").innerHTML=mods.map(moduleCard).join("")||'<div class="empty">No matching modules.</div>';q("#quick-modules").innerHTML=state.catalog.map(moduleCard).join("");qa("[data-edit]").forEach(b=>b.onclick=()=>b.dataset.edit==="boosters"?showView("boosters"):b.dataset.edit==="localization"?showView("language"):openEditor(b.dataset.edit));const configs=[...state.configs.values()],ready=configs.filter(x=>x.state==="ready").length,waiting=configs.filter(x=>x.state==="needs_setup").length;q("#stats").innerHTML=[['Modules',state.catalog.length],['Ready',ready],['Need setup',waiting]].map(([a,b])=>`<div class="stat"><strong>${esc(b)}</strong><small>${esc(a)}</small></div>`).join("")}
 function renderAIHealth(){const data=state.aiHealth||{},usage=data.usage||{},providers=data.providers||[];q("#ai-health-stats").innerHTML=[["Requests / 24h",usage.requests||0],["Success",`${usage.success_rate??100}%`],["Avg latency",`${usage.average_latency_ms||0} ms`],["Fallbacks",usage.fallback_requests||0],["Estimated tokens",(usage.input_tokens||0)+(usage.output_tokens||0)]].map(([a,b])=>`<div class="stat"><strong>${esc(b)}</strong><small>${esc(a)}</small></div>`).join("");q("#ai-provider-health").innerHTML=providers.length?providers.map(item=>`<div class="activity-row"><div><strong>${esc(item.model)}</strong><br><small>${item.circuit_open_seconds?`Circuit open ${esc(item.circuit_open_seconds)}s`:'Available'}</small></div><div>${esc(item.health)}% health</div><div><small>${esc(item.latency_ms)} ms · ${esc(item.successes)} ok / ${esc(item.failures)} failed</small></div></div>`).join(""):'<div class="empty">Provider health appears after AI traffic.</div>'}
 async function loadAIHealth(){const guildId=state.guildId;if(!guildId||!state.guildReady)return;state.aiHealth=await api(`/guild/${encodeURIComponent(guildId)}/ai-health`);if(guildId===state.guildId)renderAIHealth()}
 function filters(){const cats=["All",...new Set(state.catalog.map(x=>x.category))];q("#category-filters").innerHTML=cats.map(x=>`<button class="filter ${x===state.category?"active":""}" data-category="${esc(x)}">${esc(x)}</button>`).join("");qa("[data-category]").forEach(b=>b.onclick=()=>{state.category=b.dataset.category;filters();render()})}
 function label(key){return key.replaceAll("_"," ").replace(/\b\w/g,c=>c.toUpperCase())}
 function activeGuild(){return state.guilds.find(g=>g.id===state.guildId)||{channels:[],roles:[]}}
-function resourceInput(key,value,kind,multiple=false){const items=kind==="channel"?(activeGuild().channels||[]):(activeGuild().roles||[]),selected=new Set((multiple?(Array.isArray(value)?value:[]):[value]).map(String));const options=items.map(item=>`<option value="${esc(item.id)}" ${selected.has(String(item.id))?'selected':''}>${kind==="channel"?'#':'@'}${esc(item.name||item.id)}</option>`).join("");return `<select data-key="${esc(key)}" data-type="${multiple?'string-list':'string'}" ${multiple?'multiple':''}>${multiple?'':'<option value="">Not set</option>'}${options}</select>`}
+function resourceItems(kind){if(kind==="role")return activeGuild().roles||[];const items=activeGuild().channels||[],text=new Set(["text","news","forum","0","5","15"]),types={channel:text,text_channel:text,category:new Set(["category","4"]),voice:new Set(["voice","stage","stage_voice","2","13"])};return types[kind]?items.filter(item=>types[kind].has(String(item.type).toLowerCase())):items}
+function resourceName(kind){return kind==="channel"||kind==="text_channel"?"text channel":kind==="voice"?"voice channel":kind}
+function resourceInput(key,value,kind,multiple=false){const items=resourceItems(kind),selected=new Set((multiple?(Array.isArray(value)?value:[]):[value]).map(String)),prefix=kind==="role"?'@':'#',name=resourceName(kind);if(multiple)return `<div class="resource-checklist" data-key="${esc(key)}" data-type="string-list">${items.length?items.map(item=>`<label class="resource-option"><input type="checkbox" value="${esc(item.id)}" ${selected.has(String(item.id))?'checked':''}><span>${prefix}${esc(item.name||item.id)}</span></label>`).join(''):`<span class="muted">No ${name}s are available.</span>`}</div>`;const options=items.map(item=>`<option value="${esc(item.id)}" ${selected.has(String(item.id))?'selected':''}>${prefix}${esc(item.name||item.id)}</option>`).join("");return `<select data-key="${esc(key)}" data-type="string"><option value="">Choose a ${name}</option>${options}</select>`}
 function choiceInput(key,value,choices){return `<select data-key="${esc(key)}" data-type="string">${choices.map(item=>{const raw=typeof item==="object"?item.value:item,name=typeof item==="object"?item.label:item;return `<option value="${esc(raw)}" ${String(value)===String(raw)?'selected':''}>${esc(name)}</option>`}).join("")}</select>`}
 const structuredHelp={
   greet_messages:'Add one greeting template per row. Variables: {user}, {username}, {userboosts}, {level}, {count}, {totalcount}.',
@@ -368,7 +381,8 @@ const structuredHelp={
   log_routes:'Choose an event and its destination channel for each route.',
   audit_events:'Use Discord’s authoritative audit stream for actor, target, reason and before/after details. owaua needs View Audit Log.',
   reaction_events:'Logs reaction adds/removals and poll vote changes. This can be high-volume.',
-  include_message_content:'Include edited/deleted text and bounded bulk-delete samples in private log destinations.',
+  include_message_content:'Off by default. If enabled, include edited/deleted text and bounded bulk-delete samples in private Discord log destinations. Tell members first.',
+  include_attachments:'Off by default. If enabled, include attachment links or previewable media in private Discord log destinations. Tell members first.',
   bulk_delete_sample_size:'Maximum cached message samples included in one bulk-delete event. Limited to 50 at runtime.',
 };
 const boosterGroups=[
@@ -390,31 +404,122 @@ const collectionSchemas={
   boost_level_roles:{fields:[{key:"boosts",label:"Recorded boosts",type:"number",default:1},{key:"role_id",label:"Reward role",type:"role",default:""}]},
   boost_age_roles:{fields:[{key:"seconds",label:"Boosting seconds",type:"number",default:2592000},{key:"role_id",label:"Reward role",type:"role",default:""}]},
   emoji_restrictions:{fields:[{key:"emoji_id",label:"Emoji ID",type:"text",default:""},{key:"role_ids",label:"Allowed roles",type:"roles",default:[]}]},
-  stat_channels:{fields:[{key:"metric",label:"Metric",type:"choice",options:["current_boosts","all_time_boosts","current_boosters","all_time_boosters"],default:"current_boosts"},{key:"channel_id",label:"Existing voice channel",type:"channel",default:""},{key:"category_id",label:"Category for creation",type:"channel",default:""},{key:"name",label:"Name template",type:"text",default:"Boosts: {value}"},{key:"create",label:"Create channel",type:"bool",default:false},{key:"delete",label:"Delete channel",type:"bool",default:false}]},
+  stat_channels:{fields:[{key:"metric",label:"Metric",type:"choice",options:["current_boosts","all_time_boosts","current_boosters","all_time_boosters"],default:"current_boosts"},{key:"channel_id",label:"Existing voice channel",type:"voice",default:""},{key:"category_id",label:"Category for creation",type:"category",default:""},{key:"name",label:"Name template",type:"text",default:"Boosts: {value}"},{key:"create",label:"Create channel",type:"bool",default:false},{key:"delete",label:"Delete channel",type:"bool",default:false}]},
   log_events:{simple:true,fields:[{key:"value",label:"Event",type:"choice",options:["boost_add","boost_remove","role","channel"],default:"boost_add"}]},
   log_routes:{dictionary:true,fields:[{key:"event",label:"Event",type:"choice",options:["boost_add","boost_remove","role","channel"],default:"boost_add"},{key:"channel_id",label:"Log channel",type:"channel",default:""}]},
 };
+const fieldLabels={
+  channel_id:"Channel",category_id:"Category",role_id:"Role",staff_role_ids:"Staff roles",allowed_role_ids:"Allowed roles",ignored_role_ids:"Ignored roles",protected_role_ids:"Protected roles",allowed_channel_ids:"Allowed channels",ignored_channel_ids:"Ignored channels",ignored_category_ids:"Ignored categories",ignored_user_ids:"Ignored user IDs",log_channel_id:"Log channel",notify_channel_id:"Notification channel",transcript_channel_id:"Transcript channel",submit_channel_id:"Submission channel",level_up_channel_id:"Level-up channel",rules_channel_id:"Rules channel",rules_ack_role_id:"Rules acknowledgement role",creator_role_ids:"Tag creator roles",manager_role_ids:"Manager roles",moderator_role_ids:"Moderator roles",critical_ping_role_id:"Critical incident ping role",default_assignee_id:"Default assignee Discord ID",dm_actions:"DM members about moderation actions",dm_message:"Direct-message welcome",public_base_url:"Public forms address",minimum_account_age_hours:"Minimum account age (hours)",poll_minutes:"Check interval (minutes)",cooldown_seconds:"Cooldown (seconds)",interval_seconds:"Repeat every (seconds)",delay_seconds:"Delete after (seconds)",remove_after_seconds:"Remove after (seconds)",maximum_per_run:"Maximum messages per cleanup",maximum_per_user:"Maximum reminders per member",max_open_per_member:"Maximum open tickets per member",max_caps_percent:"Capital letters threshold (%)",max_mentions:"Mention limit",max_newlines:"Line-break limit",max_length:"Message length limit",duplicate_window_seconds:"Duplicate-message window (seconds)",rapid_messages:"Rapid-message count",rapid_window_seconds:"Rapid-message window (seconds)",instant_timeout_minutes:"Automatic timeout (minutes)",instant_ban:"Automatically ban",custom_response:"Warning message",one_rank_only:"Allow only one rank",server_multiplier:"Server-wide XP multiplier",xp_min:"Minimum XP per message",xp_max:"Maximum XP per message",boost_mode:"Overlapping multiplier behavior",reward_roles:"Level rewards",channel_multipliers:"Channel XP multipliers",case_expiry_days:"Case retention (days)",evidence_links_enabled:"Allow evidence links",member_notes_enabled:"Allow staff notes",preserve_ban_messages:"Preserve ban messages",sla_hours:"Response target (hours)",reminder_hours:"Reminder after (hours)",auto_close_hours:"Close inactive tickets after (hours)",require_intake:"Require intake questions",allow_member_close:"Let members close their tickets",assignment_mode:"Ticket assignment",channel_name:"Ticket channel name",weekly_enabled:"Send weekly report",staff_only:"Staff only",aggregate_csv_enabled:"Allow aggregate CSV exports",enabled_cadences:"Digest schedules",sections:"Included sections",prefix:"Command prefix",responders:"Automatic replies",join_roles:"Roles given on join",ranks:"Self-assignable ranks",subscriptions:"Subscriptions",bindings:"Voice and text channel links",intake_fields:"Default intake questions",routing_rules:"Default routing rules",role_choices:"Starter role choices",intro_questions:"Introduction questions",greet_dm:"Also send as a DM"
+};
+const fieldHelp={
+  "afk.nickname_prefix":"Added to a member's nickname while they are away.",
+  "afk.ignored_channel_ids":"AFK notices will not be posted in these channels.",
+  "announcements.channel_id":"All join, leave and ban announcements are sent here.",
+  "autoban.minimum_account_age_hours":"Use 0 to allow accounts of any age.",
+  "automod.allowed_domains":"One trusted domain per row, such as example.com.",
+  "automod.blocked_domains":"One blocked domain per row, such as spam.example.",
+  "automod.max_caps_enabled":"When off, the capital-letter percentage is ignored.",
+  "automod.max_length_enabled":"When off, the message-length limit is ignored.",
+  "automod.instant_timeout_minutes":"Use 0 to disable automatic timeouts.",
+  "levels.server_multiplier":"1 means normal XP, 2 means double XP.",
+  "moderation.case_expiry_days":"How long closed moderation case data is retained.",
+  "starboard.secret":"Hide who added the star reaction.",
+  "tickets.auto_close_hours":"Use 0 to keep inactive tickets open.",
+  "tickets.channel_name":"You can use {user.name} and {user.id}.",
+  "welcome.message":"You can use variables such as {user.mention}, {user.name} and {server.name}.",
+  "welcome.help_followup_hours":"Use 0 to disable the follow-up.",
+  "scheduled_digests.visibility":"Staff keeps digest content in staff-facing channels.",
+  "malware_scanner.fail_closed":"If scanning is unavailable, hold the attachment instead of treating it as safe.",
+  "malware_scanner.exclude_verified_media":"Skip media Discord has already verified.",
+  "bot_controls.prefix":"Leave empty to use the normal prefix. Maximum 8 characters with no spaces."
+};
+const uiFields={
+  "levels.boost_mode":{kind:"choice",choices:[{value:"highest",label:"Use only the highest multiplier"},{value:"multiply",label:"Multiply matching bonuses"}]},
+  "tickets.assignment_mode":{kind:"choice",choices:[{value:"manual",label:"Staff claim tickets manually"},{value:"round_robin",label:"Assign staff in rotation"}]},
+  "scheduled_digests.visibility":{kind:"choice",choices:[{value:"staff",label:"Staff only"},{value:"public",label:"Public channel"}]},
+  "action_log.ignored_category_ids":{kind:"channels"},
+  "auto_delete.rules[].match":{kind:"choice",choices:[{value:"all",label:"All filters must match"},{value:"any",label:"Any filter can match"}]},
+  "auto_delete.rules[].filters[].type":{kind:"choice",label:"What to match",choices:["links","non_links","invites","non_invites","images","non_images","includes_text","exact_text","excludes_text","starts_with","does_not_start_with","ends_with","numbers_only","has_role","does_not_have_role","embeds","bots","humans","mentions","text_only"]},
+  "auto_delete.rules[].filters[].value":{label:"Text or role ID",description:"Only needed for text and role filters."},
+  "auto_message.messages[].first_at":{kind:"datetime",label:"First send time"},
+  "auto_purge.rules[].first_at":{kind:"datetime",label:"First cleanup time"},
+  "auto_purge.rules[].match":{kind:"choice",choices:[{value:"all",label:"All filters must match"},{value:"any",label:"Any filter can match"}]},
+  "auto_purge.rules[].filters[].type":{kind:"choice",label:"What to match",choices:["links","non_links","invites","non_invites","images","non_images","includes_text","exact_text","excludes_text","starts_with","does_not_start_with","ends_with","numbers_only","has_role","does_not_have_role","embeds","bots","humans","mentions","text_only"]},
+  "auto_purge.rules[].filters[].value":{label:"Text or role ID",description:"Only needed for text and role filters."},
+  "autoresponder.responders[].match":{kind:"choice",choices:[{value:"contains",label:"Message contains trigger"},{value:"exact",label:"Exact message"},{value:"wildcard",label:"Wildcard pattern"},{value:"starts_with",label:"Message starts with trigger"}]},
+  "forms.forms[].questions[].type":{kind:"choice",choices:[{value:"short",label:"Short answer"},{value:"paragraph",label:"Long answer"},{value:"multiple_choice",label:"One choice"},{value:"checkbox",label:"Multiple choices"}]},
+  "youtube.subscriptions[].youtube_channel_id":{kind:"text",label:"YouTube channel ID",description:"The ID starts with UC; this is not a Discord channel."},
+  "giveaways.giveaways[].ends_at":{kind:"datetime",label:"Ends at"},
+  "moderation.autopunish[].action":{kind:"choice",choices:["warn","timeout","kick","ban"]},
+  "reaction_roles.menus[].mode":{kind:"choice",choices:[{value:"toggle",label:"Add on select, remove on unselect"},{value:"add_only",label:"Only add roles"},{value:"remove",label:"Only remove roles"}]},
+  "tickets.panels[].intake_fields[].style":{kind:"choice",choices:[{value:"short",label:"Short answer"},{value:"paragraph",label:"Long answer"}]},
+  "tickets.panels[].routing_rules[].operator":{kind:"choice",choices:["contains","equals","starts_with"]},
+  "tickets.intake_fields[].style":{kind:"choice",choices:[{value:"short",label:"Short answer"},{value:"paragraph",label:"Long answer"}]},
+  "tickets.routing_rules[].operator":{kind:"choice",choices:["contains","equals","starts_with"]},
+  "welcome.embed.image_url":{kind:"url",label:"Large image URL"},
+  "welcome.embed.thumbnail_url":{kind:"url",label:"Thumbnail URL"},
+  "scheduled_digests.enabled_cadences[]":{kind:"choice",choices:["daily","weekly"]},
+  "scheduled_digests.sections[]":{kind:"choice",choices:["growth","moderation","engagement","highlights","tickets","feeds","scheduled_messages"]},
+  "incident_center.sources[]":{kind:"choice",choices:["malware","automod","rules","assistant","moderation","ticket","feed"]}
+};
+const structuredUi={
+  "auto_delete.rules":{item:"Deletion rule",add:"Add deletion rule",empty:"No deletion rules yet. Messages will not be deleted automatically."},
+  "auto_delete.rules[].filters":{item:"Filter",add:"Add filter",empty:"No filters yet."},
+  "auto_message.messages":{item:"Scheduled message",add:"Add scheduled message",empty:"No scheduled messages yet."},
+  "auto_purge.rules":{item:"Cleanup schedule",add:"Add cleanup schedule",empty:"No cleanup schedules yet."},
+  "auto_purge.rules[].filters":{item:"Filter",add:"Add filter",empty:"No filters yet."},
+  "autoban.username_contains":{item:"Name fragment",add:"Add name fragment"},"autoban.username_exact":{item:"Exact username",add:"Add exact username"},"autoban.username_wildcards":{item:"Username pattern",add:"Add username pattern"},
+  "automod.banned_phrases":{item:"Blocked phrase",add:"Add blocked phrase"},"automod.allowed_domains":{item:"Trusted domain",add:"Add trusted domain"},"automod.blocked_domains":{item:"Blocked domain",add:"Add blocked domain"},
+  "autoresponder.responders":{item:"Automatic reply",add:"Add automatic reply",empty:"No automatic replies yet. Add one to choose its trigger and response."},
+  "autoresponder.responders[].reactions":{item:"Reaction",add:"Add reaction"},
+  "autoroles.join_roles":{item:"Join role",add:"Add join role"},"autoroles.ranks":{item:"Self-assignable rank",add:"Add rank"},
+  "custom_commands.commands":{item:"Custom command",add:"Add custom command"},
+  "forms.forms":{item:"Form",add:"Add form"},"forms.forms[].questions":{item:"Question",add:"Add question"},"forms.forms[].questions[].options":{item:"Answer option",add:"Add answer option"},"forms.forms[].reactions":{item:"Reaction",add:"Add reaction"},
+  "fun.disabled_commands":{item:"Disabled command",add:"Disable another command"},"giveaways.giveaways":{item:"Giveaway",add:"Add giveaway"},
+  "kick.subscriptions":{item:"Kick channel",add:"Add Kick channel"},"reddit.subscriptions":{item:"Subreddit",add:"Add subreddit"},"tiktok.subscriptions":{item:"TikTok feed",add:"Add TikTok feed"},"twitch.subscriptions":{item:"Twitch channel",add:"Add Twitch channel"},"youtube.subscriptions":{item:"YouTube channel",add:"Add YouTube channel"},
+  "levels.reward_roles":{item:"Level reward",add:"Add level reward"},"levels.channel_multipliers":{keyLabel:"Channel",keyKind:"channel",add:"Add channel multiplier",empty:"No channel-specific XP multipliers."},
+  "embedder.embeds":{item:"Managed embed",add:"Add embed"},"partnerships.items":{item:"Partner spotlight",add:"Add partner"},"partnerships.items[].fields":{item:"Embed field",add:"Add embed field"},
+  "moderation.autopunish":{item:"Automatic punishment",add:"Add punishment"},"moderation.custom_responses":{keyLabel:"Action name",add:"Add custom response",empty:"No custom moderation responses."},
+  "reaction_roles.menus":{item:"Role menu",add:"Add role menu"},"reaction_roles.menus[].items":{item:"Role choice",add:"Add role choice"},
+  "slowmode.channels":{item:"Slowmode channel",add:"Add channel"},
+  "tickets.panels":{item:"Ticket panel",add:"Add ticket panel"},"tickets.panels[].intake_fields":{item:"Panel question",add:"Add panel question"},"tickets.panels[].routing_rules":{item:"Panel routing rule",add:"Add panel routing rule"},"tickets.intake_fields":{item:"Default question",add:"Add default question"},"tickets.routing_rules":{item:"Default routing rule",add:"Add default routing rule"},
+  "voice_text.bindings":{item:"Voice/text link",add:"Add channel link"},"welcome.role_choices":{item:"Starter role",add:"Add starter role"},"welcome.intro_questions":{item:"Introduction question",add:"Add question"},
+  "action_log.ignored_user_ids":{item:"User ID",add:"Add user ID"},"server_management.ignored_user_ids":{item:"User ID",add:"Add user ID"},"bot_controls.disabled_commands":{item:"Disabled command",add:"Disable another command"},
+  "scheduled_digests.enabled_cadences":{item:"Schedule",add:"Add schedule"},"scheduled_digests.sections":{item:"Digest section",add:"Add section"},"incident_center.sources":{item:"Incident source",add:"Add source"}
+};
 const structuredTemplates={
-  "auto_delete.rules":{enabled:true,channel_id:"",match:"all",delay_seconds:0,filters:[{kind:"includes_text",value:""}]},
-  "auto_delete.rules[].filters":{kind:"includes_text",value:""},
+  "auto_delete.rules":{enabled:true,channel_id:"",match:"all",delay_seconds:0,filters:[{type:"includes_text",value:""}]},
+  "auto_delete.rules[].filters":{type:"includes_text",value:""},
   "auto_message.messages":{enabled:true,channel_id:"",content:"",first_at:0,interval_seconds:3600},
-  "auto_purge.rules":{enabled:true,channel_id:"",first_at:0,interval_seconds:3600,maximum:100,match:"all",filters:[{kind:"includes_text",value:""}]},
-  "auto_purge.rules[].filters":{kind:"includes_text",value:""},
+  "auto_purge.rules":{enabled:true,channel_id:"",first_at:0,interval_seconds:3600,maximum:100,match:"all",filters:[{type:"includes_text",value:""}]},
+  "auto_purge.rules[].filters":{type:"includes_text",value:""},
   "autoresponder.responders":{trigger:"",match:"contains",response:"",reactions:[],allowed_role_ids:[],ignored_role_ids:[],allowed_channel_ids:[],ignored_channel_ids:[]},
+  "autoresponder.responders[].reactions":"👍",
+  "autoban.username_contains":"",
+  "autoban.username_exact":"",
+  "autoban.username_wildcards":"",
+  "automod.banned_phrases":"",
+  "automod.allowed_domains":"",
+  "automod.blocked_domains":"",
   "autoroles.join_roles":{role_id:"",delay_seconds:0,remove_after_seconds:0},
   "autoroles.ranks":{name:"",role_id:""},
   "custom_commands.commands":{name:"",description:"",response:"",cooldown_seconds:0,allowed_role_ids:[],allowed_channel_ids:[]},
-  "forms.forms":{enabled:true,slug:"new-form",title:"New form",description:"",members_only:false,submit_channel_id:"",fields:[{id:"question",label:"Question",type:"text",required:true,max_length:500}]},
-  "forms.forms[].fields":{id:"question",label:"Question",type:"text",required:true,placeholder:"",max_length:500,options:[]},
+  "forms.forms":{enabled:true,slug:"new-form",title:"New form",description:"",members_only:false,one_submission:false,cooldown_seconds:0,channel_id:"",create_thread:false,ping_role_ids:[],add_role_ids:[],remove_role_ids:[],reactions:[],anonymous:false,questions:[{id:"question",label:"Question",type:"short",required:true,options:[]}]},
+  "forms.forms[].questions":{id:"question",label:"Question",type:"short",required:true,options:[]},
+  "forms.forms[].questions[].options":"Option",
+  "forms.forms[].reactions":"👍",
+  "fun.disabled_commands":"",
   "giveaways.giveaways":{enabled:true,channel_id:"",title:"Giveaway",description:"",ends_at:0,winners:1,required_role_ids:[]},
   "reddit.subscriptions":{subreddit:"",channel_id:"",message:"New post in r/{subreddit}: **{title}**\n{link}",flair:"",include_nsfw:false},
   "youtube.subscriptions":{youtube_channel_id:"",channel_id:"",message:"**{video.title}**\n{video.link}"},
   "twitch.subscriptions":{username:"",channel_id:"",message:"**{streamer}** is live: {title}\n{link}"},
   "kick.subscriptions":{broadcaster_user_id:"",username:"",channel_id:"",message:"**{streamer}** is live: {title}\n{link}"},
-  "tiktok.subscriptions":{channel_id:"",message:"{caption}\n{link}"},
+  "tiktok.subscriptions":{username:"",channel_id:"",message:"{caption}\n{link}"},
   "levels.reward_roles":{level:1,role_id:""},
   "levels.channel_multipliers.*":1,
-  "embedder.embeds":{id:"new-embed",title:"",description:"",channel_id:"",color:"5865f2",footer:"",image_url:"",thumbnail_url:""},
+  "embedder.embeds":{id:"new-embed",enabled:true,title:"",description:"",channel_id:"",color:"5865f2",footer:"",image_url:"",thumbnail_url:""},
+  "partnerships.items":{id:"new-partnership",enabled:true,name:"Partner name",channel_id:"",title:"",description:"",url:"",color:"5865f2",author_name:"",author_url:"",author_icon_url:"",thumbnail_url:"",image_url:"",footer_text:"",footer_icon_url:"",timestamp:false,fields:[]},
+  "partnerships.items[].fields":{name:"Details",value:"",inline:false},
   "moderation.autopunish":{trigger:"",action:"timeout",minutes:10,reason:""},
   "moderation.custom_responses.*":"",
   "reaction_roles.menus":{id:"default",title:"Choose roles",description:"",placeholder:"Choose your roles",mode:"toggle",max_values:1,items:[{label:"Role",description:"",emoji:"",role_id:""}]},
@@ -429,36 +534,86 @@ const structuredTemplates={
   "welcome.embed":{title:"",description:"",color:"5865f2",footer:"",image_url:"",thumbnail_url:""},
   "welcome.role_choices":{label:"Starter role",description:"",role_id:""},
   "welcome.intro_questions":{id:"intro",label:"Tell us about yourself",required:false,paragraph:true,max_length:200},
+  "action_log.ignored_user_ids":"",
+  "server_management.ignored_user_ids":"",
+  "bot_controls.disabled_commands":"",
+  "scheduled_digests.enabled_cadences":"daily",
+  "scheduled_digests.sections":"growth",
+  "incident_center.sources":"automod",
+  "incident_center.sla_hours":{critical:1,high:4,medium:24,low:72},
   "incident_center.sla_hours.*":24
 };
-const fixedStructuredObjects=new Set(["welcome.embed"]);
 const moduleEditorGroups={
+  afk:[{title:"Away status",description:"Choose how AFK members look and where notices may appear.",keys:["nickname_prefix","enhanced_cards","ignored_channel_ids"]}],
   action_log:[
-    {title:"Global destination",keys:["channel_id"]},
-    {title:"Event coverage",keys:["audit_events","message_events","member_events","moderation_events","voice_events","role_events","channel_events","thread_events","server_events","reaction_events","command_events"]},
-    {title:"Log detail",keys:["include_message_content","include_attachments","include_audit_changes","include_reasons","include_ids","include_timestamps","include_bot_events","include_voice_state_changes","bulk_delete_sample_size","show_account_age","show_avatars"]},
-    {title:"Exclusions",keys:["ignored_channel_ids","ignored_category_ids","ignored_role_ids","ignored_user_ids"]},
+    {title:"Destination",description:"Send every selected event to one private log channel.",keys:["channel_id"]},
+    {title:"Events to record",description:"Turn event families on or off individually.",keys:["audit_events","message_events","member_events","moderation_events","voice_events","role_events","channel_events","thread_events","server_events","reaction_events","command_events"]},
+    {title:"Details to include",description:"Control how much context each log entry contains.",keys:["include_message_content","include_attachments","include_audit_changes","include_reasons","include_ids","include_timestamps","include_bot_events","include_voice_state_changes","bulk_delete_sample_size","show_account_age","show_avatars"]},
+    {title:"Never log",description:"Exclude noisy or sensitive places, roles and users.",keys:["ignored_channel_ids","ignored_category_ids","ignored_role_ids","ignored_user_ids"]},
   ],
+  announcements:[{title:"Announcement channel",keys:["channel_id"]},{title:"Messages",description:"Edit the words used for each server event.",keys:["join_message","leave_message","ban_message"]}],
+  auto_delete:[{title:"Deletion rules",description:"Each rule decides which new messages should be removed.",keys:["rules"]}],
+  auto_message:[{title:"Scheduled messages",description:"Send a message once or repeat it on a schedule.",keys:["messages"]}],
+  auto_purge:[{title:"Cleanup limits",keys:["maximum_per_run"]},{title:"Cleanup schedules",description:"Choose where, when and what owaua may purge.",keys:["rules"]}],
+  autoban:[{title:"Account age",keys:["minimum_account_age_hours","reason"]},{title:"Username matching",description:"New members matching one of these username lists are banned.",keys:["username_contains","username_exact","username_wildcards"]}],
+  automod:[{title:"Reporting and actions",keys:["log_channel_id","delete","warn","custom_response","instant_timeout_minutes","instant_ban"]},{title:"Content rules",keys:["banned_phrases","allowed_domains","blocked_domains","max_caps_enabled","max_caps_percent","max_mentions","max_newlines","max_length_enabled","max_length"]},{title:"Spam rules",keys:["duplicate_window_seconds","rapid_messages","rapid_window_seconds"]},{title:"Where rules apply",keys:["allowed_role_ids","ignored_role_ids","allowed_channel_ids","ignored_channel_ids"]}],
+  autoresponder:[{title:"Replies",description:"Add a trigger, choose how it matches and write the response or reactions.",keys:["responders"]}],
+  autoroles:[{title:"Roles on join",keys:["join_roles"]},{title:"Self-assignable ranks",keys:["one_rank_only","ranks"]}],
+  custom_commands:[{title:"Commands",description:"Create server commands with their own reply, access and cooldown.",keys:["commands"]}],
+  economy:[{title:"Rewards",keys:["daily_base","work_min","work_max","battle_pass_bonus_percent"]},{title:"Cards and battles",keys:["cards_enabled","battle_stamina_max"]}],
+  forms:[{title:"Public address",keys:["public_base_url"]},{title:"Forms",description:"Build each form and its questions here.",keys:["forms"]}],
+  fun:[{title:"Command access",description:"Leave allowed channels empty to permit fun commands everywhere.",keys:["allowed_channel_ids","disabled_commands"]}],
+  giveaways:[{title:"Giveaways",description:"Configure the destination, end time, winners and eligibility for each giveaway.",keys:["giveaways"]}],
+  highlights:[{title:"Ignored channels",keys:["ignored_channel_ids"]}],
+  kick:[{title:"Update timing",keys:["poll_minutes"]},{title:"Kick subscriptions",keys:["subscriptions"]}],
+  levels:[{title:"XP earning",keys:["xp_min","xp_max","cooldown_seconds","server_multiplier","boost_mode"]},{title:"Level-up message",keys:["level_up_channel_id","level_up_message"]},{title:"Rewards and channel bonuses",keys:["reward_roles","channel_multipliers"]},{title:"Where XP applies",keys:["allowed_role_ids","ignored_role_ids","allowed_channel_ids","ignored_channel_ids"]}],
+  embedder:[{title:"Managed embeds",description:"Draft embeds and choose the channel where each one belongs.",keys:["embeds"]}],
+  partnerships:[{title:"Default destination",keys:["channel_id"]},{title:"Partner spotlights",description:"Create complete partner embeds. Publication tracking is managed by owaua automatically.",keys:["items"]}],
+  moderation:[{title:"Staff and logs",keys:["moderator_role_ids","protected_role_ids","log_channel_id"]},{title:"Member communication and appeals",keys:["dm_actions","appeals_enabled","appeal_url","appeal_channel_id"]},{title:"Case data",keys:["case_expiry_days","member_notes_enabled","evidence_links_enabled","preserve_ban_messages","remove_roles_while_muted"]},{title:"Automatic actions and wording",keys:["autopunish","custom_responses"]}],
+  incident_center:[{title:"Staff routing",keys:["staff_role_ids","escalation_role_ids","default_assignee_id","notify_channel_id","critical_ping_role_id"]},{title:"Queue sources and response targets",keys:["sources","sla_hours"]}],
+  malware_scanner:[{title:"Scanning behavior",keys:["block_users","exclude_verified_media","fail_closed","max_file_mb"]},{title:"Notifications",keys:["log_channel_id","notify_channel"]}],
+  reaction_roles:[{title:"Menu behavior",keys:["persistent_components","remove_on_unselect","require_rules_ack","maximum_roles_per_menu"]},{title:"Role menus",keys:["menus"]}],
+  reddit:[{title:"Update timing",keys:["poll_minutes"]},{title:"Subreddits",keys:["subscriptions"]}],
+  reminders:[{title:"Member limit",keys:["maximum_per_user"]}],
+  slowmode:[{title:"Channel slowmode",description:"Set a message delay for each channel.",keys:["channels"]}],
+  starboard:[{title:"Starboard destination",keys:["channel_id"]},{title:"Star rules",keys:["emoji","threshold","secret","ignored_channel_ids"]}],
+  tags:[{title:"Who can create tags",description:"Leave empty to allow members with normal command access.",keys:["creator_role_ids"]}],
+  tickets:[{title:"Channels and staff",keys:["category_id","transcript_channel_id","staff_role_ids"]},{title:"Ticket behavior",keys:["sla_hours","reminder_hours","auto_close_hours","require_intake","allow_member_close","assignment_mode","max_open_per_member","channel_name"]},{title:"Default intake and routing",description:"Used when a panel does not provide its own questions or routes.",keys:["intake_fields","routing_rules"]},{title:"Ticket panels",description:"Each panel can override the default category, staff, intake and routing.",keys:["panels"]}],
+  tiktok:[{title:"Update timing",keys:["poll_minutes"]},{title:"TikTok feeds",keys:["subscriptions"]}],
+  twitch:[{title:"Update timing",keys:["poll_minutes"]},{title:"Twitch channels",keys:["subscriptions"]}],
+  youtube:[{title:"Update timing",keys:["poll_minutes"]},{title:"YouTube channels",keys:["subscriptions"]}],
+  voice_text:[{title:"Linked channels",description:"Grant text-channel access while a member is connected to the paired voice channel.",keys:["bindings"]}],
+  welcome:[{title:"Welcome messages",keys:["channel_id","message","dm_message"]},{title:"Welcome card",keys:["embed","image_enabled","image_text"]},{title:"New-member journey",keys:["journey_enabled","rules_channel_id","rules_ack_role_id","role_choices","intro_questions","starter_channel_ids","help_followup_hours","help_message"]}],
+  scheduled_digests:[{title:"Delivery",keys:["enabled_cadences","daily_channel_id","weekly_channel_id","visibility"]},{title:"Digest content",keys:["sections"]}],
+  server_health:[{title:"Weekly advice",keys:["weekly_enabled","delivery_channel_id","staff_only"]},{title:"Checks to run",keys:["check_permissions","check_logging","check_tickets","check_automod_noise","check_booster_drift"]}],
+  analytics_exports:[{title:"Aggregate exports",description:"Exports contain totals only, not message text or member profiles.",keys:["aggregate_csv_enabled","include_growth","include_moderation","include_engagement","include_feeds"]}],
+  server_management:[{title:"Delegated managers",keys:["manager_role_ids"]},{title:"Excluded targets",keys:["ignored_user_ids","ignored_role_ids","ignored_channel_ids"]}],
+  bot_controls:[{title:"Command style",keys:["prefix","disabled_commands"]},{title:"Where commands work",keys:["allowed_role_ids","ignored_role_ids","allowed_channel_ids","ignored_channel_ids"]}],
 };
+const hiddenModuleFields=new Set(["embedder.published_message_ids","embedder.published_payload_hashes","partnerships.published_message_ids","partnerships.published_revisions"]);
+const hiddenStructuredFields=new Set(["tickets.panels[].message_id","reaction_roles.menus[].message_id"]);
 function cloneTemplate(value){if(value===undefined)return "";return JSON.parse(JSON.stringify(value))}
 function templateFor(path){return cloneTemplate(structuredTemplates[path])}
-function prepareStructured(path,value){const template=structuredTemplates[path];if(fixedStructuredObjects.has(path)&&template&&value&&typeof value==="object"&&!Array.isArray(value))return {...cloneTemplate(template),...value};return value}
-function nodeKind(key,value){if(/_channel_ids$/.test(key))return "channels";if(/_role_ids$/.test(key))return "roles";if(/_channel_id$/.test(key))return "channel";if(/_role_id$/.test(key))return "role";if(Array.isArray(value))return "list";if(value!==null&&typeof value==="object")return "group";if(typeof value==="boolean")return "bool";if(typeof value==="number")return "number";return /message|content|description|response|reason|body|topic|footer/.test(key)?"textarea":"text"}
-function defaultForKind(kind){return kind==="number"?0:kind==="bool"?false:kind==="list"?[]:kind==="group"?{}:kind==="channels"||kind==="roles"?[]:""}
-function kindPicker(kind){const choices={text:"Text",textarea:"Long text",number:"Number",bool:"Yes / no",channel:"Channel",channels:"Channel list",role:"Role",roles:"Role list",list:"List",group:"Field group"};return `<select class="structured-kind" data-change-kind aria-label="Value type">${Object.entries(choices).map(([value,name])=>`<option value="${value}" ${value===kind?'selected':''}>${name}</option>`).join('')}</select>`}
-function structuredResource(value,kind,multiple=false){const items=kind==="channel"?(activeGuild().channels||[]):(activeGuild().roles||[]),selected=new Set((multiple?(Array.isArray(value)?value:[]):[value]).map(String));return `<select class="structured-value" data-structured-value ${multiple?'multiple':''}>${multiple?'':'<option value="">Not set</option>'}${items.map(item=>`<option value="${esc(item.id)}" ${selected.has(String(item.id))?'selected':''}>${kind==="channel"?'#':'@'}${esc(item.name||item.id)}</option>`).join('')}</select>`}
-function structuredScalar(kind,value){if(kind==="channel"||kind==="role")return structuredResource(value,kind);if(kind==="channels"||kind==="roles")return structuredResource(value,kind.slice(0,-1),true);if(kind==="bool")return `<select class="structured-value" data-structured-value><option value="true" ${value?'selected':''}>Yes</option><option value="false" ${!value?'selected':''}>No</option></select>`;if(kind==="number")return `<input class="structured-value" data-structured-value type="number" step="any" value="${esc(value??0)}">`;if(kind==="textarea")return `<textarea class="structured-value" data-structured-value rows="3">${esc(value??'')}</textarea>`;return `<input class="structured-value" data-structured-value type="text" value="${esc(value??'')}">`}
-function structuredObjectField(key,value,path){return `<div class="structured-object-field" data-object-field><input class="structured-object-key" data-object-key aria-label="Field name" value="${esc(key)}">${structuredNode(value,path,key)}<button class="structured-remove" data-remove-structured type="button">Remove field</button></div>`}
-function structuredNode(rawValue,path,key="",forcedKind=""){const value=prepareStructured(path,rawValue),kind=forcedKind||nodeKind(key,value);let body;if(kind==="list"){const items=Array.isArray(value)?value:[];body=`<div class="structured-children" data-list-items>${items.map(item=>`<div class="structured-item" data-list-item>${structuredNode(item,`${path}[]`,"item")}<button class="structured-remove" data-remove-structured type="button">Remove item</button></div>`).join('')||'<div class="structured-empty">No items yet.</div>'}</div><div class="structured-actions"><button type="button" data-add-list>Add item</button></div>`}else if(kind==="group"){const entries=value&&typeof value==="object"&&!Array.isArray(value)?Object.entries(value):[];body=`<div class="structured-children" data-object-fields>${entries.map(([name,item])=>structuredObjectField(name,item,`${path}.${name}`)).join('')||'<div class="structured-empty">No fields yet.</div>'}</div><div class="structured-actions"><button type="button" data-add-field>Add field</button></div>`}else body=structuredScalar(kind,value);return `<div class="structured-node" data-structured-node data-kind="${esc(kind)}" data-path="${esc(path)}"><div class="structured-head"><strong>${esc(key?label(key):label(path.split('.').pop()||'value'))}</strong>${kindPicker(kind)}</div><div class="structured-body">${body}</div></div>`}
-function structuredEditor(module,key,value){const path=`${module}.${key}`;return `<div class="structured-editor" data-structured-key="${esc(key)}">${structuredNode(value,path,key)}</div>`}
-function readStructuredNode(node){const kind=node.dataset.kind,body=node.querySelector(':scope > .structured-body');if(kind==="list")return [...body.querySelectorAll(':scope > [data-list-items] > [data-list-item]')].map(item=>readStructuredNode(item.querySelector(':scope > [data-structured-node]')));if(kind==="group")return Object.fromEntries([...body.querySelectorAll(':scope > [data-object-fields] > [data-object-field]')].map(field=>{const key=field.querySelector(':scope > [data-object-key]').value.trim();if(!key)throw Error('Every structured field needs a name.');return [key,readStructuredNode(field.querySelector(':scope > [data-structured-node]'))]}));const control=body.querySelector(':scope > [data-structured-value]');if(!control)return defaultForKind(kind);if(kind==="number"){const number=Number(control.value);if(!Number.isFinite(number))throw Error('A structured number is invalid.');return number}if(kind==="bool")return control.value==="true";if(kind==="channels"||kind==="roles")return [...control.selectedOptions].map(item=>item.value);return control.value}
-function nestedResource(value,kind,multiple=false){const items=kind==="channel"?(activeGuild().channels||[]):(activeGuild().roles||[]),selected=new Set((multiple?(Array.isArray(value)?value:[]):[value]).map(String));return `<select data-subtype="${multiple?'strings':'string'}" ${multiple?'multiple':''}>${multiple?'':'<option value="">Not set</option>'}${items.map(item=>`<option value="${esc(item.id)}" ${selected.has(String(item.id))?'selected':''}>${kind==="channel"?'#':'@'}${esc(item.name||item.id)}</option>`).join('')}</select>`}
-function nestedInput(field,value){if(field.type==="role")return nestedResource(value,"role");if(field.type==="roles")return nestedResource(value,"role",true);if(field.type==="channel")return nestedResource(value,"channel");if(field.type==="choice")return `<select data-subtype="string">${field.options.map(item=>`<option value="${esc(item)}" ${String(value)===item?'selected':''}>${esc(label(item))}</option>`).join('')}</select>`;if(field.type==="bool")return `<select data-subtype="bool"><option value="true" ${value?'selected':''}>Yes</option><option value="false" ${!value?'selected':''}>No</option></select>`;if(field.type==="number")return `<input data-subtype="number" type="number" step="1" value="${esc(value??field.default)}">`;if(field.type==="textarea")return `<textarea data-subtype="string" rows="3">${esc(value??field.default)}</textarea>`;return `<input data-subtype="string" type="${field.type==='url'?'url':'text'}" value="${esc(value??field.default)}">`}
+function templateForNode(path){const direct=structuredTemplates[path];if(direct!==undefined)return cloneTemplate(direct);if(path.endsWith("[]")){const parent=structuredTemplates[path.slice(0,-2)];if(parent!==undefined)return cloneTemplate(parent)}return undefined}
+function objectTemplateFor(path){const template=templateForNode(path);return template&&typeof template==="object"&&!Array.isArray(template)?template:null}
+function fieldMeta(path,key="",value=null){const configured=uiFields[path]||{},name=configured.label||fieldLabels[key]||label(key||path.split('.').pop()?.replaceAll('[]','')||'Setting');return {...configured,label:name,description:configured.description||fieldHelp[path]||""}}
+function prepareStructured(path,value){let prepared=value;if(path==="forms.forms[]"&&prepared&&typeof prepared==="object"&&!Array.isArray(prepared)){prepared={...prepared};if(!Array.isArray(prepared.questions)&&Array.isArray(prepared.fields))prepared.questions=prepared.fields;if(!prepared.channel_id&&prepared.submit_channel_id)prepared.channel_id=prepared.submit_channel_id;delete prepared.fields;delete prepared.submit_channel_id}const template=objectTemplateFor(path);if(template&&prepared&&typeof prepared==="object"&&!Array.isArray(prepared))return {...template,...prepared};return prepared}
+function nodeKind(key,value,path){const configured=fieldMeta(path,key,value).kind;if(configured)return configured;if(/_channel_ids$/.test(key))return "channels";if(/_role_ids$/.test(key))return "roles";if(/(^|_)category_id$/.test(key))return "category";if(/(^|_)voice_channel_id$/.test(key))return "voice";if(/(^|_)text_channel_id$/.test(key))return "text_channel";if(/(^|_)channel_id$/.test(key))return "channel";if(/(^|_)role_id$/.test(key))return "role";if(Array.isArray(value))return "list";if(value!==null&&typeof value==="object")return "group";if(typeof value==="boolean")return "bool";if(typeof value==="number")return "number";if(/_url$|^url$/.test(key))return "url";return /message|content|description|response|reason|body|topic|footer/.test(key)?"textarea":"text"}
+function structuredResource(value,kind,multiple=false){const items=resourceItems(kind),selected=new Set((multiple?(Array.isArray(value)?value:[]):[value]).map(String)),prefix=kind==="role"?'@':'#',name=resourceName(kind);if(multiple)return `<div class="resource-checklist structured-value" data-structured-value>${items.length?items.map(item=>`<label class="resource-option"><input type="checkbox" value="${esc(item.id)}" ${selected.has(String(item.id))?'checked':''}><span>${prefix}${esc(item.name||item.id)}</span></label>`).join(''):`<span class="muted">No ${name}s are available.</span>`}</div>`;return `<select class="structured-value" data-structured-value><option value="">Choose a ${name}</option>${items.map(item=>`<option value="${esc(item.id)}" ${selected.has(String(item.id))?'selected':''}>${prefix}${esc(item.name||item.id)}</option>`).join('')}</select>`}
+function dateTimeValue(value){if(!Number(value))return "";const date=new Date(Number(value)*1000),offset=date.getTimezoneOffset()*60000;return new Date(date.getTime()-offset).toISOString().slice(0,16)}
+function structuredScalar(kind,value,path,key){const meta=fieldMeta(path,key,value);if(["channel","category","voice","text_channel","role"].includes(kind))return structuredResource(value,kind);if(kind==="channels"||kind==="roles")return structuredResource(value,kind.slice(0,-1),true);if(kind==="choice")return `<select class="structured-value" data-structured-value>${(meta.choices||[]).map(item=>{const raw=typeof item==="object"?item.value:item,name=typeof item==="object"?item.label:label(item);return `<option value="${esc(raw)}" ${String(value)===String(raw)?'selected':''}>${esc(name)}</option>`}).join('')}</select>`;if(kind==="bool")return `<span class="check-control"><input data-structured-value type="checkbox" ${value?'checked':''}><span></span></span>`;if(kind==="number")return `<input class="structured-value" data-structured-value type="number" step="any" value="${esc(value??0)}">`;if(kind==="datetime")return `<input class="structured-value" data-structured-value type="datetime-local" value="${esc(dateTimeValue(value))}">`;if(kind==="textarea")return `<textarea class="structured-value" data-structured-value rows="3">${esc(value??'')}</textarea>`;return `<input class="structured-value" data-structured-value type="${kind==='url'?'url':'text'}" value="${esc(value??'')}">`}
+function dynamicObjectKey(path,key){const schema=structuredUi[path]||{},kind=schema.keyKind||"text",aria=schema.keyLabel||"Setting name";if(kind==="channel"){const selected=String(key),items=activeGuild().channels||[];return `<select class="structured-object-key" data-object-key aria-label="${esc(aria)}"><option value="">Choose a channel</option>${items.map(item=>`<option value="${esc(item.id)}" ${String(item.id)===selected?'selected':''}>#${esc(item.name||item.id)}</option>`).join('')}</select>`}return `<input class="structured-object-key" data-object-key aria-label="${esc(aria)}" placeholder="${esc(aria)}" value="${esc(key)}">`}
+function structuredObjectField(key,value,path,{fixed=false,parentPath=""}={}){if(hiddenStructuredFields.has(path))return `<div hidden data-object-field data-fixed-key="${esc(key)}" data-hidden-json="${esc(JSON.stringify(value))}"></div>`;if(fixed)return `<div class="structured-object-field" data-object-field data-fixed-key="${esc(key)}">${structuredNode(value,path,key)}</div>`;return `<div class="structured-object-field dynamic" data-object-field>${dynamicObjectKey(parentPath,key)}${structuredNode(value,path,key)}<button class="structured-remove" data-remove-structured type="button">Remove</button></div>`}
+function structuredNode(rawValue,path,key="",showHeading=true){const value=prepareStructured(path,rawValue),kind=nodeKind(key,value,path),meta=fieldMeta(path,key,value);let body;if(kind==="list"){const items=Array.isArray(value)?value:[],schema=structuredUi[path]||{},itemName=schema.item||label(key||"item"),empty=schema.empty||`No ${itemName.toLowerCase()}s yet.`;body=`<div class="structured-children" data-list-items>${items.map((item,index)=>`<article class="structured-item" data-list-item><header class="structured-item-header"><strong>${esc(itemName)} ${index+1}</strong><button class="structured-remove" data-remove-structured type="button">Remove</button></header>${structuredNode(item,`${path}[]`,itemName,false)}</article>`).join('')||`<div class="structured-empty">${esc(empty)}</div>`}</div><div class="structured-actions"><button class="secondary" type="button" data-add-list>${esc(schema.add||`Add ${itemName.toLowerCase()}`)}</button></div>`}else if(kind==="group"){const template=objectTemplateFor(path),object=value&&typeof value==="object"&&!Array.isArray(value)?value:{},known=template?Object.keys(template):[],extras=Object.keys(object).filter(name=>!known.includes(name)),entries=[...known,...extras],schema=structuredUi[path]||{};body=`<div class="structured-children" data-object-fields>${entries.map(name=>structuredObjectField(name,object[name],`${path}.${name}`,{fixed:known.includes(name),parentPath:path})).join('')||`<div class="structured-empty">${esc(schema.empty||'Nothing has been added yet.')}</div>`}</div>${template?'':`<div class="structured-actions"><button class="secondary" type="button" data-add-field>${esc(schema.add||'Add setting')}</button></div>`}`}else body=structuredScalar(kind,value,path,key);const heading=showHeading?`<div class="structured-head"><strong>${esc(meta.label)}</strong>${meta.description?`<small>${esc(meta.description)}</small>`:''}</div>`:"";return `<div class="structured-node" data-structured-node data-kind="${esc(kind)}" data-path="${esc(path)}">${heading}<div class="structured-body">${body}</div></div>`}
+function structuredEditor(module,key,value){const path=`${module}.${key}`;return `<div class="structured-editor" data-structured-key="${esc(key)}">${structuredNode(value,path,key,false)}</div>`}
+function readStructuredNode(node){const kind=node.dataset.kind,body=node.querySelector(':scope > .structured-body');if(kind==="list")return [...body.querySelectorAll(':scope > [data-list-items] > [data-list-item]')].map(item=>readStructuredNode(item.querySelector(':scope > [data-structured-node]')));if(kind==="group")return Object.fromEntries([...body.querySelectorAll(':scope > [data-object-fields] > [data-object-field]')].map(field=>{const key=field.dataset.fixedKey||field.querySelector(':scope > [data-object-key]')?.value.trim();if(!key)throw Error('Choose or name every setting before saving.');if(field.dataset.hiddenJson!==undefined)return [key,JSON.parse(field.dataset.hiddenJson)];return [key,readStructuredNode(field.querySelector(':scope > [data-structured-node]'))]}));const control=body.querySelector('[data-structured-value]');if(!control)return kind==="number"||kind==="datetime"?0:kind==="bool"?false:kind==="channels"||kind==="roles"?[]:"";if(kind==="number"){const number=Number(control.value);if(!Number.isFinite(number))throw Error('Enter a valid number.');return number}if(kind==="datetime"){if(!control.value)return 0;const timestamp=Math.floor(new Date(control.value).getTime()/1000);if(!Number.isFinite(timestamp))throw Error('Choose a valid date and time.');return timestamp}if(kind==="bool")return control.checked;if(kind==="channels"||kind==="roles")return [...control.querySelectorAll('input:checked')].map(item=>item.value);return control.value}
+function nestedResource(value,kind,multiple=false){const items=resourceItems(kind),selected=new Set((multiple?(Array.isArray(value)?value:[]):[value]).map(String)),prefix=kind==="role"?'@':'#',name=resourceName(kind);if(multiple)return `<div class="resource-checklist" data-subtype="strings">${items.length?items.map(item=>`<label class="resource-option"><input type="checkbox" value="${esc(item.id)}" ${selected.has(String(item.id))?'checked':''}><span>${prefix}${esc(item.name||item.id)}</span></label>`).join(''):`<span class="muted">No ${name}s are available.</span>`}</div>`;return `<select data-subtype="string"><option value="">Choose a ${name}</option>${items.map(item=>`<option value="${esc(item.id)}" ${selected.has(String(item.id))?'selected':''}>${prefix}${esc(item.name||item.id)}</option>`).join('')}</select>`}
+function nestedInput(field,value){if(field.type==="role")return nestedResource(value,"role");if(field.type==="roles")return nestedResource(value,"role",true);if(["channel","category","voice","text_channel"].includes(field.type))return nestedResource(value,field.type);if(field.type==="choice")return `<select data-subtype="string">${field.options.map(item=>`<option value="${esc(item)}" ${String(value)===item?'selected':''}>${esc(label(item))}</option>`).join('')}</select>`;if(field.type==="bool")return `<span class="check-control"><input data-subtype="bool" type="checkbox" ${value?'checked':''}><span></span></span>`;if(field.type==="number")return `<input data-subtype="number" type="number" step="1" value="${esc(value??field.default)}">`;if(field.type==="textarea")return `<textarea data-subtype="string" rows="3">${esc(value??field.default)}</textarea>`;return `<input data-subtype="string" type="${field.type==='url'?'url':'text'}" value="${esc(value??field.default)}">`}
 function collectionRow(key,item={}){const schema=collectionSchemas[key],simpleValue=item&&typeof item==="object"?(item.value??schema.fields[0].default):item,value=schema.simple?{value:simpleValue}:item;return `<div class="collection-row" data-collection-row>${schema.fields.map(field=>`<label><span>${esc(field.label)}</span><span data-subkey="${esc(field.key)}">${nestedInput(field,value?.[field.key]??field.default)}</span></label>`).join('')}<button class="remove-row" type="button" aria-label="Remove row">Remove</button></div>`}
 function collectionEditor(key,value){const schema=collectionSchemas[key];let rows;if(schema.dictionary)rows=Object.entries(value&&typeof value==="object"&&!Array.isArray(value)?value:{}).map(([event,channel_id])=>({event,channel_id}));else rows=Array.isArray(value)?value:[];return `<div class="collection" data-collection="${esc(key)}">${rows.map(item=>collectionRow(key,item)).join('')}<button class="secondary add-row" data-add-row="${esc(key)}" type="button">Add ${esc(label(key).replace(/s$/,''))}</button></div>`}
-function boosterField(key,value){const schema=collectionSchemas[key],complex=!!schema;if(complex)return `<label class="field full"><span>${esc(label(key))}</span>${collectionEditor(key,value)}<small>${esc(structuredHelp[key]||'Add, remove and edit each row with the controls below.')}</small></label>`;const full=Array.isArray(value)||key.includes("message")||key.includes("addon");let control;if(key==="private_channel_type")control=choiceInput(key,value,["text","voice","both"]);else if(key==="private_channel_category_id")control=resourceInput(key,value,"channel");else control=inputFor(key,value);return `<label class="field ${full?'full':''}"><span>${esc(label(key))}</span>${control}${structuredHelp[key]?`<small>${esc(structuredHelp[key])}</small>`:''}</label>`}
+function boosterField(key,value){const schema=collectionSchemas[key],complex=!!schema;if(complex)return `<label class="field full"><span>${esc(label(key))}</span>${collectionEditor(key,value)}<small>${esc(structuredHelp[key]||'Add, remove and edit each row with the controls below.')}</small></label>`;const full=Array.isArray(value)||key.includes("message")||key.includes("addon");let control;if(key==="private_channel_type")control=choiceInput(key,value,["text","voice","both"]);else if(key==="private_channel_category_id")control=resourceInput(key,value,"category");else control=inputFor(key,value);return `<label class="field ${full?'full':''}"><span>${esc(label(key))}</span>${control}${structuredHelp[key]?`<small>${esc(structuredHelp[key])}</small>`:''}</label>`}
 function renderBoosterSettings(){const config=configFor("boosters"),values=config.settings||{};q("#booster-enabled").checked=!!config.enabled;q("#booster-settings").innerHTML=boosterGroups.map(group=>`<section class="booster-group"><h3>${esc(group.title)}</h3><p>${esc(group.description)}</p><div class="booster-group-fields">${group.keys.map(key=>boosterField(key,values[key])).join('')}</div></section>`).join('')}
-function readNested(row,field){const host=row.querySelector(`[data-subkey="${field.key}"]`),el=host?.querySelector('input,select,textarea');if(!el)return field.default;if(el.dataset.subtype==="strings")return [...el.selectedOptions].map(x=>x.value);if(el.dataset.subtype==="bool")return el.value==="true";if(el.dataset.subtype==="number"){const number=Number(el.value);if(!Number.isFinite(number))throw Error(`${field.label} must be a number.`);return number}return el.value}
+function readNested(row,field){const host=row.querySelector(`[data-subkey="${field.key}"]`),el=host?.querySelector('[data-subtype]');if(!el)return field.default;if(el.dataset.subtype==="strings")return [...el.querySelectorAll('input:checked')].map(x=>x.value);if(el.dataset.subtype==="bool")return el.checked;if(el.dataset.subtype==="number"){const number=Number(el.value);if(!Number.isFinite(number))throw Error(`${field.label} must be a number.`);return number}return el.value}
 function readCollection(host,key){const schema=collectionSchemas[key],items=qaFrom(host,"[data-collection-row]").map(row=>Object.fromEntries(schema.fields.map(field=>[field.key,readNested(row,field)])));if(schema.dictionary)return Object.fromEntries(items.filter(item=>item.event&&item.channel_id).map(item=>[item.event,item.channel_id]));if(schema.simple)return items.map(item=>item.value).filter(value=>String(value).trim()!=="");return items}
 function qaFrom(root,selector){return [...root.querySelectorAll(selector)]}
 function readBoosterSettings(){const values=readFields("#booster-settings");qa("#booster-settings [data-collection]").forEach(host=>{values[host.dataset.collection]=readCollection(host,host.dataset.collection)});return values}
@@ -468,15 +623,15 @@ async function loadBoosters(){const guildId=state.guildId;if(!guildId||!state.gu
 async function saveBoosters(){const guildId=state.guildId;if(!guildId||!state.guildReady){notice("Choose a connected server and wait for it to finish loading.",true);return}let settings;try{settings=readBoosterSettings()}catch(e){notice(e.message||"A Booster Perks setting is invalid.",true);return}const button=q("#booster-save");button.disabled=true;try{const result=await api(`/guild/${encodeURIComponent(guildId)}/module/boosters`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:q("#booster-enabled").checked,settings})});if(guildId!==state.guildId)return;state.configs.set("boosters",result);renderBoosterSettings();render();notice("Every Booster Perks setting was saved.")}catch(e){notice(e.message,true)}finally{button.disabled=state.loading||!state.guildId||!state.guildReady}}
 async function boosterAction(action){const guildId=state.guildId;if(!guildId||!state.guildReady){notice("Choose a connected server and wait for it to finish loading.",true);return}const target=q("#booster-adjust-user").value,button=q(`[data-booster-action="${action}"]`);if(action==="test"&&!target){notice("Choose a server member before sending a test greeting.",true);return}if(button)button.disabled=true;try{const result=await api(`/guild/${encodeURIComponent(guildId)}/boosters/action`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,target_id:target})});notice(result.message||"Booster action queued.");if(guildId===state.guildId)await loadBoosters()}catch(e){notice(e.message,true)}finally{if(button)button.disabled=state.loading||!state.guildId||!state.guildReady}}
 async function adjustBooster(event){event.preventDefault();const guildId=state.guildId,target_id=q("#booster-adjust-user").value,delta=Number(q("#booster-adjust-delta").value);if(!guildId||!state.guildReady){notice("Choose a connected server and wait for it to finish loading.",true);return}if(!target_id||!Number.isInteger(delta)||delta===0){notice("Choose a member and enter a non-zero whole-number correction.",true);return}const button=event.submitter;button.disabled=true;try{await api(`/guild/${encodeURIComponent(guildId)}/boosters/action`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"adjust",target_id,delta})});if(guildId!==state.guildId)return;q("#booster-adjust-delta").value="";notice("Booster count corrected.");await loadBoosters()}catch(e){notice(e.message,true)}finally{button.disabled=state.loading||!state.guildId||!state.guildReady}}
-function inputFor(key,value,meta={}){const kind=meta.kind||"";if(kind==="channel_id"||(!kind&&/_channel_id$/.test(key)))return resourceInput(key,value,"channel");if(kind==="channel_ids"||(!kind&&/_channel_ids$/.test(key)))return resourceInput(key,value,"channel",true);if(kind==="role_id"||(!kind&&/_role_id$/.test(key)))return resourceInput(key,value,"role");if(kind==="role_ids"||(!kind&&/_role_ids$/.test(key)))return resourceInput(key,value,"role",true);if(kind==="choice"||kind==="model")return choiceInput(key,value,meta.choices||[]);if(kind==="boolean"||typeof value==="boolean")return `<select data-key="${esc(key)}" data-type="bool"><option value="true" ${value?'selected':''}>Yes</option><option value="false" ${!value?'selected':''}>No</option></select>`;if(kind==="integer"||typeof value==="number")return `<input data-key="${esc(key)}" data-type="number" type="number" step="${Number.isInteger(value)?'1':'any'}" ${meta.minimum!==undefined?`min="${esc(meta.minimum)}"`:''} ${meta.maximum!==undefined?`max="${esc(meta.maximum)}"`:''} value="${esc(value)}">`;if(kind==="textarea")return `<textarea data-key="${esc(key)}" data-type="string" maxlength="${esc(meta.max_length||4000)}">${esc(value)}</textarea>`;if(value!==null&&typeof value==="object")return structuredEditor("field",key,value);return `<input data-key="${esc(key)}" data-type="string" ${meta.max_length?`maxlength="${esc(meta.max_length)}"`:''} value="${esc(value)}">`}
-function readFields(selector){const values={};qa(`${selector} [data-key]`).forEach(el=>{if(typeof el.checkValidity==="function"&&!el.checkValidity())throw Error(`${label(el.dataset.key)}: ${el.validationMessage}`);const type=el.dataset.type;if(type==="number"){if(el.value===""||!Number.isFinite(Number(el.value)))throw Error(`${label(el.dataset.key)} must be a number.`);values[el.dataset.key]=Number(el.value)}else if(type==="bool")values[el.dataset.key]=el.value==="true";else if(type==="string-list")values[el.dataset.key]=[...el.selectedOptions].map(x=>x.value);else values[el.dataset.key]=el.value});qa(`${selector} [data-structured-key]`).forEach(host=>{const node=host.querySelector(':scope > [data-structured-node]');if(node)values[host.dataset.structuredKey]=readStructuredNode(node)});return values}
-function moduleField(module,key,value){const complex=value!==null&&typeof value==="object"&&!/_channel_ids$|_role_ids$/.test(key),help=structuredHelp[key]||(complex?'Use the controls below to add, remove and type every value. No code or JSON is required.':'');if(complex)return `<section class="field full structured-field"><span>${esc(label(key))}</span>${structuredEditor(module,key,value)}<small>${esc(help)}</small></section>`;return `<label class="field"><span>${esc(label(key))}</span>${inputFor(key,value)}${help?`<small>${esc(help)}</small>`:''}</label>`}
-function groupedModuleFields(module,values){const groups=moduleEditorGroups[module];if(!groups)return Object.entries(values).map(([key,value])=>moduleField(module,key,value)).join("");const seen=new Set;const sections=groups.map(group=>{const fields=group.keys.filter(key=>key in values).map(key=>{seen.add(key);return moduleField(module,key,values[key])}).join("");return fields?`<fieldset class="module-config-group"><legend>${esc(group.title)}</legend>${fields}</fieldset>`:''}).join("");const extra=Object.entries(values).filter(([key])=>!seen.has(key)).map(([key,value])=>moduleField(module,key,value)).join("");return sections+extra}
+function inputFor(key,value,meta={}){const kind=meta.kind||"";if(["channel","category","voice","text_channel"].includes(kind))return resourceInput(key,value,kind);if(kind==="channels"||kind==="roles")return resourceInput(key,value,kind.slice(0,-1),true);if(!kind&&/(^|_)category_id$/.test(key))return resourceInput(key,value,"category");if(!kind&&/(^|_)voice_channel_id$/.test(key))return resourceInput(key,value,"voice");if(!kind&&/(^|_)text_channel_id$/.test(key))return resourceInput(key,value,"text_channel");if(kind==="channel_id"||(!kind&&/(^|_)channel_id$/.test(key)))return resourceInput(key,value,"channel");if(kind==="channel_ids"||(!kind&&/_channel_ids$/.test(key)))return resourceInput(key,value,"channel",true);if(kind==="role_id"||(!kind&&/(^|_)role_id$/.test(key)))return resourceInput(key,value,"role");if(kind==="role_ids"||(!kind&&/_role_ids$/.test(key)))return resourceInput(key,value,"role",true);if(kind==="choice"||kind==="model")return choiceInput(key,value,meta.choices||[]);if(kind==="boolean"||kind==="bool"||typeof value==="boolean")return `<span class="check-control"><input data-key="${esc(key)}" data-type="bool" type="checkbox" ${value?'checked':''}><span></span></span>`;if(kind==="integer"||kind==="number"||typeof value==="number")return `<input data-key="${esc(key)}" data-type="number" type="number" step="${Number.isInteger(value)?'1':'any'}" ${meta.minimum!==undefined?`min="${esc(meta.minimum)}"`:''} ${meta.maximum!==undefined?`max="${esc(meta.maximum)}"`:''} value="${esc(value)}">`;if(kind==="textarea")return `<textarea data-key="${esc(key)}" data-type="string" maxlength="${esc(meta.max_length||4000)}">${esc(value)}</textarea>`;return `<input data-key="${esc(key)}" data-type="string" type="${kind==='url'?'url':'text'}" ${meta.max_length?`maxlength="${esc(meta.max_length)}"`:''} value="${esc(value)}">`}
+function readFields(selector){const values={};qa(`${selector} [data-key]`).forEach(el=>{if(typeof el.checkValidity==="function"&&!el.checkValidity())throw Error(`${label(el.dataset.key)}: ${el.validationMessage}`);const type=el.dataset.type;if(type==="number"){if(el.value===""||!Number.isFinite(Number(el.value)))throw Error(`${label(el.dataset.key)} must be a number.`);values[el.dataset.key]=Number(el.value)}else if(type==="bool")values[el.dataset.key]=el.checked;else if(type==="string-list")values[el.dataset.key]=[...el.querySelectorAll('input:checked')].map(x=>x.value);else values[el.dataset.key]=el.value});qa(`${selector} [data-structured-key]`).forEach(host=>{const node=host.querySelector(':scope > [data-structured-node]');if(node)values[host.dataset.structuredKey]=readStructuredNode(node)});return values}
+function moduleField(module,key,value){const path=`${module}.${key}`,meta=fieldMeta(path,key,value),complex=value!==null&&typeof value==="object"&&!/_channel_ids$|_role_ids$/.test(key),help=meta.description||structuredHelp[key]||"";if(complex)return `<section class="field full structured-field"><span>${esc(meta.label)}</span>${help?`<small>${esc(help)}</small>`:''}${structuredEditor(module,key,value)}</section>`;return `<label class="field"><span>${esc(meta.label)}</span>${inputFor(key,value,meta)}${help?`<small>${esc(help)}</small>`:''}</label>`}
+function groupedModuleFields(module,values){const groups=moduleEditorGroups[module]||[{title:"Settings",keys:Object.keys(values)}],seen=new Set;const sections=groups.map(group=>{const fields=group.keys.filter(key=>key in values&&!hiddenModuleFields.has(`${module}.${key}`)).map(key=>{seen.add(key);return moduleField(module,key,values[key])}).join("");return fields?`<fieldset class="module-config-group"><legend>${esc(group.title)}</legend>${group.description?`<p class="group-help">${esc(group.description)}</p>`:''}${fields}</fieldset>`:''}).join("");const extra=Object.entries(values).filter(([key])=>!seen.has(key)&&!hiddenModuleFields.has(`${module}.${key}`)).map(([key,value])=>moduleField(module,key,value)).join("");return sections+extra}
 function openEditor(id){if(!state.guildId||!state.guildReady||state.loading){notice("Choose a connected server and wait for it to finish loading.",true);return}const m=state.catalog.find(x=>x.id===id),c=configFor(id);if(!m)return;state.editing=id;q("#editor-category").textContent=m.category;q("#editor-title").textContent=m.title;q("#editor-description").textContent=m.description;q("#editor-enabled").checked=!!c.enabled;const values={...m.settings,...c.settings};q("#editor-fields").innerHTML=groupedModuleFields(id,values);q("#editor-dialog").showModal()}
 function renderLanguage(){q("#guild-language").value=state.serverSettings.language||"";q("#language-catalog").innerHTML=state.languageCatalog.map(item=>`<option value="${esc(item.label)}">${esc(item.code)}</option>`).join("")}
 function renderServerSettings(){q("#server-settings").innerHTML=state.serverSchema.filter(field=>field.key!=="language").map(field=>{const value=state.serverSettings[field.key]??field.default;const full=field.kind==="textarea"||field.kind==="channel_ids";return `<label class="field ${full?'full':''}"><span>${esc(field.label||label(field.key))}</span>${inputFor(field.key,value,field)}<small>${esc(field.description||"")}</small></label>`}).join("")}
 async function saveLanguage(event){event.preventDefault();const guildId=state.guildId;if(!guildId||!state.guildReady){notice("Choose a connected server and wait for it to finish loading.",true);return}const language=q("#guild-language").value.trim(),button=q("#language-save");button.disabled=true;try{const result=await api(`/guild/${encodeURIComponent(guildId)}/settings`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({settings:{...state.serverSettings,language}})});if(guildId!==state.guildId)return;resetLocalization();state.serverSettings=result.settings;renderLanguage();renderServerSettings();render();notice(language?`Guild language changed to ${language}. Applying it everywhere…`:"Guild language reset to English.");await applyLocalization()}catch(e){notice(e.message,true)}finally{button.disabled=state.loading||!state.guildId||!state.guildReady}}
-async function saveEditor(){const guildId=state.guildId,moduleId=state.editing;if(!guildId||!state.guildReady||!moduleId){notice("Choose a connected server and wait for it to finish loading.",true);return}let settings;try{settings=readFields("#editor-fields")}catch(e){notice(e.message||"A structured setting is invalid.",true);return}q("#editor-save").disabled=true;try{const result=await api(`/guild/${encodeURIComponent(guildId)}/module/${encodeURIComponent(moduleId)}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:q("#editor-enabled").checked,settings})});if(guildId!==state.guildId)return;state.configs.set(result.module,result);q("#editor-dialog").close();render();notice(`${state.catalog.find(x=>x.id===moduleId)?.title||"Module"} saved.`)}catch(e){notice(e.message,true)}finally{q("#editor-save").disabled=state.loading||!state.guildId||!state.guildReady}}
+async function saveEditor(){const guildId=state.guildId,moduleId=state.editing;if(!guildId||!state.guildReady||!moduleId){notice("Choose a connected server and wait for it to finish loading.",true);return}let settings;try{settings=readFields("#editor-fields")}catch(e){notice(e.message||"A structured setting is invalid.",true);return}if(moduleId==="action_log"&&(settings.include_message_content||settings.include_attachments)&&!confirm("This sends member message text or attachment details into a private Discord log channel. Have members been clearly told, and do you want to continue?"))return;q("#editor-save").disabled=true;try{const result=await api(`/guild/${encodeURIComponent(guildId)}/module/${encodeURIComponent(moduleId)}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:q("#editor-enabled").checked,settings})});if(guildId!==state.guildId)return;state.configs.set(result.module,result);q("#editor-dialog").close();render();notice(`${state.catalog.find(x=>x.id===moduleId)?.title||"Module"} saved.`)}catch(e){notice(e.message,true)}finally{q("#editor-save").disabled=state.loading||!state.guildId||!state.guildReady}}
 async function saveServerSettings(){const guildId=state.guildId;if(!guildId||!state.guildReady){notice("Choose a connected server and wait for it to finish loading.",true);return}let settings;try{settings={...readFields("#server-settings"),language:state.serverSettings.language||""}}catch(e){notice(e.message,true);return}const button=q("#settings-save");button.disabled=true;try{const result=await api(`/guild/${encodeURIComponent(guildId)}/settings`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({settings})});if(guildId!==state.guildId)return;state.serverSettings=result.settings;renderServerSettings();notice("Server settings saved.")}catch(e){notice(e.message,true)}finally{button.disabled=state.loading||!state.guildId||!state.guildReady}}
 function operationTime(value){return value?new Date(Number(value)*1000).toLocaleString():"—"}
 function renderOperations(){
@@ -501,10 +656,9 @@ async function loadGuild(){const guildId=state.guildId,loadId=++state.loadId;res
 async function loadActivity(){const guildId=state.guildId;if(!guildId){q("#activity-list").innerHTML='<div class="empty">Choose a connected server to see activity.</div>';return}const requestId=++state.activityLoadId;q("#activity-list").innerHTML='<div class="empty">Loading activity…</div>';try{const data=await api(`/guild/${encodeURIComponent(guildId)}/activity`);if(requestId!==state.activityLoadId||guildId!==state.guildId)return;q("#activity-list").innerHTML=data.items.length?data.items.map(x=>`<div class="activity-row"><div><strong>${esc(x.action)}</strong><br><small>${esc(x.module||"System")}</small></div><div>${esc(x.actor_id)}</div><div><small>${new Date(x.created*1000).toLocaleString()}</small></div></div>`).join(""):'<div class="empty">No dashboard changes yet.</div>'}catch(e){if(requestId===state.activityLoadId)notice(e.message,true)}}
 async function boot(){setLoading(true,"Loading dashboard…");try{const session=await api("/session");state.csrf=session.csrf;const [catalog,guilds]=await Promise.all([api("/catalog"),api("/guilds")]);state.catalog=catalog.modules;state.serverSchema=catalog.server_settings||[];state.languageCatalog=catalog.languages||[];state.guilds=guilds.guilds;const select=q("#guild-select");select.innerHTML=state.guilds.length?state.guilds.map(g=>`<option value="${esc(g.id)}">${esc(g.name)}</option>`).join(""):'<option value="">No connected servers</option>';state.guildId=select.value;select.onchange=()=>{state.guildId=select.value;loadGuild().catch(e=>notice(e.message,true))};filters();renderLanguage();showView(location.hash.slice(1),{updateHash:false});await loadGuild()}catch(e){setLoading(false,"Dashboard unavailable");notice(e.message,true)}}
 function removeEmpty(children){children.querySelector(':scope > .structured-empty')?.remove()}
-function handleStructuredClick(event){const remove=event.target.closest('[data-remove-structured]');if(remove){const row=remove.closest('[data-list-item],[data-object-field]'),children=row?.parentElement;row?.remove();if(children&&!children.children.length)children.innerHTML='<div class="structured-empty">No items yet.</div>';return}const addList=event.target.closest('[data-add-list]');if(addList){const node=addList.closest('[data-structured-node]'),children=node.querySelector(':scope > .structured-body > [data-list-items]'),path=node.dataset.path,item=templateFor(path);removeEmpty(children);children.insertAdjacentHTML('beforeend',`<div class="structured-item" data-list-item>${structuredNode(item,`${path}[]`,"item")}<button class="structured-remove" data-remove-structured type="button">Remove item</button></div>`);return}const addField=event.target.closest('[data-add-field]');if(addField){const node=addField.closest('[data-structured-node]'),children=node.querySelector(':scope > .structured-body > [data-object-fields]'),path=node.dataset.path,value=templateFor(`${path}.*`);removeEmpty(children);children.insertAdjacentHTML('beforeend',structuredObjectField('',value,`${path}.*`));children.lastElementChild?.querySelector('[data-object-key]')?.focus()}}
-function handleStructuredChange(event){const picker=event.target.closest('[data-change-kind]');if(!picker)return;const node=picker.closest('[data-structured-node]'),path=node.dataset.path,key=node.querySelector(':scope > .structured-head > strong')?.textContent||'value',kind=picker.value;node.outerHTML=structuredNode(defaultForKind(kind),path,key,kind)}
+function handleStructuredClick(event){const remove=event.target.closest('[data-remove-structured]');if(remove){const row=remove.closest('[data-list-item],[data-object-field]'),children=row?.parentElement,node=children?.closest('[data-structured-node]'),path=node?.dataset.path||"",schema=structuredUi[path]||{};row?.remove();if(children&&!children.children.length)children.innerHTML=`<div class="structured-empty">${esc(schema.empty||'Nothing has been added yet.')}</div>`;return}const addList=event.target.closest('[data-add-list]');if(addList){const node=addList.closest('[data-structured-node]'),children=node.querySelector(':scope > .structured-body > [data-list-items]'),path=node.dataset.path,item=templateFor(path),schema=structuredUi[path]||{},itemName=schema.item||label(path.split('.').pop()||'item'),index=children.querySelectorAll(':scope > [data-list-item]').length+1;removeEmpty(children);children.insertAdjacentHTML('beforeend',`<article class="structured-item" data-list-item><header class="structured-item-header"><strong>${esc(itemName)} ${index}</strong><button class="structured-remove" data-remove-structured type="button">Remove</button></header>${structuredNode(item,`${path}[]`,itemName,false)}</article>`);return}const addField=event.target.closest('[data-add-field]');if(addField){const node=addField.closest('[data-structured-node]'),children=node.querySelector(':scope > .structured-body > [data-object-fields]'),path=node.dataset.path,value=templateFor(`${path}.*`);removeEmpty(children);children.insertAdjacentHTML('beforeend',structuredObjectField('',value,`${path}.*`,{parentPath:path}));children.lastElementChild?.querySelector('[data-object-key]')?.focus()}}
 qa(".nav-item").forEach(b=>b.onclick=()=>showView(b.dataset.view));qa("[data-go]").forEach(b=>b.onclick=()=>showView(b.dataset.go));window.addEventListener("hashchange",()=>showView(location.hash.slice(1),{updateHash:false}));q("#module-search").oninput=render;q("#editor-save").onclick=saveEditor;q("#editor-cancel").onclick=()=>q("#editor-dialog").close();q("#settings-save").onclick=saveServerSettings;q("#language-form").onsubmit=saveLanguage;q("#booster-save").onclick=saveBoosters;q("#booster-refresh").onclick=()=>loadBoosters().catch(e=>notice(e.message,true));q("#booster-adjust").onsubmit=adjustBooster;q("#boosters-view").onclick=event=>{const add=event.target.closest("[data-add-row]");if(add){add.insertAdjacentHTML("beforebegin",collectionRow(add.dataset.addRow,{}));return}const remove=event.target.closest(".remove-row");if(remove){remove.closest("[data-collection-row]")?.remove();return}const action=event.target.closest("[data-booster-action]");if(action)boosterAction(action.dataset.boosterAction)};
-q("#editor-fields").onclick=handleStructuredClick;q("#editor-fields").onchange=handleStructuredChange;q("#ai-health-refresh").onclick=()=>loadAIHealth().catch(e=>notice(e.message,true));
+q("#editor-fields").onclick=handleStructuredClick;q("#ai-health-refresh").onclick=()=>loadAIHealth().catch(e=>notice(e.message,true));
 q("#case-create").onsubmit=createCase;q("#digest-config").onsubmit=saveDigest;q("#operations-refresh").onclick=()=>loadOperations().catch(e=>notice(e.message,true));q("#operations-source").onchange=()=>loadOperations().catch(e=>notice(e.message,true));q("#operations-search").oninput=()=>{clearTimeout(q("#operations-search").timer);q("#operations-search").timer=setTimeout(()=>loadOperations().catch(e=>notice(e.message,true)),250)};q("#operations-view").onclick=async event=>{try{const caseStatus=event.target.closest("[data-case-status]");if(caseStatus){await caseAction(caseStatus.dataset.caseId,{action:"update",status:caseStatus.dataset.caseStatus});notice("Case timeline updated.");return}const caseAssign=event.target.closest("[data-case-assign]");if(caseAssign){const assigned_to=window.prompt("Staff Discord ID (blank to unassign):","");if(assigned_to!==null){await caseAction(caseAssign.dataset.caseId,{action:"update",assigned_to:assigned_to.trim()});notice("Case assignment updated.")}return}const caseNote=event.target.closest("[data-case-note]");if(caseNote){const note=window.prompt("Private staff note:","");if(note?.trim()){await caseAction(caseNote.dataset.caseId,{action:"note",note:note.trim()});notice("Private note added.")}return}const incidentStatus=event.target.closest("[data-incident-status]");if(incidentStatus){await incidentAction(incidentStatus.dataset.incidentId,{status:incidentStatus.dataset.incidentStatus});notice("Incident status updated.");return}const incidentAssign=event.target.closest("[data-incident-assign]");if(incidentAssign){const assigned_to=window.prompt("Staff Discord ID (blank to unassign):","");if(assigned_to!==null){await incidentAction(incidentAssign.dataset.incidentId,{assigned_to:assigned_to.trim()});notice("Incident assignment updated.")}}}catch(e){notice(e.message,true)}};boot();
 """
 
@@ -949,6 +1103,7 @@ def attach_dashboard_routes(
         model_values = [
             config.DEFAULT_MODEL,
             config.MODEL_BIG,
+            *(model_id for model_id, _label in config.OPENAI_CHAT_MODELS),
             *(model_id for model_id, _label in config.GROQ_CHAT_MODELS),
         ]
         models = [{"value": "", "label": "Host default"}]
@@ -976,10 +1131,15 @@ def attach_dashboard_routes(
     async def modules_api(request: web.Request) -> web.Response:
         session = require_session(request)
         guild = require_guild(session, request.match_info["guild_id"])
+        modules = db.module_configs(guild["id"])
+        for module in modules:
+            state = diagnostics.module_state(guild["id"], str(module["module"]))
+            module["state"] = state["state"]
+            module["reason"] = state["reason"]
         return web.json_response(
             {
                 "guild": public_guild(guild),
-                "modules": db.module_configs(guild["id"]),
+                "modules": modules,
             }
         )
 
@@ -1021,6 +1181,7 @@ def attach_dashboard_routes(
             "",
             config.DEFAULT_MODEL,
             config.MODEL_BIG,
+            *(model_id for model_id, _label in config.OPENAI_CHAT_MODELS),
             *(model_id for model_id, _label in config.GROQ_CHAT_MODELS),
         }
         requested_model: typing.Any = typing.cast(typing.Any, payload["settings"]).get("model", "")
@@ -1124,6 +1285,9 @@ def attach_dashboard_routes(
             )
         except ValueError as error:
             raise web.HTTPBadRequest(text=str(error)) from None
+        state = diagnostics.module_state(guild["id"], module)
+        result["state"] = state["state"]
+        result["reason"] = state["reason"]
         return web.json_response(result)
 
     async def activity_api(request: web.Request) -> web.Response:
@@ -1525,7 +1689,7 @@ def attach_dashboard_routes(
         description = html.escape(str(form.get("description") or "")[:2000])
         return _page(
             safe_title,
-            f'''<main class="login-shell"><section class="login-card form-card"><div class="brand-mark">S</div><p class="eyebrow">OWAUA FORM</p><h1>{safe_title}</h1><p class="muted">{description}</p><form method="post" action="/forms/{html.escape(guild_id, quote=True)}/{html.escape(str(form.get("slug")), quote=True)}" class="editor-fields public-form"><input type="hidden" name="access_token" value="{html.escape(token_value, quote=True)}">{"".join(fields)}<button type="submit">Submit response</button></form></section></main>''',
+            f'''<main class="login-shell"><section class="login-card form-card"><div class="brand-mark">o</div><p class="eyebrow">OWAUA FORM</p><h1>{safe_title}</h1><p class="muted">{description}</p><form method="post" action="/forms/{html.escape(guild_id, quote=True)}/{html.escape(str(form.get("slug")), quote=True)}" class="editor-fields public-form"><input type="hidden" name="access_token" value="{html.escape(token_value, quote=True)}">{"".join(fields)}<button type="submit">Submit response</button></form></section></main>''',
         )
 
     async def form_get(request: web.Request) -> web.Response:
@@ -1609,7 +1773,7 @@ def attach_dashboard_routes(
         response = web.Response(
             text=_page(
                 "Submitted",
-                '<main class="login-shell"><section class="login-card"><div class="brand-mark">S</div><p class="eyebrow">RESPONSE RECEIVED</p><h1>Thank you.</h1><p class="muted">Your submission was saved and queued for the server team.</p></section></main>',
+                '<main class="login-shell"><section class="login-card"><div class="brand-mark">o</div><p class="eyebrow">RESPONSE RECEIVED</p><h1>Thank you.</h1><p class="muted">Your submission was saved and queued for the server team.</p></section></main>',
             ),
             content_type="text/html",
         )

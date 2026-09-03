@@ -72,6 +72,7 @@ _FATAL_MARKERS = (
     "no celeris api key",
     "no inception",
     "no deepseek api key",
+    "no openai api key",
     "no openrouter api key",
     "no gemini api key",
     "no cerebras api key",
@@ -738,22 +739,34 @@ def _is_deepseek(model: str) -> bool:
     return str(model).strip().lower().startswith("deepseek")
 
 
+def _is_openai(model: str) -> bool:
+    value = str(model).strip().lower()
+    return value.startswith("gpt-") and not value.startswith("openai/")
+
+
 def _openai_messages(system: typing.Any, messages: typing.Any) -> list[typing.Any]:
-    return ([{"role": "system", "content": system}] if system else []) + [
-        {
-            "role": m.get("role", "user"),
-            "content": (
-                " ".join(
-                    typing.cast(typing.Any, p).get("text", "")
-                    for p in m["content"]
-                    if isinstance(p, dict) and typing.cast(typing.Any, p).get("type") == "text"
-                )
-                if isinstance(m.get("content"), list)
-                else str(m.get("content"))
-            ),
-        }
-        for m in messages
-    ]
+    converted: list[typing.Any] = [{"role": "system", "content": system}] if system else []
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            converted.append({"role": message.get("role", "user"), "content": str(content)})
+            continue
+
+        parts: list[dict[str, typing.Any]] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            part_type = part.get("type")
+            if part_type == "text":
+                parts.append({"type": "input_text", "text": str(part.get("text") or "")})
+            elif part_type == "image_url":
+                image_url = part.get("image_url")
+                if isinstance(image_url, dict) and image_url.get("url"):
+                    parts.append({"type": "input_image", "image_url": image_url["url"]})
+                elif isinstance(image_url, str) and image_url:
+                    parts.append({"type": "input_image", "image_url": image_url})
+        converted.append({"role": message.get("role", "user"), "content": parts})
+    return converted
 
 
 def _post_json(
@@ -778,6 +791,117 @@ def _post_json(
         raise RuntimeError(f"{provider} returned a malformed response") from None
     except (TimeoutError, urllib.error.URLError) as e:
         raise RuntimeError(f"{provider} request failed (timeout)") from e
+
+
+def _response_text(payload: typing.Any, provider: str) -> str:
+    """Extract visible text from an OpenAI Responses API payload."""
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{provider} returned a malformed response")
+    error = typing.cast(typing.Any, payload).get("error")
+    if error:
+        if isinstance(error, dict):
+            message = error.get("message") or error.get("code") or json.dumps(error)[:200]
+            code = error.get("code") or error.get("type") or "error"
+            raise RuntimeError(f"{provider} request failed ({code}: {message})")
+        raise RuntimeError(f"{provider} request failed ({error})")
+    texts: list[str] = []
+    refusals: list[str] = []
+    for item in typing.cast(typing.Iterable[typing.Any], payload.get("output") or []):
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue
+        for part in typing.cast(typing.Iterable[typing.Any], item.get("content") or []):
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "output_text":
+                texts.append(str(part.get("text") or ""))
+            elif part.get("type") == "refusal":
+                refusals.append(str(part.get("refusal") or part.get("text") or ""))
+    text = "".join(texts).strip()
+    if text:
+        return text
+    refusal = " ".join(part for part in refusals if part).strip()
+    if refusal:
+        return refusal
+    raise RuntimeError(f"{provider}: empty content")
+
+
+def _response_sources(payload: typing.Any) -> list[dict[str, str]]:
+    """Extract unique URL citations from a Responses API payload."""
+    sources: list[dict[str, str]] = []
+    seen: set[str] = set()
+    if not isinstance(payload, dict):
+        return sources
+    for item in typing.cast(typing.Iterable[typing.Any], payload.get("output") or []):
+        if not isinstance(item, dict):
+            continue
+        for part in typing.cast(typing.Iterable[typing.Any], item.get("content") or []):
+            if not isinstance(part, dict):
+                continue
+            for annotation in typing.cast(
+                typing.Iterable[typing.Any], part.get("annotations") or []
+            ):
+                if not isinstance(annotation, dict):
+                    continue
+                citation = annotation.get("url_citation")
+                if not isinstance(citation, dict):
+                    citation = annotation
+                url = str(citation.get("url") or "").strip()
+                if not url or url in seen:
+                    continue
+                seen.add(url)
+                sources.append(
+                    {
+                        "title": str(citation.get("title") or url)[:200],
+                        "url": url,
+                    }
+                )
+    return sources[:10]
+
+
+def _openai_upstream_model(model: typing.Any) -> str:
+    return config.canonical_model(str(model or "").strip())
+
+
+def _openai_reasoning_effort(model: str) -> str:
+    del model
+    return "none"
+
+
+def _openai_generate(
+    model: typing.Any,
+    system: typing.Any,
+    messages: typing.Any,
+    max_tokens: typing.Any,
+    temperature: typing.Any,
+) -> str:
+    """Call GPT-5.6 through OpenAI's Responses API."""
+    if not config.OPENAI_API_KEY:
+        raise RuntimeError("no openai api key configured")
+    upstream_model = _openai_upstream_model(model)
+    payload: dict[typing.Any, typing.Any] = {
+        "model": upstream_model,
+        "input": _openai_messages(None, messages),
+        "max_output_tokens": max(int(max_tokens), 64),
+        "store": False,
+    }
+    if upstream_model.startswith("gpt-5"):
+        payload["reasoning"] = {"effort": _openai_reasoning_effort(upstream_model)}
+    if system:
+        payload["instructions"] = str(system)
+    if temperature is not None:
+        payload["temperature"] = float(temperature)
+    response = _post_json(
+        config.OPENAI_BASE_URL + "/responses",
+        {
+            "Authorization": f"Bearer {config.OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+            "User-Agent": "owaua/1.0",
+        },
+        payload,
+        45,
+        "openai",
+    )
+    return _response_text(response, "openai")
 
 
 def _chat_without_thinking(
@@ -825,7 +949,7 @@ def _deepseek_generate(
             "Content-Type": "application/json",
             "User-Agent": "owaua/1.0",
         },
-        config.canonical_model(model),
+        str(model).strip(),
         system,
         messages,
         max_tokens,
@@ -970,6 +1094,8 @@ def _generate(
             continue
         if _is_deepseek(model) and not config.DEEPSEEK_API_KEY:
             continue
+        if _is_openai(model) and not config.OPENAI_API_KEY:
+            continue
         if (
             not _is_mercury(model)
             and not _is_celeris(model)
@@ -979,6 +1105,7 @@ def _generate(
             and not _is_cerebras(model)
             and not _is_inferx(model)
             and not _is_deepseek(model)
+            and not _is_openai(model)
             and not _clients
         ):
             continue
@@ -996,6 +1123,8 @@ def _generate(
             fn = _inferx_generate
         elif _is_deepseek(model):
             fn = _deepseek_generate
+        elif _is_openai(model):
+            fn = _openai_generate
         elif _is_gemini(model):
             fn = _gemini_generate
         else:
@@ -1008,6 +1137,14 @@ def _generate(
                 user_id=user_id,
                 estimated_tokens=estimated_tokens,
             )
+            if _is_openai(model):
+                ai_control.reserve_openai_spend(
+                    model=str(model),
+                    input_tokens=max(0, estimated_tokens - int(max_tokens)),
+                    max_output_tokens=int(max_tokens),
+                    scope_id=scope_id,
+                    user_id=user_id,
+                )
             attempts_used += 1
             if trace is not None:
                 trace["attempts"] = int(trace.get("attempts") or 0) + 1
@@ -1077,6 +1214,8 @@ def friendly_error(e: Exception) -> str:
         return "celeris key rejected — regenerate at console.celeris.ai"
     if "deepseek" in sl and ("401" in s or "invalid" in sl):
         return "deepseek key rejected — check DEEPSEEK_API_KEY."
+    if "openai" in sl and ("401" in s or "invalid" in sl):
+        return "openai key rejected — check OPENAI_API_KEY."
     if "timed out" in sl or "timeout" in sl:
         return "that took too long — ping me again"
     if "context" in sl and any(w in sl for w in ("length", "too long", "maximum", "too large")):
@@ -1424,10 +1563,82 @@ def _search_backend(query: str, k: int) -> List[dict[typing.Any, typing.Any]]:
     return _ddg_results(query, k)
 
 
+def _openai_search_backend(
+    query: str, k: int
+) -> tuple[str, list[dict[str, str]]]:
+    """Use the Responses API web-search tool without retaining a conversation."""
+    if not config.OPENAI_API_KEY:
+        return "", []
+    payload: dict[typing.Any, typing.Any] = {
+        "model": config.OPENAI_WEB_MODEL,
+        "input": (
+            "Search the web for current, reliable evidence answering this query. "
+            "Return a concise factual evidence summary and cite the sources you used.\n\n"
+            + query[:600]
+        ),
+        "tools": [{"type": "web_search"}],
+        "max_output_tokens": 700,
+        "store": False,
+        "reasoning": {"effort": "low"},
+    }
+    response = _post_json(
+        config.OPENAI_BASE_URL + "/responses",
+        {
+            "Authorization": f"Bearer {config.OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+            "User-Agent": "owaua/1.0",
+        },
+        payload,
+        60,
+        "openai web search",
+    )
+    return _response_text(response, "openai web search"), _response_sources(response)[:k]
+
+
 async def search_context(
-    query: str, k: int = 5
+    query: str,
+    k: int = 5,
+    *,
+    user_id: Optional[str] = None,
+    scope_id: Optional[str] = None,
 ) -> tuple[str, list[dict[str, typing.Any]], str | None]:
-    """Return raw keyless web-search context, sources, and any error."""
+    """Return bounded web-search context, sources, and any error."""
+
+    ai_control.check_search_budget(user_id)
+
+    if config.OPENAI_API_KEY and config.OPENAI_WEB_SEARCH:
+        estimated_tokens = ai_control.estimate_tokens(query) + 700
+
+        def _openai_fetch() -> tuple[str, list[dict[str, str]]]:
+            ai_control.reserve_provider_attempt(
+                scope_id=scope_id,
+                user_id=user_id,
+                estimated_tokens=estimated_tokens,
+            )
+            ai_control.reserve_openai_spend(
+                model=config.OPENAI_WEB_MODEL,
+                input_tokens=max(1, estimated_tokens - 700),
+                max_output_tokens=700,
+                scope_id=scope_id,
+                user_id=user_id,
+                fixed_microusd=20_000,
+            )
+            return _openai_search_backend(query, k)
+
+        try:
+            answer, citations = await _run(_openai_fetch)
+            if answer:
+                lines = [f"OpenAI web-search evidence summary:\n{answer}"]
+                lines.extend(
+                    f"[{index}] {source['title']}\n{source['url']}"
+                    for index, source in enumerate(citations, 1)
+                )
+                return "\n\n".join(lines), citations, None
+        except Exception as exc:
+            _LOG.warning(
+                "OpenAI web search failed; using local search fallback (%s)",
+                type(exc).__name__,
+            )
 
     def _fetch() -> tuple[list[dict[typing.Any, typing.Any]], str | None]:
         try:
@@ -1460,8 +1671,9 @@ async def web_search(
     scope_id: Optional[str] = None,
 ) -> dict[typing.Any, typing.Any]:
     """Return a keyless web-search answer and its sources."""
-    ai_control.check_search_budget(user_id)
-    ctx, sources, err = await search_context(query, k)
+    ctx, sources, err = await search_context(
+        query, k, user_id=user_id, scope_id=scope_id
+    )
     if err:
         return {"answer": f"couldn't reach search right now ({err[:80]}).", "sources": []}
     if not ctx:

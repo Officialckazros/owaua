@@ -45,18 +45,32 @@ LEGACY_SLUG: Final = "sef" + "bot"
 LEGACY_PRODUCT_SLUG: Final = "op" + "sef"
 
 _STYLE: Final = """
-:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#111;color:#eee}
-body{max-width:52rem;margin:4rem auto;padding:0 1.2rem 4rem;line-height:1.65}
-a{color:#8fc7ff}h1,h2,h3{line-height:1.25}h2{margin-top:2rem}h3{margin-top:1.3rem}
-nav{display:flex;gap:1rem;flex-wrap:wrap}
-.card{border:1px solid #333;border-radius:.8rem;padding:1rem 1.2rem;background:#181818}
-code{background:#222;padding:.1rem .3rem;border-radius:.25rem}
-table{width:100%;border-collapse:collapse;font-size:.92rem;margin:1rem 0}
-th,td{border:1px solid #333;padding:.45rem .55rem;text-align:left;vertical-align:top}
-th{background:#1a1a1a}ul{padding-left:1.2rem}
-button{background:#eee;color:#111;border:0;border-radius:.35rem;padding:.75rem 1rem;font:inherit;font-weight:700;cursor:pointer}
-label.accept{display:flex;gap:.7rem;align-items:flex-start;margin:1.2rem 0}
-label.accept input{margin-top:.4rem}
+:root{color-scheme:light;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--paper:#efede7;--surface:#fff;--soft:#f6f5f1;--ink:#111;--muted:#5e5e5a;--line:#c8c6bf}
+*{box-sizing:border-box}
+body{min-height:100vh;margin:0;padding:clamp(16px,3vw,36px) 0;background:var(--paper);color:var(--ink);line-height:1.68}
+nav,main{width:min(100% - 32px,880px);margin-inline:auto;border:1px solid var(--ink)}
+nav{position:sticky;z-index:2;top:0;display:flex;align-items:center;gap:0;background:var(--ink);color:#f7f5ef}
+nav::before{content:"owaua / web";margin-right:auto;padding:14px 18px;font:700 .72rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.12em;text-transform:uppercase}
+nav a{padding:13px 15px;border-left:1px solid #454543;color:inherit;font-size:.82rem;text-decoration:none}
+nav a:hover,nav a:focus-visible{background:#f7f5ef;color:var(--ink)}
+main{padding:clamp(28px,6vw,64px);border-top:0;background:var(--surface)}
+a{color:inherit;text-decoration-thickness:1px;text-underline-offset:4px}
+a:hover{text-decoration-thickness:2px}
+h1,h2,h3{line-height:1.12;letter-spacing:-.035em}h1{max-width:44rem;margin:0 0 1.5rem;font-size:clamp(2.5rem,7vw,5.25rem)}h2{margin:3.5rem 0 1rem;padding-top:1.25rem;border-top:1px solid var(--line);font-size:clamp(1.45rem,3vw,2rem)}h3{margin:2rem 0 .75rem;font-size:1.05rem}
+p,li{color:var(--muted)}strong{color:var(--ink)}
+.card{margin:1.5rem 0;padding:clamp(18px,3vw,28px);border:1px solid var(--line);border-left:5px solid var(--ink);background:var(--soft)}
+code{padding:.12em .34em;border:1px solid #dedcd6;border-radius:2px;background:var(--soft);color:var(--ink);font:.88em ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
+table{width:100%;border-collapse:collapse;font-size:.9rem;margin:1.5rem 0}
+th,td{padding:.7rem;border:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:var(--soft);color:var(--ink);font-size:.75rem;letter-spacing:.04em;text-transform:uppercase}ul{padding-left:1.3rem}
+button{padding:.8rem 1.1rem;border:1px solid var(--ink);border-radius:0;background:var(--ink);color:#fff;font:inherit;font-weight:750;cursor:pointer}
+button:hover,button:focus-visible{background:#fff;color:var(--ink)}
+label.accept{display:flex;gap:.8rem;align-items:flex-start;margin:1.4rem 0;padding:1rem;border:1px solid var(--line);background:#fff}
+label.accept input{width:1.1rem;height:1.1rem;margin-top:.3rem;accent-color:var(--ink)}
+footer{width:min(100% - 32px,880px);margin:0 auto;padding:18px;border:1px solid var(--ink);border-top:0;background:var(--ink);color:#aaa9a3;font-size:.78rem;letter-spacing:.04em}
+footer a{color:#f7f5ef}
+:focus-visible{outline:2px solid currentColor;outline-offset:3px}
+@media(max-width:620px){body{padding:0}nav,main,footer{width:100%;border-left:0;border-right:0}nav{overflow-x:auto}nav::before{display:none}nav a:first-child{border-left:0}main{padding:28px 20px}table{display:block;overflow-x:auto}}
 """.strip()
 _STYLE_HASH: Final = base64.b64encode(hashlib.sha256(_STYLE.encode("utf-8")).digest()).decode(
     "ascii"
@@ -100,30 +114,36 @@ def _document(title: str, body: str) -> str:
 </head>
 <body>
   <nav aria-label="Legal and service pages">
+    <a href="/">Home</a>
     <a href="/owaua">owaua</a>
+    <a href="/dashboard">Dashboard</a>
     <a href="/owaua/terms">Terms</a>
     <a href="/owaua/privacy">Privacy</a>
   </nav>
   <main>{body}</main>
+  <footer>owaua / Discord bot · <a href="/dashboard">open dashboard</a></footer>
 </body>
 </html>"""
 
 
-def _landing_page() -> str:
+def _landing_page(contact: str) -> str:
+    safe_contact = html.escape(contact, quote=True)
     return _document(
         "Discord bot",
         """
 <h1>owaua Discord bot</h1>
 <div class="card">
   <p>owaua is a Discord assistant with opt-in memory and administration tools.
-  Ordinary chat cannot execute Discord actions. Raw history is off until a
-  server enables it and you opt in separately from the Terms.</p>
+  Ordinary chat cannot execute Discord actions. The server history gate starts
+  enabled, but no ordinary raw history is stored until you opt in separately
+  from the Terms for that exact server.</p>
   <p>Read the Terms and Privacy Notice before using the bot. They describe the
   running code, including third-party AI providers, strike/blocks, and what
   deletion does not erase. Health endpoints report service availability
   without exposing user, guild, or provider data.</p>
+  <p>Questions, privacy requests, or reports: <a href="mailto:{safe_contact}">{safe_contact}</a>.</p>
 </div>
-""",
+""".format(safe_contact=safe_contact),
     )
 
 
@@ -382,7 +402,7 @@ def create_app(
     def legacy_legal_redirect(request: web.Request) -> web.HTTPPermanentRedirect | None:
         """Move the former public legal host without breaking old bookmarks."""
         if hostname_of(request) in {"kozzyx.org", "www.kozzyx.org"}:
-            location = f"https://wearegays.net{request.path}"
+            location = f"https://owaua.com{request.path}"
             if request.query_string:
                 location = f"{location}?{request.query_string}"
             return web.HTTPPermanentRedirect(location=location)
@@ -391,7 +411,7 @@ def create_app(
     async def landing(request: web.Request) -> web.Response:
         if redirect := legacy_legal_redirect(request):
             raise redirect
-        return _html_response(_landing_page())
+        return _html_response(_landing_page(contact))
 
     async def terms(request: web.Request) -> web.Response:
         if redirect := legacy_legal_redirect(request):

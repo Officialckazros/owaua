@@ -352,7 +352,9 @@ async def run_workflow(
         if not settings["search"]:
             raise PermissionError("grounded fact-check search is disabled in this server")
         query = " ".join(source.split())[:400]
-        context, sources, error = await ai.search_context(query, k=5)
+        context, sources, error = await ai.search_context(
+            query, k=5, user_id=user_id, scope_id=scope_id
+        )
         if error or not context:
             raise RuntimeError("couldn't retrieve current sources for that fact check")
         search_block: typing.Any = typing.cast(

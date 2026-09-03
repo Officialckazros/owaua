@@ -41,6 +41,23 @@ Commands:
 """
 
 
+def cli_access_error(user_id: object | None = None) -> str | None:
+    """Return a safe explanation when the local operator CLI is unavailable."""
+    if not config.DM_CLI_ENABLED:
+        return "the operator DM CLI is disabled; set OWAUA_DM_CLI_ENABLED=1 to use it"
+    if not config.DM_CLI_ALLOW_USER_IDS:
+        return "the operator DM CLI has no recipients; set OWAUA_DM_CLI_ALLOW_USER_IDS"
+    if user_id is not None and _discord_id(user_id) not in config.DM_CLI_ALLOW_USER_IDS:
+        return "that Discord user is not in OWAUA_DM_CLI_ALLOW_USER_IDS"
+    return None
+
+
+async def _confirm(prompt: str) -> bool:
+    loop = asyncio.get_running_loop()
+    answer = await loop.run_in_executor(None, lambda: input(f"{prompt} [y/N] "))
+    return answer.strip().lower() in {"y", "yes"}
+
+
 def _migration_name(kind: str, path: Path) -> str:
     identity = str(path.absolute()).encode("utf-8", errors="surrogateescape")
     return f"{kind}-json-v1:{hashlib.sha256(identity).hexdigest()}"
@@ -289,6 +306,8 @@ class DMShell(discord.Client):
             return
         if not isinstance(message.channel, discord.DMChannel):
             return
+        if cli_access_error(message.author.id):
+            return
         self._touch_contact(typing.cast(typing.Any, message.author))
         stamp = datetime.now().astimezone().strftime("%H:%M:%S")
         if self.chat_target == message.author.id:
@@ -303,6 +322,9 @@ class DMShell(discord.Client):
             print("> ", end="", flush=True)
 
     async def resolve_user(self, user_id: int) -> discord.User | None:
+        if error := cli_access_error(user_id):
+            print(error)
+            return None
         try:
             return await self.fetch_user(user_id)
         except discord.NotFound:
@@ -312,14 +334,41 @@ class DMShell(discord.Client):
         return None
 
     async def send_to(self, user: discord.User, content: str) -> bool:
+        nonce = secrets.token_urlsafe(18)
+        correlation_id = secrets.token_hex(16)
+        status = "failed"
+        result = "send failed"
         try:
             await user.send(content)
             self._touch_contact(user)
+            status = "completed"
+            result = "message sent"
             return True
         except discord.Forbidden:
             print("Could not send — this user has DMs closed or has blocked the bot.")
+            result = "recipient unavailable"
         except discord.HTTPException as e:
             print(f"Send failed: {_safe_terminal_text(e, 500)}")
+            result = "Discord request failed"
+        finally:
+            try:
+                db.record_action_audit(
+                    nonce=nonce,
+                    actor_id=config.OWNER_ID or "local-operator",
+                    scope_id=f"dm:{user.id}",
+                    action="operator_dm_send",
+                    target_id=str(user.id),
+                    parameters={"content_supplied": bool(content), "content_length": len(content)},
+                    source="operator_cli",
+                    correlation_id=correlation_id,
+                    status=status,
+                    result=result,
+                )
+            except Exception as audit_error:
+                print(
+                    "Warning: the DM result could not be written to the local audit log: "
+                    + _safe_terminal_text(type(audit_error).__name__, 80)
+                )
         return False
 
     async def cmd_contacts(self) -> None:
@@ -338,6 +387,9 @@ class DMShell(discord.Client):
         user = await self.resolve_user(user_id)
         if not user:
             return
+        if not await _confirm(f"Send {len(content)} characters to {user} ({user.id})?"):
+            print("Cancelled.")
+            return
         if await self.send_to(user, content):
             print(f"Sent to {user}: {_safe_terminal_text(content)}")
 
@@ -345,12 +397,17 @@ class DMShell(discord.Client):
         user = await self.resolve_user(user_id)
         if not user:
             return
+        if not await _confirm(f"Open the operator chat with {user} ({user.id})?"):
+            print("Cancelled.")
+            return
         channel = user.dm_channel or await user.create_dm()
         print(f"-- Chatting with {user} ({user.id}). /back to return to the menu. --")
-        print("Fetching full conversation history...")
+        history_limit = config.DM_CLI_HISTORY_LIMIT
+        print(f"Fetching up to {history_limit} recent message(s)...")
         try:
             count = 0
-            async for msg in channel.history(limit=None, oldest_first=True):
+            messages = [msg async for msg in channel.history(limit=history_limit or 0)]
+            for msg in reversed(messages):
                 who = (
                     "you"
                     if msg.author.id == typing.cast(typing.Any, self.user).id
@@ -446,6 +503,8 @@ class DMShell(discord.Client):
 
 
 async def run_one_shot(user_id: int, message: str) -> None:
+    if error := cli_access_error(user_id):
+        raise RuntimeError(error)
     client = DMShell()
 
     @client.event
@@ -473,11 +532,24 @@ def main():
     parser = argparse.ArgumentParser(description="DM Discord users via the owaua bot account.")
     parser.add_argument("user_id", nargs="?", help="Target Discord user ID")
     parser.add_argument("message", nargs="?", help="Message to send (skips the shell if set)")
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="confirm a one-shot send non-interactively after allowlist checks",
+    )
     args = parser.parse_args()
 
     try:
+        if error := cli_access_error(args.user_id):
+            print(error)
+            sys.exit(2)
         if args.user_id and args.message:
             uid = int(args.user_id)
+            if not args.yes:
+                answer = input(f"Send {len(args.message)} characters to Discord user {uid}? [y/N] ")
+                if answer.strip().lower() not in {"y", "yes"}:
+                    print("Cancelled.")
+                    return
             asyncio.run(run_one_shot(uid, args.message))
         elif args.user_id:
             uid = int(args.user_id)
@@ -490,6 +562,9 @@ def main():
     except discord.LoginFailure:
         print("Login failed — check DISCORD_TOKEN in .env.")
         sys.exit(1)
+    except RuntimeError as error:
+        print(_safe_terminal_text(error, 500))
+        sys.exit(2)
     except KeyboardInterrupt:
         pass
 

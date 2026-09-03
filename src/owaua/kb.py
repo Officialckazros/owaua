@@ -1,11 +1,14 @@
 """SQLite FTS5 reference knowledge base."""
 
+import json
 import logging
+import math
 import re
 import typing
 from typing import List, Optional
 
-from owaua import db
+from owaua import config, db
+from owaua.services.llm_client import LLMError, llm
 
 _LOG = logging.getLogger(__name__)
 
@@ -45,6 +48,10 @@ def ensure() -> None:
     columns = {r["name"] for r in c.execute("PRAGMA table_info(kb_docs)").fetchall()}
     if "scope_id" not in columns:
         c.execute("ALTER TABLE kb_docs ADD COLUMN scope_id TEXT NOT NULL DEFAULT 'legacy:disabled'")
+    if "embedding" not in columns:
+        c.execute("ALTER TABLE kb_docs ADD COLUMN embedding TEXT")
+    if "embedding_model" not in columns:
+        c.execute("ALTER TABLE kb_docs ADD COLUMN embedding_model TEXT")
     c.execute("CREATE INDEX IF NOT EXISTS idx_kb_scope_topic ON kb_docs(scope_id,topic)")
     _HAS_FTS5 = _detect_fts5(c)
     if _HAS_FTS5:
@@ -176,6 +183,96 @@ def search(query: str, k: int = 6, *, scope_id: str) -> List[dict[typing.Any, ty
             scored.append((hits, dict(r)))
     scored.sort(key=lambda t: t[0], reverse=True)
     return [d for _, d in scored[:k]]
+
+
+def _cosine(left: list[float], right: list[float]) -> float:
+    if not left or len(left) != len(right):
+        return -1.0
+    dot = sum(a * b for a, b in zip(left, right))
+    left_norm = math.sqrt(sum(value * value for value in left))
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if left_norm <= 0.0 or right_norm <= 0.0:
+        return -1.0
+    return dot / (left_norm * right_norm)
+
+
+async def semantic_search(
+    query: str,
+    k: int = 6,
+    *,
+    scope_id: str,
+    user_id: str | None = None,
+) -> List[dict[typing.Any, typing.Any]]:
+    """Semantically search explicitly ingested server documents with local vectors."""
+    ensure()
+    if not config.OPENAI_SEMANTIC_KB or not config.OPENAI_API_KEY:
+        return search(query, k=k, scope_id=scope_id)
+    c = db.conn()
+    model = config.OPENAI_EMBEDDING_MODEL
+    missing = c.execute(
+        "SELECT id,content FROM kb_docs WHERE scope_id=? "
+        "AND (embedding IS NULL OR embedding_model IS NULL OR embedding_model<>?) "
+        "ORDER BY id LIMIT 96",
+        (scope_id, model),
+    ).fetchall()
+    try:
+        query_vector: list[float] | None = None
+        for offset in range(0, len(missing), 31):
+            batch = missing[offset : offset + 31]
+            texts = [str(row["content"] or "") for row in batch]
+            include_query = query_vector is None
+            vectors = await llm.embeddings(
+                ([query] if include_query else []) + texts,
+                model=model,
+                base_url=config.OPENAI_BASE_URL,
+                api_key=config.OPENAI_API_KEY,
+                scope_id=scope_id,
+                user_id=user_id,
+            )
+            if include_query:
+                query_vector = vectors.pop(0)
+            for row, vector in zip(batch, vectors):
+                c.execute(
+                    "UPDATE kb_docs SET embedding=?,embedding_model=? WHERE id=? AND scope_id=?",
+                    (json.dumps(vector, separators=(",", ":")), model, row["id"], scope_id),
+                )
+        if missing:
+            c.commit()
+        if query_vector is None:
+            vectors = await llm.embeddings(
+                [query],
+                model=model,
+                base_url=config.OPENAI_BASE_URL,
+                api_key=config.OPENAI_API_KEY,
+                scope_id=scope_id,
+                user_id=user_id,
+            )
+            query_vector = vectors[0]
+    except (LLMError, ValueError, TypeError, json.JSONDecodeError):
+        _LOG.warning("semantic KB search unavailable; using local text search")
+        return search(query, k=k, scope_id=scope_id)
+
+    ranked: list[tuple[float, dict[typing.Any, typing.Any]]] = []
+    rows = c.execute(
+        "SELECT topic,title,source,content,embedding FROM kb_docs "
+        "WHERE scope_id=? AND embedding_model=? AND embedding IS NOT NULL LIMIT 2000",
+        (scope_id, model),
+    ).fetchall()
+    for row in rows:
+        try:
+            vector = [float(value) for value in json.loads(row["embedding"])]
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        score = _cosine(query_vector, vector)
+        if score > 0.0:
+            item = dict(row)
+            item.pop("embedding", None)
+            item["rank"] = score
+            ranked.append((score, item))
+    ranked.sort(key=lambda value: value[0], reverse=True)
+    return [item for _score, item in ranked[: max(1, min(20, int(k)))]] or search(
+        query, k=k, scope_id=scope_id
+    )
 
 
 def count(scope_id: str) -> int:

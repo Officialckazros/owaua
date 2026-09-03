@@ -51,7 +51,9 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
         }:
             self.assertNotIn(alias, self.commands)
         self.assertIn("mode", self.commands)
-        self.assertEqual(len(self.commands), 89)
+        self.assertIn("doctor", self.commands)
+        self.assertIn("setup", self.commands)
+        self.assertEqual(len(self.commands), 91)
 
     def test_general_mode_picker_does_not_advertise_adult_personas(self) -> None:
         command = self.commands["mode"]
@@ -166,20 +168,13 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
         search.assert_not_awaited()
         interaction.response.send_message.assert_awaited_once()
 
-    def test_dead_groq_llama_ids_remap_to_gpt_oss(self) -> None:
-        self.assertEqual(
-            config.canonical_model("llama-3.3-70b-versatile"),
-            "openai/gpt-oss-120b",
-        )
-        self.assertEqual(
-            config.canonical_model("llama-3.1-8b-instant"),
-            "openai/gpt-oss-20b",
-        )
-        self.assertEqual(config.canonical_model("groq"), "openai/gpt-oss-120b")
-        self.assertIn("openai/gpt-oss-120b", config.MODEL_FALLBACKS)
-        self.assertNotIn("llama-3.3-70b-versatile", config.MODEL_FALLBACKS)
+    def test_legacy_model_ids_remap_to_luna(self) -> None:
+        self.assertEqual(config.canonical_model("llama-3.3-70b-versatile"), "gpt-5.6-luna")
+        self.assertEqual(config.canonical_model("llama-3.1-8b-instant"), "gpt-5.6-luna")
+        self.assertEqual(config.canonical_model("groq"), "gpt-5.6-luna")
+        self.assertEqual(config.MODEL_FALLBACKS, [])
 
-    def test_model_picker_lists_every_live_groq_chat_model(self) -> None:
+    def test_model_picker_only_offers_luna(self) -> None:
         command = self.commands["model"]
         parameters: typing.Any = typing.cast(
             typing.Any,
@@ -191,37 +186,11 @@ class SlashRegistrationAcceptanceTest(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertIn("choice", typing.cast(typing.Any, parameters))
-        values: typing.Any = typing.cast(
-            typing.Any,
-            [
-                typing.cast(typing.Any, choice).value
-                for choice in typing.cast(
-                    typing.Iterable[typing.Any],
-                    typing.cast(typing.Any, parameters["choice"]).choices,
-                )
-            ],
-        )
-        names: typing.Any = typing.cast(
-            typing.Any,
-            [
-                typing.cast(typing.Any, choice).name
-                for choice in typing.cast(
-                    typing.Iterable[typing.Any],
-                    typing.cast(typing.Any, parameters["choice"]).choices,
-                )
-            ],
-        )
-        self.assertIn("deepseek", typing.cast(typing.Any, values))
-        self.assertIn("big", typing.cast(typing.Any, values))
-        for model_id, label in config.GROQ_CHAT_MODELS:
-            self.assertIn(model_id, typing.cast(typing.Any, values))
-            self.assertIn(label, typing.cast(typing.Any, names))
-        self.assertNotIn("llama-3.3-70b-versatile", typing.cast(typing.Any, values))
-        self.assertLessEqual(len(typing.cast(typing.Any, values)), 25)
-        self.assertEqual(
-            len(typing.cast(typing.Any, values)),
-            len(typing.cast(typing.Any, set(typing.cast(typing.Any, values)))),
-        )
+        choice = typing.cast(typing.Any, parameters["choice"])
+        self.assertTrue(choice.autocomplete)
+        self.assertFalse(choice.choices)
+        model_ids = {model_id for model_id, _label in config.OPENAI_CHAT_MODELS}
+        self.assertEqual(model_ids, {"gpt-5.6-luna"})
 
     def test_upload_commands_register_real_attachment_options(self) -> None:
         expected = {

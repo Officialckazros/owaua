@@ -37,7 +37,7 @@ class AIControlTest(unittest.TestCase):
             with self.assertRaises(ai_control.AIBudgetExceeded):
                 ai_control.check_request_budget("guild:2", "vision", user_id="42")
 
-    def test_scope_budget_is_aggregate_across_users_and_tasks(self) -> None:
+    def test_prompt_window_is_per_user_even_in_one_scope(self) -> None:
         db.guild_settings_set("guild:1", ai_requests_per_minute=2)
         with (
             mock.patch.object(config, "AI_REQUESTS_PER_MINUTE", 50),
@@ -45,20 +45,37 @@ class AIControlTest(unittest.TestCase):
         ):
             ai_control.check_request_budget("guild:1", "chat", user_id="1")
             ai_control.check_request_budget("guild:1", "workflow", user_id="2")
-            with self.assertRaises(ai_control.AIBudgetExceeded):
-                ai_control.check_request_budget("guild:1", "vision", user_id="3")
+            ai_control.check_request_budget("guild:1", "vision", user_id="3")
 
-    def test_provider_attempt_token_reservation_is_atomic(self) -> None:
+    def test_provider_attempt_token_usage_is_recorded_without_a_budget(self) -> None:
         with (
             mock.patch.object(config, "AI_PROVIDER_ATTEMPTS_PER_MINUTE", 10),
             mock.patch.object(config, "AI_TOKEN_BUDGET_PER_MINUTE", 1_000),
             mock.patch.object(config, "AI_USER_TOKEN_BUDGET_PER_MINUTE", 1_000),
         ):
             ai_control.reserve_provider_attempt(user_id="42", estimated_tokens=600)
-            with self.assertRaises(ai_control.AIBudgetExceeded):
-                ai_control.reserve_provider_attempt(user_id="42", estimated_tokens=600)
-        self.assertEqual(len(ai_control._provider_attempts), 1)
-        self.assertEqual(len(ai_control._token_usage[("global", "*")]), 1)
+            ai_control.reserve_provider_attempt(user_id="42", estimated_tokens=600)
+        self.assertEqual(len(ai_control._provider_attempts), 2)
+        self.assertEqual(len(ai_control._token_usage[("global", "*")]), 2)
+
+    def test_luna_cost_estimate_uses_conservative_list_prices(self) -> None:
+        self.assertEqual(
+            ai_control.estimate_openai_luna_microusd(
+                input_tokens=1_000_000,
+                max_output_tokens=1_000_000,
+            ),
+            1_400_000,
+        )
+
+    def test_openai_usage_is_durable_without_a_credit_cap(self) -> None:
+        for _ in range(2):
+            ai_control.reserve_openai_spend(
+                model="gpt-5.6-luna",
+                input_tokens=0,
+                max_output_tokens=500,
+                user_id="42",
+            )
+        self.assertEqual(db.ai_spend_summary()["month_requests"], 2)
 
     def test_multimodal_estimate_does_not_count_base64_transport_as_text(self) -> None:
         messages = [
@@ -90,6 +107,10 @@ class AIControlTest(unittest.TestCase):
         ai_control.set_user_mode("42", "fast")
         self.assertEqual(ai_control.route("chat", user_id="42").tier, "fast")
         self.assertEqual(ai_control.route("vision", user_id="42").tier, "vision")
+
+    def test_fast_is_the_default_mode(self) -> None:
+        self.assertEqual(ai_control.user_mode(None, None), "fast")
+        self.assertEqual(ai_control.route("chat").tier, "fast")
 
     def test_circuit_opens_and_success_recovers(self) -> None:
         with (

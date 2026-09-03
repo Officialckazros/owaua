@@ -104,6 +104,15 @@ class CapabilityCatalogTest(IsolatedDatabaseTest):
         )
         self.assertIn("gay femboy", assistant.lower())
 
+    def test_former_names_are_part_of_stable_self_knowledge(self) -> None:
+        catalog = selfknow.self_knowledge()
+        self.assertIn("former names were OpSef and SefBot", catalog)
+        self.assertIn("now owaua", catalog)
+        prompt = brain.build_system(
+            "1", "tester", "what were you called before?", Scope.guild(99).key
+        )
+        self.assertIn("former names were OpSef and SefBot", prompt)
+
     def test_system_prompt_includes_capabilities_and_code_secrecy(self) -> None:
         prompt = brain.build_system(
             "1", "tester", "what can you do", Scope.guild(99).key, server_name="lab"
@@ -129,6 +138,13 @@ class CapabilityCatalogTest(IsolatedDatabaseTest):
         self.assertIn("YOUR ACTUAL VIEWPOINTS", prompt)
         self.assertIn("make a clear call", prompt)
         self.assertIn("Bad coffee is an avoidable tragedy.", prompt)
+
+    def test_default_persona_keeps_small_jokes_small_and_direct(self) -> None:
+        prompt = brain.build_system("1", "tester", "bark for me", Scope.guild(99).key)
+        self.assertIn("CASUAL CHAT PRIORITY", prompt)
+        self.assertIn("Usually one line and 2-12 words is enough", prompt)
+        self.assertIn("If someone says 'bark for me', bark", prompt)
+        self.assertIn("Do not describe yourself as operational, haunted", prompt)
 
     def test_assistant_mode_stays_neutral_and_omits_opinion_profile(self) -> None:
         scope = Scope.guild(99).key

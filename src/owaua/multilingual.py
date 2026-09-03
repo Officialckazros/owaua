@@ -203,7 +203,7 @@ async def maybe_multilingual_reply(
         return None
     if str(channel.id) not in config.MULTILINGUAL_CHANNELS:
         return None
-    if not config.GROQ_API_KEY:
+    if not config.OPENAI_API_KEY:
         return None
     system = (
         "You are a friendly multilingual Discord assistant. Reply in the SAME "
@@ -217,8 +217,8 @@ async def maybe_multilingual_reply(
             system=system,
             temperature=0.6,
             max_tokens=600,
-            base_url=config.GROQ_BASE_URL,
-            api_key=config.GROQ_API_KEY,
+            base_url=config.OPENAI_BASE_URL,
+            api_key=config.OPENAI_API_KEY,
             task="workflow",
             scope_id=scope_id,
             user_id=user_id,

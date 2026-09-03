@@ -8,8 +8,9 @@ import typing
 from pathlib import Path
 
 os.environ.setdefault("DISCORD_TOKEN", "eval-token")
+os.environ.setdefault("OWAUA_LOAD_DOTENV", "0")
 
-from owaua import ai_control, brain, config, db  # noqa: E402
+from owaua import actions, ai_control, brain, config, db  # noqa: E402
 
 
 def main() -> int:
@@ -31,6 +32,14 @@ def main() -> int:
                 user_id = f"eval-{case['id']}"
                 ai_control.set_user_mode(user_id, case["mode"])
                 actual = ai_control.route(case["task"], user_id=user_id).tier
+            elif kind == "action_request":
+                actual = actions.looks_like_action_request(case["input"])
+            elif kind == "action_proposals":
+                actual = len(actions.assistant_proposals(case["input"]))
+            elif kind == "prompt_request":
+                actual = brain.reject_prompt_extraction(case["input"]) is not None
+            elif kind == "output_leak":
+                actual = brain.any_prompt_leaked(case["input"])
             else:
                 actual = "unknown case kind"
             if actual != case["expected"]:

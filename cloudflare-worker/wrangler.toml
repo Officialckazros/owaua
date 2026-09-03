@@ -14,7 +14,20 @@ routes = [
   { pattern = "www.wearegays.net/healthz", zone_name = "wearegays.net" },
   { pattern = "wearegays.net/readyz", zone_name = "wearegays.net" },
   { pattern = "www.wearegays.net/readyz", zone_name = "wearegays.net" },
+  { pattern = "owaua.com/owaua*", zone_name = "owaua.com" },
+  { pattern = "www.owaua.com/owaua*", zone_name = "owaua.com" },
+  { pattern = "owaua.com/israel*", zone_name = "owaua.com" },
+  { pattern = "www.owaua.com/israel*", zone_name = "owaua.com" },
+  { pattern = "owaua.com/sefbot*", zone_name = "owaua.com" },
+  { pattern = "www.owaua.com/sefbot*", zone_name = "owaua.com" },
+  { pattern = "owaua.com/opsef-*", zone_name = "owaua.com" },
+  { pattern = "www.owaua.com/opsef-*", zone_name = "owaua.com" },
+  { pattern = "owaua.com/healthz", zone_name = "owaua.com" },
+  { pattern = "www.owaua.com/healthz", zone_name = "owaua.com" },
+  { pattern = "owaua.com/readyz", zone_name = "owaua.com" },
+  { pattern = "www.owaua.com/readyz", zone_name = "owaua.com" },
 ]
 
 [vars]
 OWAUA_ORIGIN = "http://paid5.daki.cc:4204"
+OWAIS_ORIGIN = "http://paid5.daki.cc:4272"

@@ -96,6 +96,27 @@ class NativeAutomodTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result[:2], ["spam", "word-0"])
         self.assertLessEqual(len(result), 100)
 
+    def test_message_filter_accepts_current_and_legacy_dashboard_field_names(self):
+        message = types.SimpleNamespace(
+            content="please remove this temporary message",
+            attachments=[],
+            embeds=[],
+            mentions=[],
+            author=types.SimpleNamespace(bot=False, roles=[]),
+        )
+        self.assertTrue(
+            community._filter_matches(
+                typing.cast(typing.Any, message),
+                {"type": "includes_text", "value": "temporary"},
+            )
+        )
+        self.assertTrue(
+            community._filter_matches(
+                typing.cast(typing.Any, message),
+                {"kind": "includes_text", "value": "temporary"},
+            )
+        )
+
     async def test_sync_creates_one_native_rule_for_configured_phrases(self):
         guild = types.SimpleNamespace(
             id=123,
@@ -150,6 +171,29 @@ class NativeAutomodTest(unittest.IsolatedAsyncioTestCase):
         community._duplicates.clear()
         message.content = "x" * 2000
         self.assertEqual(community._automod_reason(message, settings), "message too long")
+
+
+class TicketSystemTest(unittest.TestCase):
+    def test_ticket_controls_have_channel_bound_persistent_ids(self):
+        view = community.TicketControlView(123, 456)
+        self.assertEqual(
+            [typing.cast(typing.Any, item).custom_id for item in view.children],
+            ["owaua:ticket:claim:123:456", "owaua:ticket:close:123:456"],
+        )
+
+    def test_ticket_channel_name_uses_configured_template_safely(self):
+        member = types.SimpleNamespace(
+            id=7,
+            name="Casey Example",
+            display_name="Casey Example",
+            mention="<@7>",
+            guild=types.SimpleNamespace(id=42, name="Support"),
+        )
+        with mock.patch.object(community.secrets, "randbelow", return_value=12):
+            result = community._ticket_channel_name(
+                {"channel_name": "help-{user.name}"}, typing.cast(typing.Any, member)
+            )
+        self.assertEqual(result, "help-casey-example-0012")
 
 
 class CooldownRegressionTest(unittest.IsolatedAsyncioTestCase):

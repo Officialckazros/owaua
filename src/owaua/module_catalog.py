@@ -54,8 +54,8 @@ MODULES: Final[dict[str, dict[typing.Any, typing.Any]]] = {
             "server_events": True,
             "reaction_events": True,
             "command_events": True,
-            "include_message_content": True,
-            "include_attachments": True,
+            "include_message_content": False,
+            "include_attachments": False,
             "include_audit_changes": True,
             "include_reasons": True,
             "include_ids": True,
@@ -331,8 +331,21 @@ MODULES: Final[dict[str, dict[typing.Any, typing.Any]]] = {
         "Draft, publish and edit managed Discord embeds.",
         {
             "embeds": [],
+            "published_message_ids": {},
+            "published_payload_hashes": {},
         },
-        implementation="configuration only",
+        implementation="core live",
+    ),
+    "partnerships": _module(
+        "Partnerships",
+        "Content",
+        "Configurable partner spotlights with complete Discord embeds and safe links.",
+        {
+            "channel_id": "",
+            "items": [],
+            "published_message_ids": {},
+            "published_revisions": {},
+        },
     ),
     "moderation": _module(
         "Moderation",
@@ -746,9 +759,9 @@ SERVER_SETTINGS: Final[dict[str, dict[typing.Any, typing.Any]]] = {
     },
     "ai_mode_default": {
         "label": "Default AI mode",
-        "description": "Balanced routes automatically; fast favors latency; reasoning favors the expert route where supported.",
+        "description": "Fast, balanced, and reasoning modes all use GPT-5.6 Luna.",
         "kind": "choice",
-        "default": "balanced",
+        "default": "fast",
         "choices": ["fast", "balanced", "reasoning"],
     },
     "ai_default_language": {

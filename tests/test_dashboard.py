@@ -24,7 +24,7 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
         self.previous_db = config.DB_PATH
         config.DB_PATH = ":memory:"
         self.auth = DashboardAuthConfig(
-            public_url="https://wearegays.net",
+            public_url="https://owaua.com",
             session_secret="s" * 48,
             discord_client_id="123456789012345678",
             discord_client_secret="discord-secret",
@@ -172,7 +172,7 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_discord_oauth_limits_visible_guilds(self):
         auth = DashboardAuthConfig(
-            public_url="https://wearegays.net",
+            public_url="https://owaua.com",
             session_secret="s" * 48,
             discord_client_id="123456789012345678",
             discord_client_secret="discord-secret",
@@ -314,21 +314,28 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             rules,
         )
 
-    async def test_module_editor_replaces_raw_json_with_typed_controls(self):
+    async def test_every_module_editor_uses_purpose_built_controls(self):
         script = await (await self.client.get("/dashboard/assets/app.js")).text()
         self.assertNotIn('data-type="json"', script)
         self.assertNotIn("Structured JSON", script)
+        self.assertNotIn("Field group", script)
+        self.assertNotIn("Channel list", script)
+        self.assertNotIn("Role list", script)
+        self.assertNotIn("Yes / no", script)
+        self.assertNotIn("data-change-kind", script)
         for feature in (
             "structuredTemplates",
+            "structuredUi",
             "structuredEditor",
             "readStructuredNode",
             "moduleEditorGroups",
             "groupedModuleFields",
             "data-add-list",
             "data-add-field",
-            "data-change-kind",
         ):
             self.assertIn(feature, script)
+        for module_id in set(MODULES) - {"boosters", "localization"}:
+            self.assertRegex(script, rf"\n  {re.escape(module_id)}:\[")
         for preset in (
             '"auto_delete.rules"',
             '"forms.forms"',
@@ -337,6 +344,10 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             '"welcome.role_choices"',
         ):
             self.assertIn(preset, script)
+        self.assertIn('"forms.forms[].questions"', script)
+        self.assertIn("Add automatic reply", script)
+        self.assertIn("First send time", script)
+        self.assertIn("hiddenModuleFields", script)
 
     async def test_booster_workspace_exposes_records_settings_and_actions(self):
         cookie, csrf = await self._login()
@@ -479,7 +490,7 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
         payload = {
             "settings": {
                 "persona": "  dashboard persona  ",
-                "model": "openai/gpt-oss-20b",
+                "model": "gpt-5.6-luna",
                 "language": "hu",
                 "smart_always": False,
                 "allowed_channels": ["20", "20", "not-an-id"],

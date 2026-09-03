@@ -17,7 +17,9 @@ Use Python 3.12–3.14, create a virtual environment, and install the locked dep
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --require-hashes -r requirements.lock
-PYTHONPATH=src python -m unittest discover -s tests -v
+OWAUA_LOAD_DOTENV=0 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
+OWAUA_LOAD_DOTENV=0 PYTHONPATH=src .venv/bin/python scripts/run_ai_evals.py
+OWAUA_LOAD_DOTENV=0 PYTHONPATH=src .venv/bin/python scripts/generate_slash_reference.py --check
 .venv/bin/ruff check src tests desktoppet/pet.py desktoppet/tests
 ```
 
@@ -35,4 +37,7 @@ Explain the user-visible change, the privacy or security impact, and the checks 
 
 Changes to legal copy, retention, consent, moderation, blocking, or action permissions deserve extra context because they affect real people and servers.
 
-By intentionally submitting a contribution, you agree to the contribution terms in the [Obsidian License 1.0](LICENSE).
+You retain copyright in work you submit. Only submit work you have the right to
+license. By intentionally submitting a contribution, you agree that accepted
+changes may be distributed under the contribution terms in the
+[Obsidian License 1.0](LICENSE).

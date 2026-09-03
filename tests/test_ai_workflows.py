@@ -66,6 +66,9 @@ class WorkflowCatalogTest(unittest.TestCase):
         self.assertFalse(merged["ai_structured_repair"])
         self.assertFalse(merged["ai_tracing_enabled"])
 
+    def test_fast_is_the_new_guild_ai_mode_default(self) -> None:
+        self.assertEqual(merge_server_settings({})["ai_mode_default"], "fast")
+
     def test_channel_formatting_is_bounded_and_attributed(self) -> None:
         messages = [
             SimpleNamespace(
@@ -148,7 +151,7 @@ class WorkflowRunTest(unittest.IsolatedAsyncioTestCase):
     async def test_fact_check_uses_current_search_context_and_returns_sources(self) -> None:
         sources = [{"title": "Primary source", "url": "https://example.test/source"}]
 
-        async def fake_search(_query: typing.Any, k: int = 5):
+        async def fake_search(_query: typing.Any, k: int = 5, **_kwargs: typing.Any):
             self.assertEqual(k, 5)
             return "[1] Primary source\nEvidence", sources, None
 

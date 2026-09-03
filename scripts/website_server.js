@@ -37,6 +37,19 @@ function requestedFile(url) {
   return candidate;
 }
 
+function customNotFound(file) {
+  if (!file) {
+    return null;
+  }
+  const relative = path.relative(root, file);
+  const site = relative.split(path.sep, 1)[0];
+  if (!site || site === ".") {
+    return null;
+  }
+  const candidate = path.join(root, site, "404.html");
+  return candidate.startsWith(`${root}${path.sep}`) ? candidate : null;
+}
+
 http
   .createServer((request, response) => {
     if (request.method !== "GET" && request.method !== "HEAD") {
@@ -58,9 +71,62 @@ http
       return;
     }
     fs.stat(file, (error, stats) => {
+      if (!error && stats.isDirectory()) {
+        file = path.join(file, "index.html");
+        fs.stat(file, (indexError, indexStats) => {
+          if (indexError || !indexStats.isFile()) {
+            const fallback = customNotFound(file);
+            fs.stat(fallback || "", (fallbackError, fallbackStats) => {
+              if (fallbackError || !fallbackStats.isFile()) {
+                response.writeHead(404);
+                response.end();
+                return;
+              }
+              response.writeHead(404, {
+                "Content-Length": fallbackStats.size,
+                "Content-Type": mimeTypes.get(path.extname(fallback).toLowerCase()) || "text/html; charset=utf-8",
+                "X-Content-Type-Options": "nosniff",
+              });
+              if (request.method === "HEAD") {
+                response.end();
+                return;
+              }
+              fs.createReadStream(fallback).on("error", () => response.destroy()).pipe(response);
+            });
+            return;
+          }
+          response.writeHead(200, {
+            "Content-Length": indexStats.size,
+            "Content-Type": mimeTypes.get(path.extname(file).toLowerCase()) || "application/octet-stream",
+            "X-Content-Type-Options": "nosniff",
+          });
+          if (request.method === "HEAD") {
+            response.end();
+            return;
+          }
+          fs.createReadStream(file).on("error", () => response.destroy()).pipe(response);
+        });
+        return;
+      }
       if (error || !stats.isFile()) {
-        response.writeHead(404);
-        response.end();
+        const fallback = customNotFound(file);
+        fs.stat(fallback || "", (fallbackError, fallbackStats) => {
+          if (fallbackError || !fallbackStats.isFile()) {
+            response.writeHead(404);
+            response.end();
+            return;
+          }
+          response.writeHead(404, {
+            "Content-Length": fallbackStats.size,
+            "Content-Type": mimeTypes.get(path.extname(fallback).toLowerCase()) || "text/html; charset=utf-8",
+            "X-Content-Type-Options": "nosniff",
+          });
+          if (request.method === "HEAD") {
+            response.end();
+            return;
+          }
+          fs.createReadStream(fallback).on("error", () => response.destroy()).pipe(response);
+        });
         return;
       }
       response.writeHead(200, {

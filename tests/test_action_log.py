@@ -48,6 +48,10 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
         self.guild = _Guild()
         self.settings = dict(MODULES["action_log"]["settings"])
         self.settings["channel_id"] = str(self.guild.log_channel.id)
+        # Content-bearing tests opt in explicitly. The shipped defaults remain
+        # metadata-only and are asserted below.
+        self.settings["include_message_content"] = True
+        self.settings["include_attachments"] = True
         db.module_config_set(
             str(self.guild.id),
             "action_log",
@@ -461,6 +465,8 @@ class ActionLogTests(unittest.IsolatedAsyncioTestCase):
     def test_catalog_exposes_complete_typed_logging_controls(self):
         settings = MODULES["action_log"]["settings"]
         self.assertEqual(settings["channel_id"], "")
+        self.assertFalse(settings["include_message_content"])
+        self.assertFalse(settings["include_attachments"])
         self.assertFalse(
             any(key.endswith("_channel_id") for key in settings if key != "channel_id")
         )

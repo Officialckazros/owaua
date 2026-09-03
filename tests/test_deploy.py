@@ -275,9 +275,10 @@ class DeploymentValidationTests(unittest.TestCase):
         self.assertEqual(run.call_count, 1)
         self.assertEqual(run.call_args.args[0], ["/usr/bin/git", "status", "--short"])
 
-    def test_assemble_sites_flattens_kozzyx_pages_and_promotes_wearegays_index(self) -> None:
+    def test_assemble_sites_includes_owaua_and_promotes_wearegays_index(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             website = Path(directory) / "website"
+            owaua = Path(directory) / "owaua.com"
             (website / "kozzyx.org" / "pages").mkdir(parents=True)
             (website / "kozzyx.org" / "css").mkdir()
             (website / "kirmy.org").mkdir()
@@ -285,6 +286,7 @@ class DeploymentValidationTests(unittest.TestCase):
             (website / "wearegays.net" / "owaua").mkdir()
             (website / "wearedevsstatus").mkdir()
             (website / "social").mkdir()
+            owaua.mkdir()
             (website / "kozzyx.org" / "pages" / "index.html").write_text("kozzyx", encoding="utf-8")
             (website / "kozzyx.org" / "css" / "theme.css").write_text("body{}", encoding="utf-8")
             (website / "kirmy.org" / "index.html").write_text("kirmy", encoding="utf-8")
@@ -298,8 +300,12 @@ class DeploymentValidationTests(unittest.TestCase):
             )
             (website / "wearedevsstatus" / "index.html").write_text("status", encoding="utf-8")
             (website / "social" / "index.html").write_text("social", encoding="utf-8")
+            (owaua / "index.html").write_text("owaua home", encoding="utf-8")
             assembled = Path(directory) / "assembled"
-            with mock.patch.object(deploy_script, "WEBSITE_ROOT", website):
+            with (
+                mock.patch.object(deploy_script, "WEBSITE_ROOT", website),
+                mock.patch.object(deploy_script, "OWAUA_SITE_ROOT", owaua),
+            ):
                 deploy_script.assemble_sites(assembled)
             self.assertEqual(
                 (assembled / "kozzyx" / "index.html").read_text(encoding="utf-8"),
@@ -312,6 +318,11 @@ class DeploymentValidationTests(unittest.TestCase):
             )
             self.assertTrue((assembled / "wearegays" / "status" / "index.html").is_file())
             self.assertTrue((assembled / "kirmy" / "social" / "index.html").is_file())
+            self.assertEqual(
+                (assembled / "owaua" / "index.html").read_text(encoding="utf-8"),
+                "owaua home",
+            )
+            self.assertTrue((assembled / "owaua" / "social" / "index.html").is_file())
             self.assertEqual(
                 (assembled / "femsec" / "index.html").read_text(encoding="utf-8"),
                 "files",

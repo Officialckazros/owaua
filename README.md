@@ -8,7 +8,8 @@ This is the source for the bot. It is not a hosted service and it does not inclu
 
 - Replies in DMs, mentions, and configured channels.
 - Lets people inspect, export, opt out of, and delete their stored data with `/privacy`.
-- Keeps message history off unless a server enables it and a member opts in.
+- Never stores ordinary message history until the individual member opts in. The server-wide
+  history gate starts enabled so that opt-in works immediately, and administrators can turn it off.
 - Offers moderator tools, tickets, roles, reminders, feeds, forms, and community automations.
 - Treats model-proposed Discord actions as proposals: an authorized person sees a preview and confirms it before the bot acts.
 - Scans non-media attachments locally with ClamAV when scanning is enabled.
@@ -51,7 +52,11 @@ Use distinct random values of at least 32 characters for the two secrets. The re
 ## Privacy and safety defaults
 
 - No archive guild, command-sync guild, static block, public site, or privacy contact is configured in this repository. Set your own values in `.env`.
-- Raw history requires both a server setting and an individual opt-in. Its normal retention limit is 30 days.
+- Raw history requires both the enabled server setting and an individual opt-in. The server setting
+  starts enabled; without the individual's exact-scope opt-in, no ordinary history is stored. Its
+  normal retention limit is 30 days.
+- Action Log starts without message bodies or attachment details. Administrators must explicitly
+  enable those private Discord-log payloads and should tell members before doing so.
 - The optional permanent text archive is disabled by default. Enabling `OWAUA_ARCHIVE_GUILD_IDS` changes your privacy obligations; disclose it clearly to the affected server before you use it.
 - AI providers receive only the request data required for the feature. Check the provider's own terms before enabling it.
 - Ordinary chat cannot directly run Discord mutations. Assistant and moderation actions remain permission-checked and confirmation-gated.
@@ -64,15 +69,20 @@ The shipped Terms and Privacy pages describe the maintainer's deployment, not un
 
 The dashboard needs a public HTTPS URL, Discord OAuth client id/secret, and a separate session secret. See `.env.example` for the exact names and redirect URI format.
 
-`COMMANDS.txt` is the current command reference. `FEATURE_COVERAGE.md` records what is implemented and what still needs work. `TOPGG.md` is only relevant if you submit a bot listing.
+`COMMANDS.txt` is the behavior guide, and `SLASH_COMMANDS.md` is generated from the
+registered Discord command tree so command additions cannot silently drift from the docs.
+`FEATURE_COVERAGE.md` records what is implemented and what still needs work. `TOPGG.md`
+is only relevant if you submit a bot listing.
 
 ## Development
 
 Run the same checks used by CI:
 
 ```bash
-PYTHONPATH=src python -m unittest discover -s tests -v
-PYTHONPATH=src python -m compileall -q src
+OWAUA_LOAD_DOTENV=0 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
+OWAUA_LOAD_DOTENV=0 PYTHONPATH=src .venv/bin/python scripts/run_ai_evals.py
+OWAUA_LOAD_DOTENV=0 PYTHONPATH=src .venv/bin/python scripts/generate_slash_reference.py --check
+OWAUA_LOAD_DOTENV=0 PYTHONPATH=src .venv/bin/python -m compileall -q src
 .venv/bin/ruff check src tests desktoppet/pet.py desktoppet/tests
 
 cd cloudflare-worker

@@ -84,10 +84,10 @@ def user_mode(user_id: str | None, scope_id: str | None) -> str:
         if saved in {"fast", "balanced", "reasoning"}:
             return saved
     if scope_id:
-        saved = str(db.guild_settings(str(scope_id)).get("ai_mode_default") or "balanced")
+        saved = str(db.guild_settings(str(scope_id)).get("ai_mode_default") or "fast")
         if saved in {"fast", "balanced", "reasoning"}:
             return saved
-    return "balanced"
+    return "fast"
 
 
 def set_user_mode(user_id: str, mode: str) -> str:
@@ -235,6 +235,60 @@ class AIBudgetExceeded(RuntimeError):
     """A paid-AI request was rejected before another provider call was made."""
 
 
+def estimate_openai_luna_microusd(
+    *, input_tokens: int, max_output_tokens: int, fixed_microusd: int = 0
+) -> int:
+    """Conservatively reserve Luna's full possible output at current list pricing."""
+    # GPT-5.6 Luna is $0.20/M input and $1.20/M output. Expressed in
+    # micro-USD, those rates are 0.20 and 1.20 per token respectively.
+    return max(
+        1,
+        int(
+            math.ceil(
+                max(0, int(input_tokens)) * 0.20
+                + max(0, int(max_output_tokens)) * 1.20
+                + max(0, int(fixed_microusd))
+            )
+        ),
+    )
+
+
+def reserve_openai_spend(
+    *,
+    model: str,
+    input_tokens: int,
+    max_output_tokens: int,
+    scope_id: str | None = None,
+    user_id: str | None = None,
+    fixed_microusd: int = 0,
+) -> None:
+    """Record estimated OpenAI usage without imposing a dollar cap."""
+    if db.ai_spend_paused():
+        raise AIBudgetExceeded("OpenAI spending is paused by the bot owner")
+    if user_id and db.ai_user_spend_paused(str(user_id)):
+        raise AIBudgetExceeded("OpenAI spending is disabled for this user")
+    reserved = estimate_openai_luna_microusd(
+        input_tokens=input_tokens,
+        max_output_tokens=max_output_tokens,
+        fixed_microusd=fixed_microusd,
+    )
+    db.ai_spend_reserve(
+        user_id=user_id,
+        scope_id=scope_id,
+        provider="openai",
+        model=str(model),
+        input_tokens=input_tokens,
+        max_output_tokens=max_output_tokens,
+        reserved_microusd=reserved,
+        hourly_limit_microusd=None,
+        daily_limit_microusd=None,
+        monthly_limit_microusd=None,
+        user_daily_limit_microusd=None,
+        scope_daily_limit_microusd=None,
+        total_limit_microusd=None,
+    )
+
+
 def _retry_after(
     bucket: collections.deque[typing.Any], now_value: float, window: float = 60.0
 ) -> int:
@@ -303,78 +357,29 @@ def _budget_error(
 
 
 def check_request_budget(scope_id: str | None, task: str, *, user_id: str | None = None) -> None:
-    """Admit one AI request across shared minute, hour, and day ceilings."""
-    del task
-    scope = str(scope_id or "").strip()
+    """Apply the one requested per-user prompt window."""
+    del scope_id, task
     user = str(user_id or "").strip()
     is_owner = bool(user and config.is_bot_owner(user))
-
-    host_min_limit = max(1, min(600, int(config.AI_REQUESTS_PER_MINUTE)))
-    host_hr_limit = max(10, min(50_000, int(config.AI_REQUESTS_PER_HOUR)))
-    host_day_limit = max(50, min(500_000, int(config.AI_REQUESTS_PER_DAY)))
-
-    scope_min_limit = host_min_limit
-    if scope:
-        settings = db.guild_settings(scope)
-        scope_min_limit = max(
-            1,
-            min(host_min_limit, int(settings.get("ai_requests_per_minute") or host_min_limit)),
-        )
-
-    user_min_limit = max(1, min(host_min_limit, int(config.AI_USER_REQUESTS_PER_MINUTE)))
-    user_hr_limit = max(1, min(host_hr_limit, int(config.AI_USER_REQUESTS_PER_HOUR)))
-    user_day_limit = max(5, min(host_day_limit, int(config.AI_USER_REQUESTS_PER_DAY)))
+    user_min_limit = max(1, int(config.AI_USER_REQUESTS_PER_MINUTE))
 
     now_value = time.monotonic()
     with _usage_lock:
         _cleanup_usage_maps(now_value)
 
-        glob_min = _usage.setdefault(("global", "*"), collections.deque())
-        _prune_times(glob_min, now_value, 60.0)
-        if len(glob_min) >= host_min_limit:
-            raise _budget_error(glob_min, now_value, 60.0)
-
-        glob_hr = _usage_hourly.setdefault(("global", "*"), collections.deque())
-        _prune_times(glob_hr, now_value, 3600.0)
-        if len(glob_hr) >= host_hr_limit:
-            raise _budget_error(glob_hr, now_value, 3600.0)
-
-        glob_day = _usage_daily.setdefault(("global", "*"), collections.deque())
-        _prune_times(glob_day, now_value, 86400.0)
-        if len(glob_day) >= host_day_limit:
-            raise _budget_error(glob_day, now_value, 86400.0)
-
-        if scope:
-            sc_min = _usage.setdefault(("scope", scope), collections.deque())
-            _prune_times(sc_min, now_value, 60.0)
-            if len(sc_min) >= scope_limit if (scope_limit := scope_min_limit) else host_min_limit:
-                raise _budget_error(sc_min, now_value, 60.0)
-
         if user and not is_owner:
             u_min = _usage.setdefault(("user", user), collections.deque())
-            _prune_times(u_min, now_value, 60.0)
+            user_window = float(config.AI_USER_REQUEST_WINDOW_SECONDS)
+            _prune_times(u_min, now_value, user_window)
             if len(u_min) >= user_min_limit:
-                raise _budget_error(u_min, now_value, 60.0)
-
-            u_hr = _usage_hourly.setdefault(("user", user), collections.deque())
-            _prune_times(u_hr, now_value, 3600.0)
-            if len(u_hr) >= user_hr_limit:
-                raise _budget_error(u_hr, now_value, 3600.0)
-
-            u_day = _usage_daily.setdefault(("user", user), collections.deque())
-            _prune_times(u_day, now_value, 86400.0)
-            if len(u_day) >= user_day_limit:
-                raise _budget_error(u_day, now_value, 86400.0)
+                raise _budget_error(
+                    u_min,
+                    now_value,
+                    user_window,
+                    f"AI prompt limit reached ({user_min_limit} per {user_window:g}s)",
+                )
 
             u_min.append(now_value)
-            u_hr.append(now_value)
-            u_day.append(now_value)
-
-        glob_min.append(now_value)
-        glob_hr.append(now_value)
-        glob_day.append(now_value)
-        if scope:
-            _usage.setdefault(("scope", scope), collections.deque()).append(now_value)
 
 
 def reserve_provider_attempt(
@@ -383,97 +388,30 @@ def reserve_provider_attempt(
     user_id: str | None = None,
     estimated_tokens: int = 1,
 ) -> None:
-    """Reserve one real outbound provider attempt before network I/O."""
+    """Record one real outbound provider attempt without a spend budget."""
     scope = str(scope_id or "").strip()
     user = str(user_id or "").strip()
-    is_owner = bool(user and config.is_bot_owner(user))
     token_cost = max(1, int(estimated_tokens))
-
-    host_attempt_limit = max(1, min(10_000, int(config.AI_PROVIDER_ATTEMPTS_PER_MINUTE)))
-    host_token_min_limit = max(1_000, min(10_000_000, int(config.AI_TOKEN_BUDGET_PER_MINUTE)))
-    host_token_hr_limit = max(50_000, min(50_000_000, int(config.AI_TOKEN_BUDGET_PER_HOUR)))
-    host_token_day_limit = max(200_000, min(200_000_000, int(config.AI_TOKEN_BUDGET_PER_DAY)))
-
-    scope_token_min_limit = host_token_min_limit
-    if scope:
-        settings = db.guild_settings(scope)
-        scope_token_min_limit = max(
-            1_000,
-            min(
-                host_token_min_limit,
-                int(settings.get("ai_tokens_per_minute") or host_token_min_limit),
-            ),
-        )
-
-    user_token_min_limit = max(
-        1_000,
-        min(host_token_min_limit, int(config.AI_USER_TOKEN_BUDGET_PER_MINUTE)),
-    )
-    user_token_hr_limit = max(
-        10_000,
-        min(host_token_hr_limit, int(config.AI_USER_TOKEN_BUDGET_PER_HOUR)),
-    )
-    user_token_day_limit = max(
-        25_000,
-        min(host_token_day_limit, int(config.AI_USER_TOKEN_BUDGET_PER_DAY)),
-    )
 
     now_value = time.monotonic()
     with _usage_lock:
         _cleanup_usage_maps(now_value)
         _prune_times(_provider_attempts, now_value, 60.0)
-        if len(_provider_attempts) >= host_attempt_limit:
-            raise _budget_error(_provider_attempts, now_value, 60.0)
-
         g_min_tokens = _token_usage.setdefault(("global", "*"), collections.deque())
         _prune_tokens(g_min_tokens, now_value, 60.0)
-        if sum(cost for _t, cost in g_min_tokens) + token_cost > host_token_min_limit:
-            raise _budget_error(g_min_tokens, now_value, 60.0)
-
         g_hr_tokens = _token_usage_hourly.setdefault(("global", "*"), collections.deque())
         _prune_tokens(g_hr_tokens, now_value, 3600.0)
-        if sum(cost for _t, cost in g_hr_tokens) + token_cost > host_token_hr_limit:
-            raise _budget_error(g_hr_tokens, now_value, 3600.0)
-
         g_day_tokens = _token_usage_daily.setdefault(("global", "*"), collections.deque())
         _prune_tokens(g_day_tokens, now_value, 86400.0)
-        if sum(cost for _t, cost in g_day_tokens) + token_cost > host_token_day_limit:
-            raise _budget_error(g_day_tokens, now_value, 86400.0)
-
-        if scope:
-            sc_tokens = _token_usage.setdefault(("scope", scope), collections.deque())
-            _prune_tokens(sc_tokens, now_value, 60.0)
-            if sum(cost for _t, cost in sc_tokens) + token_cost > scope_token_min_limit:
-                raise _budget_error(sc_tokens, now_value, 60.0)
-
-        if user and not is_owner:
-            u_min_tokens = _token_usage.setdefault(("user", user), collections.deque())
-            _prune_tokens(u_min_tokens, now_value, 60.0)
-            if sum(cost for _t, cost in u_min_tokens) + token_cost > user_token_min_limit:
-                raise _budget_error(u_min_tokens, now_value, 60.0)
-
-            u_hr_tokens = _token_usage_hourly.setdefault(("user", user), collections.deque())
-            _prune_tokens(u_hr_tokens, now_value, 3600.0)
-            if sum(cost for _t, cost in u_hr_tokens) + token_cost > user_token_hr_limit:
-                raise _budget_error(u_hr_tokens, now_value, 3600.0)
-
-            u_day_tokens = _token_usage_daily.setdefault(("user", user), collections.deque())
-            _prune_tokens(u_day_tokens, now_value, 86400.0)
-            if sum(cost for _t, cost in u_day_tokens) + token_cost > user_token_day_limit:
-                raise _budget_error(u_day_tokens, now_value, 86400.0)
-
-            u_min_tokens.append((now_value, token_cost))
-            u_hr_tokens.append((now_value, token_cost))
-            u_day_tokens.append((now_value, token_cost))
 
         _provider_attempts.append(now_value)
         g_min_tokens.append((now_value, token_cost))
         g_hr_tokens.append((now_value, token_cost))
         g_day_tokens.append((now_value, token_cost))
         if scope:
-            _token_usage.setdefault(("scope", scope), collections.deque()).append(
-                (now_value, token_cost)
-            )
+            _token_usage.setdefault(("scope", scope), collections.deque()).append((now_value, token_cost))
+        if user:
+            _token_usage.setdefault(("user", user), collections.deque()).append((now_value, token_cost))
 
 
 @contextlib.asynccontextmanager

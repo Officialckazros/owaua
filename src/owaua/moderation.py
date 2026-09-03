@@ -387,7 +387,7 @@ async def _enforce(message: discord.Message, result: dict[typing.Any, typing.Any
 
 
 async def safety_check(message: discord.Message) -> None:
-    """Classify one message when its guild explicitly opted in to moderation."""
+    """Classify one text message and its first image after guild opt-in."""
     global _active_checks
 
     if not getattr(config, "SAFETY_ENABLED", False) or not config.SAFETY_API_KEY:
@@ -399,7 +399,15 @@ async def safety_check(message: discord.Message) -> None:
         return
     if getattr(message.author, "bot", False):
         return
-    if not message.content or len(message.content) < 2:
+    image_url = ""
+    for attachment in getattr(message, "attachments", None) or []:
+        if (
+            str(getattr(attachment, "content_type", "") or "").startswith("image/")
+            and int(getattr(attachment, "size", 0) or 0) <= config.VISION_MAX_IMAGE_BYTES
+        ):
+            image_url = str(getattr(attachment, "proxy_url", None) or attachment.url)
+            break
+    if len(message.content or "") < 2 and not image_url:
         return
     if _active_checks >= _MAX_CONCURRENT_CHECKS:
         log.warning("moderation classifier at capacity; dropping message %s", message.id)
@@ -418,9 +426,17 @@ async def safety_check(message: discord.Message) -> None:
 
     _active_checks += 1
     try:
+        image_bytes: bytes | None = None
+        image_mime = "image/png"
+        if image_url:
+            downloaded = await llm.get_image(image_url, max_bytes=config.VISION_MAX_IMAGE_BYTES)
+            if downloaded is not None:
+                image_bytes, image_mime = downloaded
         result = await llm.moderate(
             config.SAFETY_MODEL,
             message.content[:4000],
+            image_bytes=image_bytes,
+            image_mime=image_mime,
             base_url=config.SAFETY_BASE_URL,
             api_key=config.SAFETY_API_KEY,
             scope_id=Scope.guild(message.guild.id).key,

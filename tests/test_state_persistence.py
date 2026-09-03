@@ -195,7 +195,6 @@ class StatePersistenceTest(unittest.TestCase):
         self.assertFalse(dm.is_cli_conversation_active(505))
 
     def test_privacy_delete_covers_new_user_owned_tables(self) -> None:
-        blocked.block_user("606", reason="tos: delete", block_source="tos")
         dm.save_contacts(
             {
                 "606": {
@@ -212,6 +211,7 @@ class StatePersistenceTest(unittest.TestCase):
             status="accepted",
             network_hash="b" * 64,
         )
+        blocked.block_user("606", reason="tos: delete", block_source="tos")
         db.record_assistant_action(
             actor_id="606",
             scope_id="guild:1",
@@ -229,6 +229,7 @@ class StatePersistenceTest(unittest.TestCase):
         self.assertEqual(len(exported["dm_contacts"]), 1)
         self.assertEqual(len(exported["assistant_actions"]), 1)
         self.assertEqual(exported["tos_acceptance"][0]["status"], "accepted")
+        self.assertEqual(len(exported["tos_blocked_networks"]), 1)
         deleted = db.privacy_delete_user("606")
         self.assertEqual(deleted["dynamic_blocks"], 1)
         self.assertEqual(deleted["dm_contacts"], 1)
@@ -236,6 +237,7 @@ class StatePersistenceTest(unittest.TestCase):
         self.assertEqual(deleted["assistant_action_history"], 1)
         self.assertEqual(deleted["tos_acceptance_challenges"], 1)
         self.assertEqual(deleted["tos_acceptances"], 1)
+        self.assertEqual(deleted["tos_blocked_networks"], 1)
         self.assertFalse(blocked.is_dynamically_blocked("606"))
 
     def test_privacy_delete_minimizes_but_preserves_malware_security_block(self) -> None:
