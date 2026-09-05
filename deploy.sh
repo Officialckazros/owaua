@@ -14,4 +14,10 @@ fi
 
 docker build -t persona-test-bot .
 docker rm -f persona-test-bot 2>/dev/null || true
-exec docker run --name persona-test-bot --restart unless-stopped --env-file .env persona-test-bot
+docker volume create persona-test-bot-data >/dev/null
+exec docker run \
+  --name persona-test-bot \
+  --restart unless-stopped \
+  --env-file .env \
+  --mount source=persona-test-bot-data,target=/app/data \
+  persona-test-bot
