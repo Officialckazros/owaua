@@ -7,8 +7,9 @@ import os
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 class MemoryStore:
@@ -28,8 +29,20 @@ class MemoryStore:
         connection.execute("PRAGMA busy_timeout=10000")
         return connection
 
+    @contextmanager
+    def _managed_connection(self) -> Iterator[sqlite3.Connection]:
+        connection = self._connect()
+        try:
+            yield connection
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def _initialize(self) -> None:
-        with self._lock, self._connect() as db:
+        with self._lock, self._managed_connection() as db:
             db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS messages (
@@ -40,6 +53,7 @@ class MemoryStore:
                     role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
                     content TEXT NOT NULL,
                     attachments_json TEXT NOT NULL DEFAULT '[]',
+                    accepted INTEGER NOT NULL DEFAULT 0 CHECK (accepted IN (0, 1)),
                     created_at REAL NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS messages_conversation_idx
@@ -51,11 +65,30 @@ class MemoryStore:
                     summary TEXT NOT NULL DEFAULT '',
                     facts_json TEXT NOT NULL DEFAULT '[]',
                     summarized_through_id INTEGER NOT NULL DEFAULT 0,
+                    accepted_context INTEGER NOT NULL DEFAULT 0
+                        CHECK (accepted_context IN (0, 1)),
                     updated_at REAL NOT NULL,
                     PRIMARY KEY (scope_id, user_id)
                 );
                 """
             )
+            message_columns = {
+                str(row["name"])
+                for row in db.execute("PRAGMA table_info(messages)").fetchall()
+            }
+            if "accepted" not in message_columns:
+                db.execute(
+                    "ALTER TABLE messages ADD COLUMN accepted INTEGER NOT NULL DEFAULT 0"
+                )
+            memory_columns = {
+                str(row["name"])
+                for row in db.execute("PRAGMA table_info(conversation_memory)").fetchall()
+            }
+            if "accepted_context" not in memory_columns:
+                db.execute(
+                    "ALTER TABLE conversation_memory "
+                    "ADD COLUMN accepted_context INTEGER NOT NULL DEFAULT 0"
+                )
         try:
             os.chmod(self.path, 0o600)
         except OSError:
@@ -71,14 +104,15 @@ class MemoryStore:
         content: str,
         attachments: list[dict[str, str]] | None = None,
         created_at: float | None = None,
+        accepted: bool = True,
     ) -> bool:
         payload = json.dumps(attachments or [], ensure_ascii=False, separators=(",", ":"))
-        with self._lock, self._connect() as db:
+        with self._lock, self._managed_connection() as db:
             cursor = db.execute(
                 """
                 INSERT OR IGNORE INTO messages
-                    (event_id, scope_id, user_id, role, content, attachments_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (event_id, scope_id, user_id, role, content, attachments_json, accepted, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event_id,
@@ -87,6 +121,7 @@ class MemoryStore:
                     role,
                     content,
                     payload,
+                    int(accepted),
                     created_at if created_at is not None else time.time(),
                 ),
             )
@@ -95,12 +130,12 @@ class MemoryStore:
     def recent_messages(
         self, scope_id: str, user_id: str, *, limit: int
     ) -> list[dict[str, Any]]:
-        with self._lock, self._connect() as db:
+        with self._lock, self._managed_connection() as db:
             rows = db.execute(
                 """
                 SELECT id, role, content, attachments_json, created_at
                 FROM messages
-                WHERE scope_id = ? AND user_id = ?
+                WHERE scope_id = ? AND user_id = ? AND accepted = 1
                 ORDER BY id DESC
                 LIMIT ?
                 """,
@@ -133,11 +168,11 @@ class MemoryStore:
     ) -> list[dict[str, Any]]:
         summary, facts, summarized_through = self.get_memory(scope_id, user_id)
         del summary, facts
-        with self._lock, self._connect() as db:
+        with self._lock, self._managed_connection() as db:
             cutoff = db.execute(
                 """
                 SELECT id FROM messages
-                WHERE scope_id = ? AND user_id = ?
+                WHERE scope_id = ? AND user_id = ? AND accepted = 1
                 ORDER BY id DESC LIMIT 1 OFFSET ?
                 """,
                 (scope_id, user_id, keep_recent),
@@ -149,7 +184,7 @@ class MemoryStore:
                 SELECT id, role, content, attachments_json, created_at
                 FROM messages
                 WHERE scope_id = ? AND user_id = ?
-                  AND id > ? AND id <= ?
+                  AND accepted = 1 AND id > ? AND id <= ?
                 ORDER BY id ASC
                 LIMIT ?
                 """,
@@ -166,12 +201,12 @@ class MemoryStore:
         ]
 
     def get_memory(self, scope_id: str, user_id: str) -> tuple[str, list[str], int]:
-        with self._lock, self._connect() as db:
+        with self._lock, self._managed_connection() as db:
             row = db.execute(
                 """
                 SELECT summary, facts_json, summarized_through_id
                 FROM conversation_memory
-                WHERE scope_id = ? AND user_id = ?
+                WHERE scope_id = ? AND user_id = ? AND accepted_context = 1
                 """,
                 (scope_id, user_id),
             ).fetchone()
@@ -194,15 +229,17 @@ class MemoryStore:
         summarized_through_id: int,
     ) -> None:
         clean_facts = list(dict.fromkeys(fact.strip() for fact in facts if fact.strip()))[:50]
-        with self._lock, self._connect() as db:
+        with self._lock, self._managed_connection() as db:
             db.execute(
                 """
                 INSERT INTO conversation_memory
-                    (scope_id, user_id, summary, facts_json, summarized_through_id, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (scope_id, user_id, summary, facts_json, summarized_through_id,
+                     accepted_context, updated_at)
+                VALUES (?, ?, ?, ?, ?, 1, ?)
                 ON CONFLICT(scope_id, user_id) DO UPDATE SET
                     summary = excluded.summary,
                     facts_json = excluded.facts_json,
+                    accepted_context = 1,
                     summarized_through_id = MAX(
                         conversation_memory.summarized_through_id,
                         excluded.summarized_through_id
@@ -223,7 +260,7 @@ class MemoryStore:
 
     def prune_older_than(self, cutoff_timestamp: float) -> int:
         """Delete raw messages older than the configured retention period."""
-        with self._lock, self._connect() as db:
+        with self._lock, self._managed_connection() as db:
             cursor = db.execute(
                 "DELETE FROM messages WHERE created_at < ?", (cutoff_timestamp,)
             )

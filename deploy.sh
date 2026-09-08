@@ -1,23 +1,83 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")"
 
-if ! command -v docker >/dev/null 2>&1; then
-  echo "Docker is required for this one-command deployment."
-  exit 1
-fi
-if [[ ! -f .env ]]; then
-  cp .env.example .env
-  echo "Created .env. Fill in DISCORD_TOKEN and OPENAI_API_KEY, then run ./deploy.sh again."
+ROOT_DIR=$(cd "$(dirname "$0")" && pwd -P)
+OWAUA_DEPLOY_SCRIPT=${OWAUA_DEPLOY_SCRIPT:-"$ROOT_DIR/../owaua/scripts/deploy"}
+
+if [[ ! -f "$OWAUA_DEPLOY_SCRIPT" ]]; then
+  echo "Cannot find the Daki deployment client: $OWAUA_DEPLOY_SCRIPT" >&2
   exit 1
 fi
 
-docker build -t persona-test-bot .
-docker rm -f persona-test-bot 2>/dev/null || true
-docker volume create persona-test-bot-data >/dev/null
-exec docker run \
-  --name persona-test-bot \
-  --restart unless-stopped \
-  --env-file .env \
-  --mount source=persona-test-bot-data,target=/app/data \
-  persona-test-bot
+ROOT_DIR="$ROOT_DIR" OWAUA_DEPLOY_SCRIPT="$OWAUA_DEPLOY_SCRIPT" python3 - <<'PY'
+import hashlib
+import importlib.machinery
+import importlib.util
+import os
+import time
+from pathlib import Path
+
+root = Path(os.environ["ROOT_DIR"])
+deploy_path = Path(os.environ["OWAUA_DEPLOY_SCRIPT"])
+
+excluded = {"deploy.sh", "update-persona.sh"}
+required_runtime = {"bot.py", "memory_store.py", "requirements.txt", "run-bots.sh"}
+files = sorted(
+    path
+    for path in root.iterdir()
+    if path.is_file()
+    and not path.name.startswith(".")
+    and path.name not in excluded
+    and (path.suffix == ".py" or path.suffix in {".sh", ".txt"})
+    and path.parent == root
+)
+if not files:
+    raise RuntimeError("No deployable runtime files found")
+missing_runtime = required_runtime - {path.name for path in files}
+if missing_runtime:
+    raise RuntimeError(
+        "Deployment is incomplete; missing required runtime file(s): "
+        + ", ".join(sorted(missing_runtime))
+    )
+
+loader = importlib.machinery.SourceFileLoader("daki_deploy", str(deploy_path))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+if spec is None:
+    raise RuntimeError("could not load the Daki deployment client")
+module = importlib.util.module_from_spec(spec)
+loader.exec_module(module)
+
+config = module.load_config()
+client = module.DakiClient(config["panel_url"], config["api_key"], config["server_id"])
+if client.state() != "running":
+    raise RuntimeError("Daki Bots server is not running; deployment was not uploaded")
+
+for local_path in files:
+    remote_path = f"persona-test-bot/{local_path.name}"
+    payload = local_path.read_bytes()
+    client.write_file(remote_path, payload)
+    encoded = remote_path.replace("/", "%2F")
+    readback = client.request(
+        "GET",
+        client.server_path(f"/files/contents?file=%2F{encoded}"),
+        expect_json=False,
+    )
+    if readback != payload:
+        raise RuntimeError(f"Daki verification failed for {remote_path}")
+    print(f"Uploaded {remote_path} (sha256={hashlib.sha256(payload).hexdigest()[:12]})")
+
+client.update_startup_variable("STARTUP_CMD", "")
+client.update_startup_variable(
+    "SECOND_CMD", "cd persona-test-bot && bash run-bots.sh"
+)
+print(f"Restarting {config.get('server_name', config['server_id'])}...")
+client.restart()
+deadline = time.monotonic() + 180
+while time.monotonic() < deadline:
+    if client.state() == "running":
+        print("Deployment completed successfully.")
+        break
+    time.sleep(2)
+else:
+    raise RuntimeError("Daki server did not return to running state within 180 seconds")
+PY

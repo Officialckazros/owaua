@@ -3,11 +3,23 @@ from __future__ import annotations
 import unittest
 
 from bot import (
+    DEEPSEEK_MODEL,
+    MISTRAL_MODEL,
+    build_instructions,
     classify_message,
+    chat_completion_text,
     credible_self_harm_risk,
+    estimate_tokens,
+    looks_like_leaked_reasoning,
+    model_context_limits,
+    model_output_limit,
+    moderation_result_is_rejected,
+    public_reply_text,
     quality_issues,
     response_text,
     split_discord_message,
+    to_chat_completions_payload,
+    truncate_for_context,
 )
 
 
@@ -51,6 +63,134 @@ class BotHelperTests(unittest.TestCase):
         self.assertGreater(len(chunks), 1)
         self.assertTrue(all(0 < len(chunk) <= 80 for chunk in chunks))
         self.assertEqual(" ".join(chunks), text)
+
+    def test_context_helpers_bound_large_values(self) -> None:
+        text = "x" * 100
+        truncated = truncate_for_context(text, limit=32)
+        self.assertLessEqual(len(truncated), 32)
+        self.assertIn("message truncated", truncated)
+        self.assertGreater(estimate_tokens({"text": text}), 1)
+
+    def test_non_gpt_models_use_tighter_request_budgets(self) -> None:
+        gpt_messages, gpt_input = model_context_limits("gpt-5.6-luna")
+        deepseek_messages, deepseek_input = model_context_limits(DEEPSEEK_MODEL)
+
+        self.assertLess(deepseek_messages, gpt_messages)
+        self.assertLess(deepseek_input, gpt_input)
+        self.assertLess(model_output_limit(MISTRAL_MODEL), model_output_limit("gpt-5.6-luna"))
+
+    def test_chat_completion_text_reads_mistral_shape(self) -> None:
+        data = {
+            "choices": [
+                {"message": {"role": "assistant", "content": "first"}},
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "second"}],
+                    }
+                },
+            ]
+        }
+        self.assertEqual(chat_completion_text(data), "first\nsecond")
+
+    def test_mistral_payload_converts_instructions_images_and_disables_safe_prompt(
+        self,
+    ) -> None:
+        payload = to_chat_completions_payload(
+            {
+                "model": MISTRAL_MODEL,
+                "store": False,
+                "instructions": "be owaua",
+                "max_output_tokens": 100,
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "look"},
+                            {
+                                "type": "input_image",
+                                "image_url": "https://cdn.discordapp.com/cat.png",
+                            },
+                        ],
+                    }
+                ],
+                "text": {
+                    "format": {
+                        "type": "json_schema",
+                        "name": "conversation_memory",
+                        "strict": True,
+                        "schema": {"type": "object"},
+                    }
+                },
+            }
+        )
+        self.assertEqual(payload["model"], MISTRAL_MODEL)
+        self.assertEqual(payload["max_tokens"], 100)
+        self.assertEqual(payload["safe_prompt"], False)
+        self.assertEqual(payload["reasoning_effort"], "none")
+        self.assertEqual(payload["messages"][0], {"role": "system", "content": "be owaua"})
+        self.assertEqual(
+            payload["messages"][1]["content"],
+            [
+                {"type": "text", "text": "look"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://cdn.discordapp.com/cat.png"},
+                },
+            ],
+        )
+        self.assertEqual(
+            payload["response_format"]["json_schema"]["name"], "conversation_memory"
+        )
+        self.assertNotIn("store", payload)
+        self.assertNotIn("instructions", payload)
+
+    def test_deepseek_payload_disables_thinking(self) -> None:
+        payload = to_chat_completions_payload(
+            {
+                "model": DEEPSEEK_MODEL,
+                "instructions": "be owaua",
+                "max_output_tokens": 100,
+                "input": [{"role": "user", "content": "hi"}],
+            }
+        )
+        self.assertEqual(payload["model"], DEEPSEEK_MODEL)
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertNotIn("safe_prompt", payload)
+        self.assertNotIn("reasoning_effort", payload)
+
+    def test_public_reply_drops_think_blocks_and_detects_planning_leaks(self) -> None:
+        self.assertEqual(
+            public_reply_text("<think>plan the reply</think>\nok wait"),
+            "ok wait",
+        )
+        self.assertTrue(
+            looks_like_leaked_reasoning(
+                "We need to respond to the user who keeps saying vibrator"
+            )
+        )
+        self.assertFalse(looks_like_leaked_reasoning("ok wait what"))
+
+    def test_adult_sexual_moderation_can_be_ignored_without_dropping_other_flags(
+        self,
+    ) -> None:
+        adult = {"flagged": True, "categories": {"sexual": True, "sexual/minors": False}}
+        minors = {"flagged": True, "categories": {"sexual": True, "sexual/minors": True}}
+        self.assertFalse(
+            moderation_result_is_rejected(adult, allow_adult_sexual=True)
+        )
+        self.assertTrue(
+            moderation_result_is_rejected(adult, allow_adult_sexual=False)
+        )
+        self.assertTrue(
+            moderation_result_is_rejected(minors, allow_adult_sexual=True)
+        )
+
+    def test_explicit_roleplay_policy_is_model_specific(self) -> None:
+        enabled = build_instructions(explicit_roleplay=True)
+        disabled = build_instructions(explicit_roleplay=False)
+        self.assertIn("EXPLICIT ROLEPLAY POLICY", enabled)
+        self.assertNotIn("EXPLICIT ROLEPLAY POLICY", disabled)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -95,6 +96,77 @@ class MemoryStoreTests(unittest.TestCase):
             ),
             [],
         )
+
+    def test_unaccepted_turns_and_context_are_not_reused(self) -> None:
+        self.store.append_message(
+            event_id="rejected",
+            scope_id="channel",
+            user_id="user",
+            role="user",
+            content="must not become model context",
+            accepted=False,
+        )
+        self.store.append_message(
+            event_id="accepted",
+            scope_id="channel",
+            user_id="user",
+            role="user",
+            content="safe context",
+        )
+
+        self.assertEqual(
+            [
+                message["content"]
+                for message in self.store.recent_messages("channel", "user", limit=10)
+            ],
+            ["safe context"],
+        )
+        summary_records = self.store.messages_to_summarize(
+            "channel", "user", keep_recent=0, limit=10
+        )
+        self.assertEqual([record["content"] for record in summary_records], ["safe context"])
+
+    def test_legacy_memory_is_quarantined_until_new_turns_are_accepted(self) -> None:
+        legacy_path = Path(self.temporary_directory.name) / "legacy.sqlite3"
+        db = sqlite3.connect(legacy_path)
+        try:
+            db.executescript(
+                """
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT NOT NULL UNIQUE,
+                    scope_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    attachments_json TEXT NOT NULL DEFAULT '[]',
+                    created_at REAL NOT NULL
+                );
+                CREATE TABLE conversation_memory (
+                    scope_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    summary TEXT NOT NULL DEFAULT '',
+                    facts_json TEXT NOT NULL DEFAULT '[]',
+                    summarized_through_id INTEGER NOT NULL DEFAULT 0,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY (scope_id, user_id)
+                );
+                INSERT INTO messages
+                    (event_id, scope_id, user_id, role, content, created_at)
+                VALUES ('legacy:1', 'channel', 'user', 'user', 'unvetted legacy text', 1);
+                INSERT INTO conversation_memory
+                    (scope_id, user_id, summary, facts_json, summarized_through_id, updated_at)
+                VALUES ('channel', 'user', 'legacy summary', '["legacy fact"]', 1, 1);
+                """
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        migrated = MemoryStore(legacy_path)
+
+        self.assertEqual(migrated.recent_messages("channel", "user", limit=10), [])
+        self.assertEqual(migrated.get_memory("channel", "user"), ("", [], 0))
 
 
 if __name__ == "__main__":
