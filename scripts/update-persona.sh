@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR=$(cd "$(dirname "$0")" && pwd -P)
+ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd -P)
 OWAUA_DEPLOY_SCRIPT=${OWAUA_DEPLOY_SCRIPT:-"$ROOT_DIR/../owaua/scripts/deploy"}
 
 if [[ ! -f "$OWAUA_DEPLOY_SCRIPT" ]]; then
@@ -20,9 +20,9 @@ from pathlib import Path
 root = Path(os.environ["ROOT_DIR"])
 deploy_path = Path(os.environ["OWAUA_DEPLOY_SCRIPT"])
 model_files = {
-    "mistral": "persona.py",
-    "deepseek": "deepseek_persona.py",
-    "gpt": "gpt_persona.py",
+    "mistral": "personas/persona.py",
+    "deepseek": "personas/deepseek_persona.py",
+    "gpt": "personas/gpt_persona.py",
 }
 requested = os.environ["PERSONA_MODELS"].replace(",", " ").split()
 models = []

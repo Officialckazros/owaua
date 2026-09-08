@@ -48,6 +48,7 @@ class MemoryStore:
                 CREATE TABLE IF NOT EXISTS messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     event_id TEXT NOT NULL UNIQUE,
+                    model_id TEXT NOT NULL DEFAULT '',
                     scope_id TEXT NOT NULL,
                     user_id TEXT NOT NULL,
                     role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
@@ -56,10 +57,8 @@ class MemoryStore:
                     accepted INTEGER NOT NULL DEFAULT 0 CHECK (accepted IN (0, 1)),
                     created_at REAL NOT NULL
                 );
-                CREATE INDEX IF NOT EXISTS messages_conversation_idx
-                    ON messages(scope_id, user_id, id);
-
                 CREATE TABLE IF NOT EXISTS conversation_memory (
+                    model_id TEXT NOT NULL DEFAULT '',
                     scope_id TEXT NOT NULL,
                     user_id TEXT NOT NULL,
                     summary TEXT NOT NULL DEFAULT '',
@@ -68,7 +67,7 @@ class MemoryStore:
                     accepted_context INTEGER NOT NULL DEFAULT 0
                         CHECK (accepted_context IN (0, 1)),
                     updated_at REAL NOT NULL,
-                    PRIMARY KEY (scope_id, user_id)
+                    PRIMARY KEY (model_id, scope_id, user_id)
                 );
                 """
             )
@@ -80,6 +79,10 @@ class MemoryStore:
                 db.execute(
                     "ALTER TABLE messages ADD COLUMN accepted INTEGER NOT NULL DEFAULT 0"
                 )
+            if "model_id" not in message_columns:
+                db.execute(
+                    "ALTER TABLE messages ADD COLUMN model_id TEXT NOT NULL DEFAULT ''"
+                )
             memory_columns = {
                 str(row["name"])
                 for row in db.execute("PRAGMA table_info(conversation_memory)").fetchall()
@@ -89,6 +92,43 @@ class MemoryStore:
                     "ALTER TABLE conversation_memory "
                     "ADD COLUMN accepted_context INTEGER NOT NULL DEFAULT 0"
                 )
+            if "model_id" not in memory_columns:
+                # SQLite cannot add a column to an existing primary key. Rebuild
+                # the table so each provider can own an independent memory row.
+                db.execute("ALTER TABLE conversation_memory RENAME TO conversation_memory_legacy")
+                db.execute(
+                    """
+                    CREATE TABLE conversation_memory (
+                        model_id TEXT NOT NULL DEFAULT '',
+                        scope_id TEXT NOT NULL,
+                        user_id TEXT NOT NULL,
+                        summary TEXT NOT NULL DEFAULT '',
+                        facts_json TEXT NOT NULL DEFAULT '[]',
+                        summarized_through_id INTEGER NOT NULL DEFAULT 0,
+                        accepted_context INTEGER NOT NULL DEFAULT 0
+                            CHECK (accepted_context IN (0, 1)),
+                        updated_at REAL NOT NULL,
+                        PRIMARY KEY (model_id, scope_id, user_id)
+                    )
+                    """
+                )
+                db.execute(
+                    """
+                    INSERT INTO conversation_memory
+                        (model_id, scope_id, user_id, summary, facts_json,
+                         summarized_through_id, accepted_context, updated_at)
+                    SELECT '', scope_id, user_id, summary, facts_json,
+                           summarized_through_id, accepted_context, updated_at
+                    FROM conversation_memory_legacy
+                    """
+                )
+                db.execute("DROP TABLE conversation_memory_legacy")
+            db.execute(
+                """
+                CREATE INDEX IF NOT EXISTS messages_conversation_idx
+                    ON messages(model_id, scope_id, user_id, id)
+                """
+            )
         try:
             os.chmod(self.path, 0o600)
         except OSError:
@@ -98,6 +138,7 @@ class MemoryStore:
         self,
         *,
         event_id: str,
+        model_id: str = "",
         scope_id: str,
         user_id: str,
         role: str,
@@ -111,11 +152,12 @@ class MemoryStore:
             cursor = db.execute(
                 """
                 INSERT OR IGNORE INTO messages
-                    (event_id, scope_id, user_id, role, content, attachments_json, accepted, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (event_id, model_id, scope_id, user_id, role, content, attachments_json, accepted, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event_id,
+                    model_id,
                     scope_id,
                     user_id,
                     role,
@@ -128,18 +170,18 @@ class MemoryStore:
             return cursor.rowcount == 1
 
     def recent_messages(
-        self, scope_id: str, user_id: str, *, limit: int
+        self, scope_id: str, user_id: str, *, limit: int, model_id: str = ""
     ) -> list[dict[str, Any]]:
         with self._lock, self._managed_connection() as db:
             rows = db.execute(
                 """
                 SELECT id, role, content, attachments_json, created_at
                 FROM messages
-                WHERE scope_id = ? AND user_id = ? AND accepted = 1
+                WHERE model_id = ? AND scope_id = ? AND user_id = ? AND accepted = 1
                 ORDER BY id DESC
                 LIMIT ?
                 """,
-                (scope_id, user_id, limit),
+                (model_id, scope_id, user_id, limit),
             ).fetchall()
         result: list[dict[str, Any]] = []
         for row in reversed(rows):
@@ -165,17 +207,18 @@ class MemoryStore:
         *,
         keep_recent: int,
         limit: int,
+        model_id: str = "",
     ) -> list[dict[str, Any]]:
-        summary, facts, summarized_through = self.get_memory(scope_id, user_id)
+        summary, facts, summarized_through = self.get_memory(scope_id, user_id, model_id=model_id)
         del summary, facts
         with self._lock, self._managed_connection() as db:
             cutoff = db.execute(
                 """
                 SELECT id FROM messages
-                WHERE scope_id = ? AND user_id = ? AND accepted = 1
+                WHERE model_id = ? AND scope_id = ? AND user_id = ? AND accepted = 1
                 ORDER BY id DESC LIMIT 1 OFFSET ?
                 """,
-                (scope_id, user_id, keep_recent),
+                (model_id, scope_id, user_id, keep_recent),
             ).fetchone()
             if cutoff is None:
                 return []
@@ -183,12 +226,12 @@ class MemoryStore:
                 """
                 SELECT id, role, content, attachments_json, created_at
                 FROM messages
-                WHERE scope_id = ? AND user_id = ?
+                WHERE model_id = ? AND scope_id = ? AND user_id = ?
                   AND accepted = 1 AND id > ? AND id <= ?
                 ORDER BY id ASC
                 LIMIT ?
                 """,
-                (scope_id, user_id, summarized_through, int(cutoff["id"]), limit),
+                (model_id, scope_id, user_id, summarized_through, int(cutoff["id"]), limit),
             ).fetchall()
         return [
             {
@@ -200,15 +243,17 @@ class MemoryStore:
             for row in rows
         ]
 
-    def get_memory(self, scope_id: str, user_id: str) -> tuple[str, list[str], int]:
+    def get_memory(
+        self, scope_id: str, user_id: str, *, model_id: str = ""
+    ) -> tuple[str, list[str], int]:
         with self._lock, self._managed_connection() as db:
             row = db.execute(
                 """
                 SELECT summary, facts_json, summarized_through_id
                 FROM conversation_memory
-                WHERE scope_id = ? AND user_id = ? AND accepted_context = 1
+                WHERE model_id = ? AND scope_id = ? AND user_id = ? AND accepted_context = 1
                 """,
-                (scope_id, user_id),
+                (model_id, scope_id, user_id),
             ).fetchone()
         if row is None:
             return "", [], 0
@@ -224,6 +269,7 @@ class MemoryStore:
         scope_id: str,
         user_id: str,
         *,
+        model_id: str = "",
         summary: str,
         facts: list[str],
         summarized_through_id: int,
@@ -233,10 +279,10 @@ class MemoryStore:
             db.execute(
                 """
                 INSERT INTO conversation_memory
-                    (scope_id, user_id, summary, facts_json, summarized_through_id,
+                    (model_id, scope_id, user_id, summary, facts_json, summarized_through_id,
                      accepted_context, updated_at)
-                VALUES (?, ?, ?, ?, ?, 1, ?)
-                ON CONFLICT(scope_id, user_id) DO UPDATE SET
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+                ON CONFLICT(model_id, scope_id, user_id) DO UPDATE SET
                     summary = excluded.summary,
                     facts_json = excluded.facts_json,
                     accepted_context = 1,
@@ -249,6 +295,7 @@ class MemoryStore:
                     conversation_memory.summarized_through_id
                 """,
                 (
+                    model_id,
                     scope_id,
                     user_id,
                     summary.strip(),

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR=$(cd "$(dirname "$0")" && pwd -P)
+ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd -P)
 OWAUA_DEPLOY_SCRIPT=${OWAUA_DEPLOY_SCRIPT:-"$ROOT_DIR/../owaua/scripts/deploy"}
 
 if [[ ! -f "$OWAUA_DEPLOY_SCRIPT" ]]; then
@@ -20,20 +20,25 @@ from pathlib import Path
 root = Path(os.environ["ROOT_DIR"])
 deploy_path = Path(os.environ["OWAUA_DEPLOY_SCRIPT"])
 
-excluded = {"deploy.sh", "update-persona.sh"}
-required_runtime = {"bot.py", "memory_store.py", "requirements.txt", "run-bots.sh"}
+excluded = {Path("scripts/deploy.sh"), Path("scripts/update-persona.sh")}
+required_runtime = {
+    Path("bot.py"),
+    Path("memory_store.py"),
+    Path("requirements.txt"),
+    Path("scripts/run-bots.sh"),
+}
 files = sorted(
     path
-    for path in root.iterdir()
+    for path in root.rglob("*")
     if path.is_file()
-    and not path.name.startswith(".")
-    and path.name not in excluded
+    and not any(part.startswith(".") for part in path.relative_to(root).parts)
+    and path.relative_to(root) not in excluded
     and (path.suffix == ".py" or path.suffix in {".sh", ".txt"})
-    and path.parent == root
 )
 if not files:
     raise RuntimeError("No deployable runtime files found")
-missing_runtime = required_runtime - {path.name for path in files}
+relative_files = {path.relative_to(root) for path in files}
+missing_runtime = required_runtime - relative_files
 if missing_runtime:
     raise RuntimeError(
         "Deployment is incomplete; missing required runtime file(s): "
@@ -53,7 +58,8 @@ if client.state() != "running":
     raise RuntimeError("Daki Bots server is not running; deployment was not uploaded")
 
 for local_path in files:
-    remote_path = f"persona-test-bot/{local_path.name}"
+    relative_path = local_path.relative_to(root).as_posix()
+    remote_path = f"persona-test-bot/{relative_path}"
     payload = local_path.read_bytes()
     client.write_file(remote_path, payload)
     encoded = remote_path.replace("/", "%2F")
@@ -68,7 +74,7 @@ for local_path in files:
 
 client.update_startup_variable("STARTUP_CMD", "")
 client.update_startup_variable(
-    "SECOND_CMD", "cd persona-test-bot && bash run-bots.sh"
+    "SECOND_CMD", "cd persona-test-bot && bash scripts/run-bots.sh"
 )
 print(f"Restarting {config.get('server_name', config['server_id'])}...")
 client.restart()

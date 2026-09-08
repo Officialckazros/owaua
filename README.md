@@ -8,7 +8,7 @@ The voice lives in plain Python files, so changing Owaua’s personality does no
 
 - Replies in DMs and on mentions
 - Handles image attachments
-- Keeps per-user, per-channel conversation memory in SQLite
+- Keeps separate per-user, per-channel memory for each AI in SQLite
 - Supports three editable voices: everyday, playful, and curious
 - Streams longer replies into Discord naturally
 - Includes rate limits, input checks, moderation, retries, and stale-request handling
@@ -24,7 +24,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 # fill in .env
-./run-bots.sh
+./scripts/run-bots.sh
 ```
 
 Invite the Discord application with View Channels, Send Messages, Embed Links, and Read Message History. Keep `.env` private. It is ignored by Git on purpose.
@@ -33,15 +33,15 @@ Invite the Discord application with View Channels, Send Messages, Embed Links, a
 
 Edit the text inside one of these files:
 
-- [`persona.py`](persona.py) — the everyday voice
-- [`gpt_persona.py`](gpt_persona.py) — the more playful voice
-- [`deepseek_persona.py`](deepseek_persona.py) — the curious, nerdier voice
+- [`personas/persona.py`](personas/persona.py) — the everyday voice
+- [`personas/gpt_persona.py`](personas/gpt_persona.py) — the more playful voice
+- [`personas/deepseek_persona.py`](personas/deepseek_persona.py) — the curious, nerdier voice
 
 Upload a changed voice to the running Daki instance with:
 
 ```sh
-./update-persona.sh
-./update-persona.sh deepseek mistral gpt
+./scripts/update-persona.sh
+./scripts/update-persona.sh deepseek mistral gpt
 ```
 
 The next message uses the new text; a restart is not needed.
@@ -55,6 +55,7 @@ Copy [`.env.example`](.env.example) to `.env` and add the credentials you need. 
 - `DISCORD_TOKEN` — the Discord bot token
 - `OPENAI_API_KEY`, `MISTRAL_API_KEY`, `DEEPSEEK_API_KEY` — provider credentials
 - `MEMORY_DB` — SQLite path, defaulting to `data/memory.sqlite3`
+- Each provider has an isolated memory namespace: GPT, DeepSeek, and Mistral cannot read one another's conversation history or summaries
 - `MAX_CONTEXT_TURNS` — recent turns kept verbatim
 - `MEMORY_RETENTION_DAYS` — raw-message retention; `0` means keep until manually removed
 - `RATE_LIMIT_REQUESTS` and `RATE_LIMIT_WINDOW` — per-user request limits
@@ -64,13 +65,13 @@ The bot sends provider requests with storage disabled where supported. The local
 
 ## Deploy to Daki
 
-`deploy.sh` uploads the runtime, excludes credentials and local metadata, then restarts the server:
+`scripts/deploy.sh` uploads the runtime, excludes credentials and local metadata, then restarts the server:
 
 ```sh
-./deploy.sh
+./scripts/deploy.sh
 ```
 
-For a voice-only change, use `update-persona.sh` instead.
+For a voice-only change, use `scripts/update-persona.sh` instead.
 
 ## Tests
 
@@ -81,14 +82,13 @@ python -m unittest discover -s tests -v
 ## Project layout
 
 ```text
-bot.py                 Discord client and provider calls
+bot.py                 Application settings, helpers, and entry point
+bot_client.py          Discord client lifecycle and message delivery
+bot_service.py         Provider requests, moderation, and memory workflows
 memory_store.py        SQLite conversation memory
-persona.py             Default voice
-gpt_persona.py         Playful voice
-deepseek_persona.py    Curious voice
+personas/              Editable voice definitions
+scripts/               Local run and Daki deployment commands
 tests/                 Unit tests for memory, moderation, and helpers
-deploy.sh              Full Daki deployment
-update-persona.sh      Voice-only Daki deployment
 ```
 
 ## License
