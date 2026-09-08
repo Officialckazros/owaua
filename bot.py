@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
-log = logging.getLogger("persona-test-bot")
+log = logging.getLogger("owaua")
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip().replace("\\_", "_")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
@@ -169,16 +169,16 @@ def read_persona(model: str | None = None) -> str:
             return _persona_cache[3]
         values = runpy.run_path(str(persona_file))
         value = str(values.get("PERSONA", "")).strip()
-        value = value or "You are a helpful, conversational AI assistant."
+        value = value or "You are Owaua, a warm and conversational Discord companion."
         _persona_cache = (*cache_key, value)
         return value
     except OSError:
         log.exception("Could not read %s", persona_file)
-        value = "You are a helpful, conversational AI assistant."
+        value = "You are Owaua, a warm and conversational Discord companion."
     except Exception:
         log.exception("Could not load %s", persona_file)
-        value = "You are a helpful, conversational AI assistant."
-    return value or "You are a helpful, conversational AI assistant."
+        value = "You are Owaua, a warm and conversational Discord companion."
+    return value or "You are Owaua, a warm and conversational Discord companion."
 
 
 def build_instructions(
@@ -189,7 +189,7 @@ def build_instructions(
     message_kind: str = "chat",
     explicit_roleplay: bool = False,
 ) -> str:
-    """Wrap the unchanged editable persona in a clear behavior contract."""
+    """Combine the editable voice with the runtime's safety and memory rules."""
     persona = read_persona(model)
     fact_lines = "\n".join(f"- {fact}" for fact in (facts or [])) or "- none yet"
     summary = memory_summary.strip() or "none yet"

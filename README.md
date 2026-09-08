@@ -1,58 +1,96 @@
-# Persona test bot
+# owaua
 
-This is a Discord persona bot for actual conversation. It responds in DMs or when mentioned in a server, supports text and image attachments, and keeps durable per-user/per-channel conversation memory in a local SQLite database.
+Owaua is a small Discord companion bot built for relaxed, ongoing conversations. It answers in DMs and when mentioned in a server, can look at image attachments, and remembers the shape of a conversation without sounding like a support ticket.
 
-## Fastest local setup
+The voice lives in plain Python files, so changing Owaua’s personality does not mean digging through the bot itself.
 
-1. Fill in `.env` with the Discord bot token and OpenAI key.
-2. Run `./update-persona.sh` to upload the Mistral persona, or pass model names such as `./update-persona.sh deepseek mistral gpt` to upload several personas.
-3. The next message uses the new full persona; no restart is needed.
+## What it does
 
-Keep the file simple: edit only the text inside `PERSONA = """..."""`. Everything inside that string becomes the AI's complete system persona.
+- Replies in DMs and on mentions
+- Handles image attachments
+- Keeps per-user, per-channel conversation memory in SQLite
+- Supports three editable voices: everyday, playful, and curious
+- Streams longer replies into Discord naturally
+- Includes rate limits, input checks, moderation, retries, and stale-request handling
+- Lets moderators quietly remove a batch of messages with `!nuke N`
 
-Each model uses its own persona file: [`persona.py`](persona.py) for the `explicit` Mistral persona, [`gpt_persona.py`](gpt_persona.py) for the `rudeish` GPT persona, and [`deepseek_persona.py`](deepseek_persona.py) for the `nerdish` DeepSeek persona. The active file changes automatically when `!persona` changes. `GPT_PERSONA_FILE`, `DEEPSEEK_PERSONA_FILE`, and `PERSONA_FILE` can override their paths.
+## Run it locally
 
-## Using the bot
+You need Python 3.11+, a Discord application with the Message Content Intent enabled, and an API key for the provider you plan to use.
 
-- Send a DM to the bot, or mention it in a server, to get an AI reply.
-- Attach a supported image when you want an image-aware reply.
-- Users with Manage Messages can run `!nuke N` in a server to silently purge 1–100 messages. Invalid or unauthorized `!nuke` input is ignored.
-- Each user can make 25 AI requests in a rolling 45-second window. The bot replies with the retry time when the limit is reached.
-- Guild `1535083112709496903` bypasses the bot's AI quotas, context/input/output caps, and moderation checks. OpenAI/provider limits and Discord message limits still apply.
-- If `MISTRAL_API_KEY` is set, the `explicit` Mistral persona is the default. Use `!persona explicit`, `!persona nerdish`, or `!persona rudeish` to switch. Use `!persona` to see the current selection. DeepSeek requires `DEEPSEEK_API_KEY`; Mistral requires `MISTRAL_API_KEY`. On Mistral, consensual adult explicit roleplay is enabled (`safe_prompt` is off, and adult-sexual moderation flags are not treated as rejections).
+```sh
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+# fill in .env
+./run-bots.sh
+```
 
-The Discord application needs the Message Content Intent enabled. Invite it with the permissions to View Channels, Send Messages, Embed Links, and Read Message History.
+Invite the Discord application with View Channels, Send Messages, Embed Links, and Read Message History. Keep `.env` private. It is ignored by Git on purpose.
 
-## Durable memory and reliability
+## Changing the voice
 
-Conversation messages are stored in `data/memory.sqlite3`, with WAL transactions and duplicate-event protection. Recent messages are sent verbatim to the model; older messages are condensed asynchronously into a rolling summary and a small list of stable facts. Restarting the bot does not erase memory.
+Edit the text inside one of these files:
 
-The bot moderates each current Discord text and image input with `omni-moderation-latest` before it can enter memory or reach the Responses API. A moderation outage or malformed response fails closed, and rejected content is not stored in the conversation database. Repeated moderation rejections temporarily block further AI requests for that user; this is separate from the configurable 25-request/45-second per-user limiter.
+- [`persona.py`](persona.py) — the everyday voice
+- [`gpt_persona.py`](gpt_persona.py) — the more playful voice
+- [`deepseek_persona.py`](deepseek_persona.py) — the curious, nerdier voice
 
-The bot also includes per-conversation request serialization, stale-request cancellation, temporary-error retries, an optional fallback model for allowed requests, hidden message classification, output validation logging, and natural Discord message splitting.
+Upload a changed voice to the running Daki instance with:
 
-OpenAI requests continue to use `store: false`. The SQLite file can contain private conversation content, so keep `data/` private and back it up or delete it according to your own retention policy. Set `MEMORY_RETENTION_DAYS` to a positive number to prune old raw messages at startup; `0` keeps them until the database is manually removed.
+```sh
+./update-persona.sh
+./update-persona.sh deepseek mistral gpt
+```
 
-The most useful optional `.env` settings are:
+The next message uses the new text; a restart is not needed.
 
-- Supported models are fixed to `gpt-5.6-luna`, `deepseek-v4-flash` (DeepSeek V4 Flash 0731), and Mistral Small 4 `mistral-small-2603`; no other model IDs or cross-provider fallbacks are accepted.
-- `DEEPSEEK_API_KEY`: credentials for `deepseek-v4-flash`; its endpoint is fixed to `https://api.deepseek.com`
-- `MISTRAL_API_KEY`: credentials for `mistral-small-2603`; its endpoint is fixed to `https://api.mistral.ai/v1`
-- `NON_GPT_MAX_OUTPUT_TOKENS`, `NON_GPT_MAX_CONTEXT_TURNS`, and `NON_GPT_MAX_INPUT_TOKENS`: tighter defaults for Mistral/DeepSeek so lower per-token pricing is not erased by longer completions or differently-sized prompts
-- `MEMORY_MODEL`: model used for background memory compression; defaults to `gpt-5.6-luna` so switching chat providers does not add hidden Mistral/DeepSeek requests
-- `MEMORY_SUMMARY_MAX_INPUT_TOKENS` and `MEMORY_SUMMARY_MAX_OUTPUT_TOKENS`: bounds for each background memory request
-- `MEMORY_DB`: SQLite path, default `data/memory.sqlite3`
-- `MAX_CONTEXT_TURNS`: recent verbatim turns kept in each request
-- `MEMORY_RETENTION_DAYS`: raw-message retention, where `0` means unlimited
-- `RATE_LIMIT_REQUESTS` and `RATE_LIMIT_WINDOW`: per-user request limiter
-- `MAX_INPUT_TOKENS`, `MAX_MESSAGE_CHARS`, and `MAX_ATTACHMENTS`: context-size limits; older turns are dropped when the approximate input-token budget is reached
-- `OPENAI_MODERATION_TIMEOUT`: safety-check timeout; failures reject the request
-- `MODERATION_ABUSE_MAX_FLAGGED`, `MODERATION_ABUSE_WINDOW`, and `MODERATION_ABUSE_BLOCK_SECONDS`: temporary repeat-rejection control using a monotonic in-memory window
+Use `!persona` to see the active voice and `!persona explicit`, `!persona nerdish`, or `!persona rudeish` to switch it. The names are kept for compatibility with the existing bot setup.
 
-## Daki deployment
+## Configuration
 
-Use `./deploy.sh` to upload the complete bot runtime to Daki and restart the server. It automatically includes new root-level Python modules, persona files, shell scripts, and requirements files while excluding credentials, tests, and local metadata.
+Copy [`.env.example`](.env.example) to `.env` and add the credentials you need. The most useful settings are:
 
-For persona-only edits, use `./update-persona.sh`. With no arguments it uploads only [`persona.py`](persona.py); model names can be separated by spaces, commas, or `and`, for example `./update-persona.sh "deepseek, mistral and gpt"`.
+- `DISCORD_TOKEN` — the Discord bot token
+- `OPENAI_API_KEY`, `MISTRAL_API_KEY`, `DEEPSEEK_API_KEY` — provider credentials
+- `MEMORY_DB` — SQLite path, defaulting to `data/memory.sqlite3`
+- `MAX_CONTEXT_TURNS` — recent turns kept verbatim
+- `MEMORY_RETENTION_DAYS` — raw-message retention; `0` means keep until manually removed
+- `RATE_LIMIT_REQUESTS` and `RATE_LIMIT_WINDOW` — per-user request limits
+- `MAX_INPUT_TOKENS`, `MAX_MESSAGE_CHARS`, and `MAX_ATTACHMENTS` — input bounds
 
-The bot token and OpenAI key belong only in `.env` or your hosting provider's secret settings—not in this repository.
+The bot sends provider requests with storage disabled where supported. The local SQLite file can contain private conversation text, so protect `data/` and choose a retention period that fits the people using the bot.
+
+## Deploy to Daki
+
+`deploy.sh` uploads the runtime, excludes credentials and local metadata, then restarts the server:
+
+```sh
+./deploy.sh
+```
+
+For a voice-only change, use `update-persona.sh` instead.
+
+## Tests
+
+```sh
+python -m unittest discover -s tests -v
+```
+
+## Project layout
+
+```text
+bot.py                 Discord client and provider calls
+memory_store.py        SQLite conversation memory
+persona.py             Default voice
+gpt_persona.py         Playful voice
+deepseek_persona.py    Curious voice
+tests/                 Unit tests for memory, moderation, and helpers
+deploy.sh              Full Daki deployment
+update-persona.sh      Voice-only Daki deployment
+```
+
+## License
+
+This project is released under the MIT License. See [`LICENSE`](LICENSE).
