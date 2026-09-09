@@ -24,7 +24,7 @@ model_files = {
     "deepseek": "personas/deepseek_persona.py",
     "gpt": "personas/gpt_persona.py",
 }
-requested = os.environ["PERSONA_MODELS"].replace(",", " ").split()
+requested = os.environ["PERSONA_MODELS"].replace(",", " ").replace("/", " ").split()
 models = []
 for model in requested:
     model = model.lower()
@@ -56,21 +56,15 @@ if client.state() != "running":
     raise RuntimeError("Daki Bots server is not running; persona was not uploaded")
 
 for model, local_path in files.items():
-    remote_name = model_files[model]
+    remote_path = f"persona-test-bot/{model_files[model]}"
     payload = local_path.read_bytes()
-    remote_path = f"persona-test-bot/{remote_name}"
     client.write_file(remote_path, payload)
-    encoded_remote_path = "/files/contents?file=" + f"%2F{remote_path.replace('/', '%2F')}"
+    encoded = remote_path.replace("/", "%2F")
     readback = client.request(
-        "GET",
-        client.server_path(encoded_remote_path),
-        expect_json=False,
+        "GET", client.server_path(f"/files/contents?file=%2F{encoded}"), expect_json=False
     )
     if readback != payload:
         raise RuntimeError(f"Daki verification failed for {remote_path}")
-    print(
-        f"Updated {remote_path} "
-        f"(sha256={hashlib.sha256(payload).hexdigest()[:12]})"
-    )
-print("No restart performed.")
+    print(f"Updated {remote_path} (sha256={hashlib.sha256(payload).hexdigest()[:12]})")
+print("Uploaded successfully. No restart is needed; personas reload for each reply.")
 PY

@@ -126,6 +126,50 @@ class MemoryStoreTests(unittest.TestCase):
         )
         self.assertEqual([record["content"] for record in summary_records], ["safe context"])
 
+    def test_server_erase_removes_all_users_and_rejects_stale_writes(self) -> None:
+        first_generation = self.store.register_scope("channel-one", "server-a")
+        self.store.register_scope("channel-two", "server-a")
+        self.store.register_scope("other-channel", "server-b")
+        for event_id, scope_id, user_id in (
+            ("a-1", "channel-one", "one"),
+            ("a-2", "channel-two", "two"),
+            ("b-1", "other-channel", "three"),
+        ):
+            self.store.append_message(
+                event_id=event_id,
+                scope_id=scope_id,
+                user_id=user_id,
+                role="user",
+                content=event_id,
+            )
+        self.store.save_memory(
+            "channel-one",
+            "one",
+            summary="old server-a context",
+            facts=["old fact"],
+            summarized_through_id=1,
+        )
+
+        self.store.erase_server_memory("server-a")
+
+        self.assertEqual(self.store.recent_messages("channel-one", "one", limit=10), [])
+        self.assertEqual(self.store.recent_messages("channel-two", "two", limit=10), [])
+        self.assertEqual(self.store.get_memory("channel-one", "one"), ("", [], 0))
+        self.assertEqual(
+            [item["content"] for item in self.store.recent_messages("other-channel", "three", limit=10)],
+            ["b-1"],
+        )
+        self.assertFalse(
+            self.store.append_message(
+                event_id="late-a-response",
+                scope_id="channel-one",
+                user_id="one",
+                role="assistant",
+                content="must not be retained after the wipe",
+                expected_generation=first_generation,
+            )
+        )
+
     def test_legacy_memory_is_quarantined_until_new_turns_are_accepted(self) -> None:
         legacy_path = Path(self.temporary_directory.name) / "legacy.sqlite3"
         db = sqlite3.connect(legacy_path)

@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import random
+import tempfile
 import time
 from collections import defaultdict, deque
 
@@ -22,12 +25,41 @@ from bot import (
     ModerationRejected,
     ModerationUnavailable,
     image_url,
+    parse_language_name,
     split_discord_message,
 )
 
 log = logging.getLogger("owaua")
 
+VC_VOICES = ("nova", "shimmer", "coral", "marin")
+VC_LINES = (
+    "hey everyone, I just joined the voice channel",
+    "hi, what are you all up to",
+    "I have arrived in voice, try not to be boring",
+    "hello from the other side of the voice channel",
+    "okay, I am here now, somebody say something interesting",
+)
+
 from bot_service import BotService
+
+
+class MessageEventGuard:
+    """Keep Discord redeliveries from reaching the response pipeline twice."""
+
+    def __init__(self, *, ttl: float = 900.0) -> None:
+        self.ttl = ttl
+        self._seen: dict[int, float] = {}
+
+    def claim(self, message_id: int, *, now: float | None = None) -> bool:
+        current = time.monotonic() if now is None else now
+        expired = [event_id for event_id, timestamp in self._seen.items()
+                   if current - timestamp >= self.ttl]
+        for event_id in expired:
+            self._seen.pop(event_id, None)
+        if message_id in self._seen:
+            return False
+        self._seen[message_id] = current
+        return True
 
 
 class PersonaBot(discord.Client, BotService):
@@ -50,7 +82,93 @@ class PersonaBot(discord.Client, BotService):
         self.moderation_failures: defaultdict[int, deque[float]] = defaultdict(deque)
         self.moderation_blocks: dict[int, float] = {}
         self.background_tasks: set[asyncio.Task[object]] = set()
+        self.message_events = MessageEventGuard()
+        self.response_languages: dict[tuple[str, str], str] = {}
+        self.voice_locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self.music_tracks: dict[int, dict[str, str]] = {}
         self.selected_model = "mistral" if settings.MISTRAL_API_KEY else "gpt"
+
+    async def speak_in_voice(self, voice_client: discord.VoiceClient, text: str) -> str:
+        """Generate and play one short TTS line, choosing a voice at random."""
+        voice = random.choice(VC_VOICES)
+        response = await self.provider_http.post(
+            f"{settings.OPENAI_BASE_URL}/audio/speech",
+            headers={
+                "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "gpt-4o-mini-tts",
+                "input": text,
+                "voice": voice,
+                "response_format": "mp3",
+            },
+        )
+        response.raise_for_status()
+        audio_file = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
+        audio_path = audio_file.name
+        try:
+            audio_file.write(response.content)
+            audio_file.close()
+            finished = asyncio.Event()
+
+            def cleanup(error: Exception | None) -> None:
+                try:
+                    os.unlink(audio_path)
+                except FileNotFoundError:
+                    pass
+                if error is not None:
+                    log.warning("Voice playback failed: %s", error)
+                loop.call_soon_threadsafe(finished.set)
+
+            loop = asyncio.get_running_loop()
+            voice_client.play(discord.FFmpegPCMAudio(audio_path), after=cleanup)
+            await finished.wait()
+            return voice
+        except Exception:
+            audio_file.close()
+            try:
+                os.unlink(audio_path)
+            except FileNotFoundError:
+                pass
+            raise
+
+    async def resolve_music(self, query: str) -> dict[str, str]:
+        """Resolve a URL or search phrase to a playable audio stream."""
+        import yt_dlp
+
+        lookup = query if query.startswith(("http://", "https://")) else f"ytsearch1:{query}"
+        options = {
+            "format": "bestaudio/best",
+            "noplaylist": True,
+            "quiet": True,
+            "no_warnings": True,
+        }
+        def extract() -> dict[str, str]:
+            with yt_dlp.YoutubeDL(options) as downloader:
+                info = downloader.extract_info(lookup, download=False)
+                if "entries" in info:
+                    info = next((entry for entry in info["entries"] if entry), None)
+                if not info or not info.get("url"):
+                    raise ValueError("no playable audio found")
+                return {
+                    "title": str(info.get("title", "unknown track")),
+                    "url": str(info["url"]),
+                    "query": str(info.get("webpage_url") or query),
+                }
+        return await asyncio.to_thread(extract)
+
+    def play_music_track(self, voice_client: discord.VoiceClient, track: dict[str, str]) -> None:
+        source = discord.FFmpegPCMAudio(
+            track["url"],
+            before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+            options="-vn",
+        )
+        voice_client.play(source, after=self._music_playback_finished)
+
+    def _music_playback_finished(self, error: Exception | None) -> None:
+        if error is not None:
+            log.warning("Music playback failed: %s", error)
 
     async def on_ready(self) -> None:
         if settings.MEMORY_RETENTION_DAYS:
@@ -69,8 +187,201 @@ class PersonaBot(discord.Client, BotService):
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
             return
+        if not self.message_events.claim(message.id):
+            log.info("Ignoring redelivered Discord event %s", message.id)
+            return
 
         parts = message.content.split(maxsplit=1)
+        if message.guild is not None:
+            # Register every guild channel before it can read or write memory.
+            # This makes a server-wide erase exact even after a bot restart.
+            await asyncio.to_thread(
+                self.memory.register_scope, str(message.channel.id), str(message.guild.id)
+            )
+        if message.guild is not None and parts and parts[0].lower() == "!memory":
+            action = parts[1].strip().lower() if len(parts) == 2 else ""
+            if action != "erase":
+                reply = "usage: !memory erase"
+            elif not message.author.guild_permissions.manage_guild:
+                reply = "you need the Manage Server permission to erase server memory"
+            else:
+                server_id = str(message.guild.id)
+                try:
+                    # Enumerating the guild before deletion also associates memory
+                    # created by older bot versions, which had no server_id column.
+                    channels = await message.guild.fetch_channels()
+                except discord.HTTPException:
+                    log.exception("Could not enumerate channels for memory erase")
+                    await message.channel.send(
+                        "I couldn't safely verify every server channel, so no memory was erased. Try again shortly.",
+                        reference=message,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                    return
+                await asyncio.gather(
+                    *(
+                        asyncio.to_thread(
+                            self.memory.register_scope, str(channel.id), server_id
+                        )
+                        for channel in channels
+                    )
+                )
+                scopes = await asyncio.to_thread(self.memory.server_scopes, server_id)
+                # Stop requests already using this guild's old context. The store's
+                # generation check is the final guard if cancellation races a write.
+                for key, task in list(self.active_requests.items()):
+                    if key[0] in scopes and task is not asyncio.current_task():
+                        task.cancel()
+                removed = await asyncio.to_thread(
+                    self.memory.erase_server_memory, server_id
+                )
+                log.info(
+                    "Erased server memory; server=%s records=%s", server_id, removed
+                )
+                reply = "server memory fully erased for every user and channel"
+            await message.channel.send(
+                reply,
+                reference=message,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        if parts and parts[0].lower() == "!language":
+            scope_id, user_id = self.conversation_key(message)
+            language_arg = parts[1] if len(parts) == 2 else ""
+            if not language_arg.strip():
+                language = self.response_languages.get((scope_id, user_id), "English")
+                reply = f"language: {language}"
+            else:
+                language, error = parse_language_name(language_arg)
+                if error is not None:
+                    reply = error
+                else:
+                    assert language is not None
+                    self.response_languages[(scope_id, user_id)] = language
+                    reply = f"language set to {language}; I’ll reply in it from now on"
+            await message.channel.send(
+                reply,
+                reference=message,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        if parts and parts[0].lower() == "!vc":
+            if message.guild is None:
+                reply = "!vc only works in a server voice channel"
+            elif len(parts) == 2 and parts[1].strip().lower() in {"leave", "stop"}:
+                voice_client = message.guild.voice_client
+                if voice_client is None:
+                    reply = "I am not in a voice channel"
+                else:
+                    await voice_client.disconnect()
+                    reply = "left the voice channel"
+            elif message.author.voice is None or message.author.voice.channel is None:
+                reply = "join a voice channel first, then use `!vc`"
+            else:
+                target_channel = message.author.voice.channel
+                voice_client = message.guild.voice_client
+                try:
+                    if voice_client is None:
+                        voice_client = await target_channel.connect()
+                    elif voice_client.channel.id != target_channel.id:
+                        await voice_client.move_to(target_channel)
+                    async with self.voice_locks[message.guild.id]:
+                        line = random.choice(VC_LINES)
+                        voice = await self.speak_in_voice(voice_client, line)
+                    reply = f"joined {target_channel.mention} and spoke in a random voice ({voice})"
+                except (discord.ClientException, discord.Forbidden, discord.HTTPException, OSError, RuntimeError) as exc:
+                    log.exception("Could not join or speak in voice channel")
+                    reply = f"I couldn't use voice chat right now: {type(exc).__name__}"
+            await message.channel.send(
+                reply,
+                reference=message,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        if parts and parts[0].lower() == "!music":
+            if message.guild is None:
+                reply = "!music only works in a server voice channel"
+            else:
+                guild_id = message.guild.id
+                action = parts[1].strip() if len(parts) == 2 else ""
+                voice_client = message.guild.voice_client
+                action_lower = action.casefold()
+                if action_lower in {"help", ""}:
+                    reply = (
+                        "usage: !music <song or URL> | !music start | !music pause | "
+                        "!music resume | !music stop | !music skip | !music leave | !music now"
+                    )
+                elif action_lower in {"leave", "disconnect"}:
+                    if voice_client is None:
+                        reply = "I am not in a voice channel"
+                    else:
+                        voice_client.stop()
+                        await voice_client.disconnect()
+                        self.music_tracks.pop(guild_id, None)
+                        reply = "left the music voice channel"
+                elif action_lower == "now":
+                    track = self.music_tracks.get(guild_id)
+                    reply = f"now playing: {track['title']}" if track else "nothing is queued"
+                elif action_lower == "pause":
+                    if voice_client is not None and voice_client.is_playing():
+                        voice_client.pause()
+                        reply = "music paused"
+                    else:
+                        reply = "nothing is playing"
+                elif action_lower in {"start", "resume"}:
+                    track = self.music_tracks.get(guild_id)
+                    if voice_client is not None and voice_client.is_paused():
+                        voice_client.resume()
+                        reply = f"resumed: {track['title']}" if track else "music resumed"
+                    elif track is None:
+                        reply = "choose a song first with `!music <song or URL>`"
+                    elif message.author.voice is None or message.author.voice.channel is None:
+                        reply = "join a voice channel first, then use `!music start`"
+                    else:
+                        try:
+                            target_channel = message.author.voice.channel
+                            if voice_client is None:
+                                voice_client = await target_channel.connect()
+                            elif voice_client.channel.id != target_channel.id:
+                                await voice_client.move_to(target_channel)
+                            refreshed = await self.resolve_music(track["query"])
+                            self.music_tracks[guild_id] = refreshed
+                            self.play_music_track(voice_client, refreshed)
+                            reply = f"playing: {refreshed['title']}"
+                        except (discord.ClientException, discord.Forbidden, discord.HTTPException, OSError, RuntimeError, ValueError) as exc:
+                            log.exception("Could not start music")
+                            reply = f"I couldn't start music: {type(exc).__name__}"
+                elif action_lower in {"stop", "skip"}:
+                    if voice_client is not None and (voice_client.is_playing() or voice_client.is_paused()):
+                        voice_client.stop()
+                        reply = "music stopped" if action_lower == "stop" else "skipped"
+                    else:
+                        reply = "nothing is playing"
+                else:
+                    if message.author.voice is None or message.author.voice.channel is None:
+                        reply = "join a voice channel first, then use `!music <song or URL>`"
+                    else:
+                        try:
+                            target_channel = message.author.voice.channel
+                            if voice_client is None:
+                                voice_client = await target_channel.connect()
+                            elif voice_client.channel.id != target_channel.id:
+                                await voice_client.move_to(target_channel)
+                            track = await self.resolve_music(action)
+                            if voice_client.is_playing() or voice_client.is_paused():
+                                voice_client.stop()
+                            self.music_tracks[guild_id] = track
+                            self.play_music_track(voice_client, track)
+                            reply = f"playing: {track['title']}"
+                        except (discord.ClientException, discord.Forbidden, discord.HTTPException, OSError, RuntimeError, ValueError) as exc:
+                            log.exception("Could not play music")
+                            reply = f"I couldn't play that: {type(exc).__name__}"
+            await message.channel.send(
+                reply,
+                reference=message,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
         if parts and parts[0].lower() == "!persona":
             requested = parts[1].strip().lower() if len(parts) == 2 else ""
             if not requested:

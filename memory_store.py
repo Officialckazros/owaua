@@ -69,6 +69,11 @@ class MemoryStore:
                     updated_at REAL NOT NULL,
                     PRIMARY KEY (model_id, scope_id, user_id)
                 );
+                CREATE TABLE IF NOT EXISTS memory_scopes (
+                    scope_id TEXT PRIMARY KEY,
+                    server_id TEXT NOT NULL,
+                    generation INTEGER NOT NULL DEFAULT 0
+                );
                 """
             )
             message_columns = {
@@ -83,6 +88,10 @@ class MemoryStore:
                 db.execute(
                     "ALTER TABLE messages ADD COLUMN model_id TEXT NOT NULL DEFAULT ''"
                 )
+            if "server_id" not in message_columns:
+                db.execute("ALTER TABLE messages ADD COLUMN server_id TEXT NOT NULL DEFAULT ''")
+            if "generation" not in message_columns:
+                db.execute("ALTER TABLE messages ADD COLUMN generation INTEGER NOT NULL DEFAULT 0")
             memory_columns = {
                 str(row["name"])
                 for row in db.execute("PRAGMA table_info(conversation_memory)").fetchall()
@@ -123,16 +132,98 @@ class MemoryStore:
                     """
                 )
                 db.execute("DROP TABLE conversation_memory_legacy")
+            memory_columns = {
+                str(row["name"])
+                for row in db.execute("PRAGMA table_info(conversation_memory)").fetchall()
+            }
+            if "server_id" not in memory_columns:
+                db.execute(
+                    "ALTER TABLE conversation_memory ADD COLUMN server_id TEXT NOT NULL DEFAULT ''"
+                )
+            if "generation" not in memory_columns:
+                db.execute(
+                    "ALTER TABLE conversation_memory ADD COLUMN generation INTEGER NOT NULL DEFAULT 0"
+                )
             db.execute(
                 """
                 CREATE INDEX IF NOT EXISTS messages_conversation_idx
-                    ON messages(model_id, scope_id, user_id, id)
+                    ON messages(model_id, scope_id, user_id, server_id, generation, id)
                 """
             )
         try:
             os.chmod(self.path, 0o600)
         except OSError:
             pass
+
+    def register_scope(self, scope_id: str, server_id: str) -> int:
+        """Associate a Discord channel with its guild and return its wipe generation."""
+        with self._lock, self._managed_connection() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO memory_scopes (scope_id, server_id) VALUES (?, ?)",
+                (scope_id, server_id),
+            )
+            row = db.execute(
+                "SELECT server_id, generation FROM memory_scopes WHERE scope_id = ?", (scope_id,)
+            ).fetchone()
+            if row is None or str(row["server_id"]) != server_id:
+                raise ValueError("memory scope is already associated with another server")
+            return int(row["generation"])
+
+    def erase_server_memory(self, server_id: str) -> int:
+        """Atomically delete a guild's memory and invalidate in-flight writers."""
+        with self._lock, self._managed_connection() as db:
+            db.execute(
+                "UPDATE memory_scopes SET generation = generation + 1 WHERE server_id = ?",
+                (server_id,),
+            )
+            messages = db.execute(
+                """
+                DELETE FROM messages
+                WHERE server_id = ? OR (
+                    server_id = '' AND scope_id IN (
+                        SELECT scope_id FROM memory_scopes WHERE server_id = ?
+                    )
+                )
+                """,
+                (server_id, server_id),
+            ).rowcount
+            memories = db.execute(
+                """
+                DELETE FROM conversation_memory
+                WHERE server_id = ? OR (
+                    server_id = '' AND scope_id IN (
+                        SELECT scope_id FROM memory_scopes WHERE server_id = ?
+                    )
+                )
+                """,
+                (server_id, server_id),
+            ).rowcount
+            return messages + memories
+
+    def server_scopes(self, server_id: str) -> set[str]:
+        with self._lock, self._managed_connection() as db:
+            rows = db.execute(
+                "SELECT scope_id FROM memory_scopes WHERE server_id = ?", (server_id,)
+            ).fetchall()
+        return {str(row["scope_id"]) for row in rows}
+
+    def scope_generation(self, scope_id: str) -> int | None:
+        """Return the current guild wipe generation, if this is a guild scope."""
+        with self._lock, self._managed_connection() as db:
+            row = db.execute(
+                "SELECT generation FROM memory_scopes WHERE scope_id = ?", (scope_id,)
+            ).fetchone()
+            return None if row is None else int(row["generation"])
+
+    @staticmethod
+    def _scope_context(db: sqlite3.Connection, scope_id: str) -> tuple[str, int]:
+        row = db.execute(
+            "SELECT server_id, generation FROM memory_scopes WHERE scope_id = ?", (scope_id,)
+        ).fetchone()
+        if row is None:
+            # Direct messages retain their existing, non-guild-scoped behavior.
+            return "", 0
+        return str(row["server_id"]), int(row["generation"])
 
     def append_message(
         self,
@@ -146,14 +237,18 @@ class MemoryStore:
         attachments: list[dict[str, str]] | None = None,
         created_at: float | None = None,
         accepted: bool = True,
+        expected_generation: int | None = None,
     ) -> bool:
         payload = json.dumps(attachments or [], ensure_ascii=False, separators=(",", ":"))
         with self._lock, self._managed_connection() as db:
+            server_id, generation = self._scope_context(db, scope_id)
+            if expected_generation is not None and generation != expected_generation:
+                return False
             cursor = db.execute(
                 """
                 INSERT OR IGNORE INTO messages
-                    (event_id, model_id, scope_id, user_id, role, content, attachments_json, accepted, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (event_id, model_id, scope_id, user_id, role, content, attachments_json, accepted, created_at, server_id, generation)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event_id,
@@ -165,6 +260,8 @@ class MemoryStore:
                     payload,
                     int(accepted),
                     created_at if created_at is not None else time.time(),
+                    server_id,
+                    generation,
                 ),
             )
             return cursor.rowcount == 1
@@ -173,15 +270,17 @@ class MemoryStore:
         self, scope_id: str, user_id: str, *, limit: int, model_id: str = ""
     ) -> list[dict[str, Any]]:
         with self._lock, self._managed_connection() as db:
+            server_id, generation = self._scope_context(db, scope_id)
             rows = db.execute(
                 """
                 SELECT id, role, content, attachments_json, created_at
                 FROM messages
                 WHERE model_id = ? AND scope_id = ? AND user_id = ? AND accepted = 1
+                  AND server_id = ? AND generation = ?
                 ORDER BY id DESC
                 LIMIT ?
                 """,
-                (model_id, scope_id, user_id, limit),
+                (model_id, scope_id, user_id, server_id, generation, limit),
             ).fetchall()
         result: list[dict[str, Any]] = []
         for row in reversed(rows):
@@ -212,13 +311,15 @@ class MemoryStore:
         summary, facts, summarized_through = self.get_memory(scope_id, user_id, model_id=model_id)
         del summary, facts
         with self._lock, self._managed_connection() as db:
+            server_id, generation = self._scope_context(db, scope_id)
             cutoff = db.execute(
                 """
                 SELECT id FROM messages
                 WHERE model_id = ? AND scope_id = ? AND user_id = ? AND accepted = 1
+                  AND server_id = ? AND generation = ?
                 ORDER BY id DESC LIMIT 1 OFFSET ?
                 """,
-                (model_id, scope_id, user_id, keep_recent),
+                (model_id, scope_id, user_id, server_id, generation, keep_recent),
             ).fetchone()
             if cutoff is None:
                 return []
@@ -228,10 +329,11 @@ class MemoryStore:
                 FROM messages
                 WHERE model_id = ? AND scope_id = ? AND user_id = ?
                   AND accepted = 1 AND id > ? AND id <= ?
+                  AND server_id = ? AND generation = ?
                 ORDER BY id ASC
                 LIMIT ?
                 """,
-                (model_id, scope_id, user_id, summarized_through, int(cutoff["id"]), limit),
+                (model_id, scope_id, user_id, summarized_through, int(cutoff["id"]), server_id, generation, limit),
             ).fetchall()
         return [
             {
@@ -247,13 +349,15 @@ class MemoryStore:
         self, scope_id: str, user_id: str, *, model_id: str = ""
     ) -> tuple[str, list[str], int]:
         with self._lock, self._managed_connection() as db:
+            server_id, generation = self._scope_context(db, scope_id)
             row = db.execute(
                 """
                 SELECT summary, facts_json, summarized_through_id
                 FROM conversation_memory
                 WHERE model_id = ? AND scope_id = ? AND user_id = ? AND accepted_context = 1
+                  AND server_id = ? AND generation = ?
                 """,
-                (model_id, scope_id, user_id),
+                (model_id, scope_id, user_id, server_id, generation),
             ).fetchone()
         if row is None:
             return "", [], 0
@@ -273,15 +377,19 @@ class MemoryStore:
         summary: str,
         facts: list[str],
         summarized_through_id: int,
+        expected_generation: int | None = None,
     ) -> None:
         clean_facts = list(dict.fromkeys(fact.strip() for fact in facts if fact.strip()))[:50]
         with self._lock, self._managed_connection() as db:
+            server_id, generation = self._scope_context(db, scope_id)
+            if expected_generation is not None and generation != expected_generation:
+                return
             db.execute(
                 """
                 INSERT INTO conversation_memory
                     (model_id, scope_id, user_id, summary, facts_json, summarized_through_id,
-                     accepted_context, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+                     accepted_context, updated_at, server_id, generation)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
                 ON CONFLICT(model_id, scope_id, user_id) DO UPDATE SET
                     summary = excluded.summary,
                     facts_json = excluded.facts_json,
@@ -291,6 +399,8 @@ class MemoryStore:
                         excluded.summarized_through_id
                     ),
                     updated_at = excluded.updated_at
+                    , server_id = excluded.server_id
+                    , generation = excluded.generation
                 WHERE excluded.summarized_through_id >=
                     conversation_memory.summarized_through_id
                 """,
@@ -302,6 +412,8 @@ class MemoryStore:
                     json.dumps(clean_facts, ensure_ascii=False, separators=(",", ":")),
                     summarized_through_id,
                     time.time(),
+                    server_id,
+                    generation,
                 ),
             )
 

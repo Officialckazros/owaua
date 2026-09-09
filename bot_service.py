@@ -27,6 +27,7 @@ from bot import (
     build_instructions,
     chat_completion_text,
     classify_message,
+    contains_self_harm_language,
     credible_self_harm_risk,
     estimate_tokens,
     image_url,
@@ -48,6 +49,11 @@ log = logging.getLogger("owaua")
 
 
 class BotService:
+
+    def memory_generation(self, scope_id: str) -> int | None:
+        """Get the guild wipe generation when the backing store supports it."""
+        getter = getattr(self.memory, "scope_generation", None)
+        return getter(scope_id) if getter is not None else None
 
     @property
     def active_model(self) -> str:
@@ -434,6 +440,7 @@ class BotService:
         # Capture the provider for this turn so a persona switch cannot move a
         # message or its summary into another provider's memory mid-request.
         active_model = self.active_model
+        expected_generation = self.memory_generation(scope_id)
 
         inserted = await asyncio.to_thread(
             self.memory.append_message,
@@ -445,6 +452,7 @@ class BotService:
             content=prompt,
             attachments=metadata,
             created_at=message.created_at.timestamp(),
+            expected_generation=expected_generation,
         )
         if not inserted:
             log.info("Ignoring duplicate Discord event %s", message.id)
@@ -463,6 +471,24 @@ class BotService:
                 user_id=user_id,
                 role="assistant",
                 content=answer,
+                expected_generation=expected_generation,
+            )
+            return answer
+
+        if contains_self_harm_language(prompt):
+            # Do not let a provider invent a crisis-counselling script for
+            # ambiguous hyperbole. Explicit imminent risk remains handled by
+            # the deterministic emergency handoff above.
+            answer = "i'm reading that as u being pissed off, not a request for advice"
+            await asyncio.to_thread(
+                self.memory.append_message,
+                event_id=f"assistant:{message.id}",
+                model_id=active_model,
+                scope_id=scope_id,
+                user_id=user_id,
+                role="assistant",
+                content=answer,
+                expected_generation=expected_generation,
             )
             return answer
 
@@ -486,6 +512,9 @@ class BotService:
             facts=facts,
             message_kind=classify_message(prompt, has_image=bool(metadata)),
             explicit_roleplay=self.explicit_roleplay,
+            response_language=getattr(self, "response_languages", {}).get(
+                (scope_id, user_id), "English"
+            ),
         )
         context_items: list[dict[str, object]] = []
         context_tokens = 0
@@ -599,22 +628,40 @@ class BotService:
             user_id=user_id,
             role="assistant",
             content=answer,
+            expected_generation=expected_generation,
         )
-        self.schedule_memory_refresh(scope_id, user_id)
+        if expected_generation is None:
+            self.schedule_memory_refresh(scope_id, user_id)
+        else:
+            self.schedule_memory_refresh(
+                scope_id, user_id, expected_generation=expected_generation
+            )
         return answer
 
     def schedule_memory_refresh(
-        self, scope_id: str, user_id: str, model_id: str | None = None
+        self,
+        scope_id: str,
+        user_id: str,
+        model_id: str | None = None,
+        *,
+        expected_generation: int | None = None,
     ) -> None:
         selected_model = model_id or self.active_model
         task = asyncio.create_task(
-            self.refresh_memory(scope_id, user_id, selected_model)
+            self.refresh_memory(
+                scope_id, user_id, selected_model, expected_generation=expected_generation
+            )
         )
         self.background_tasks.add(task)
         task.add_done_callback(self.background_tasks.discard)
 
     async def refresh_memory(
-        self, scope_id: str, user_id: str, model_id: str | None = None
+        self,
+        scope_id: str,
+        user_id: str,
+        model_id: str | None = None,
+        *,
+        expected_generation: int | None = None,
     ) -> None:
         selected_model = model_id or self.active_model
         key = (scope_id, user_id, selected_model)
@@ -703,6 +750,7 @@ class BotService:
                     summary=summary,
                     facts=[str(fact) for fact in facts],
                     summarized_through_id=int(summary_records[-1]["id"]),
+                    expected_generation=expected_generation,
                 )
             except (ProviderError, ValueError, TypeError, json.JSONDecodeError):
                 log.exception(

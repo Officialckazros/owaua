@@ -13,6 +13,10 @@ The voice lives in plain Python files, so changing Owaua’s personality does no
 - Streams longer replies into Discord naturally
 - Includes rate limits, input checks, moderation, retries, and stale-request handling
 - Lets moderators quietly remove a batch of messages with `!nuke N`
+- Lets members with **Manage Server** run `!memory erase` to permanently erase
+  every user's local memory for that server
+- Lets users run `!vc` to join their current voice channel and speak one short
+  line with a randomly selected female-sounding voice
 
 ## Run it locally
 
@@ -40,13 +44,47 @@ Edit the text inside one of these files:
 Upload a changed voice to the running Daki instance with:
 
 ```sh
-./scripts/update-persona.sh
-./scripts/update-persona.sh deepseek mistral gpt
+update persona
+update persona gpt/deepseek/mistral
 ```
 
 The next message uses the new text; a restart is not needed.
 
+The `update` command is installed in `~/.local/bin`. If the project is moved,
+set `OWAUA_PROJECT_DIR` to its new absolute path before using it.
+
 Use `!persona` to see the active voice and `!persona explicit`, `!persona nerdish`, or `!persona rudeish` to switch it. The names are kept for compatibility with the existing bot setup.
+
+Use `!language <full language name>` to choose the language for replies in that
+user/channel conversation, for example:
+
+```text
+!language hungarian
+```
+
+Language codes such as `hu` are intentionally rejected; type the complete
+language name. Use `!language` without a name to see the current setting.
+
+Join a voice channel and run `!vc` to make the bot join and speak a random line.
+Use `!vc leave` to disconnect it. Voice playback requires FFmpeg to be installed
+and available on `PATH`, and the bot needs permission to connect and speak.
+
+For music, join a voice channel and use `!music <song or URL>`. Playback controls
+include `!music start`, `!music pause`, `!music resume`, `!music stop`,
+`!music skip`, `!music now`, and `!music leave`. Music lookup uses `yt-dlp`, and
+FFmpeg must be installed and available on `PATH`.
+
+To permanently erase all locally stored conversation messages and summaries for
+every user and channel in one server, a member with the **Manage Server**
+permission can run:
+
+```text
+!memory erase
+```
+
+The command verifies the complete channel list before deleting. It also
+invalidates active requests and summaries, so content from before the wipe
+cannot be saved or retrieved after it.
 
 ## Configuration
 

@@ -1,19 +1,26 @@
 from __future__ import annotations
 
+import os
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
+from bot_client import MessageEventGuard
 from bot import (
     DEEPSEEK_MODEL,
     MISTRAL_MODEL,
     build_instructions,
     classify_message,
     chat_completion_text,
+    contains_self_harm_language,
     credible_self_harm_risk,
     estimate_tokens,
     looks_like_leaked_reasoning,
     model_context_limits,
     model_output_limit,
     moderation_result_is_rejected,
+    parse_language_name,
     public_reply_text,
     quality_issues,
     response_text,
@@ -24,6 +31,30 @@ from bot import (
 
 
 class BotHelperTests(unittest.TestCase):
+    def test_message_event_guard_claims_each_event_once(self) -> None:
+        guard = MessageEventGuard(ttl=10)
+
+        self.assertTrue(guard.claim(42, now=100))
+        self.assertFalse(guard.claim(42, now=101))
+        self.assertTrue(guard.claim(42, now=111))
+
+    def test_read_persona_detects_same_size_edit_with_preserved_timestamp(self) -> None:
+        import bot as settings
+
+        with tempfile.TemporaryDirectory() as directory:
+            persona_file = Path(directory) / "persona.py"
+            first = 'PERSONA = "first voice"\n'
+            second = 'PERSONA = "other voice"\n'
+            self.assertEqual(len(first), len(second))
+            persona_file.write_text(first, encoding="utf-8")
+            original_timestamp = persona_file.stat().st_mtime_ns
+            with patch.dict(settings.PERSONA_FILES, {settings.MISTRAL_MODEL: persona_file}):
+                settings._persona_cache.clear()
+                self.assertEqual(settings.read_persona(settings.MISTRAL_MODEL), "first voice")
+                persona_file.write_text(second, encoding="utf-8")
+                os.utime(persona_file, ns=(original_timestamp, original_timestamp))
+                self.assertEqual(settings.read_persona(settings.MISTRAL_MODEL), "other voice")
+
     def test_response_text_supports_raw_responses_shape(self) -> None:
         data = {
             "output": [
@@ -45,10 +76,40 @@ class BotHelperTests(unittest.TestCase):
         self.assertIn("prompt-injection", classification)
         self.assertIn("question", classification)
 
+    def test_runtime_contract_forbids_advice_and_help(self) -> None:
+        instructions = build_instructions()
+        self.assertIn("NEVER give advice, instructions, recommendations", instructions)
+        self.assertIn("Do not turn into a support agent", instructions)
+
+    def test_language_command_requires_a_full_language_name(self) -> None:
+        language, error = parse_language_name("hungarian")
+        self.assertEqual(language, "hungarian")
+        self.assertIsNone(error)
+
+        language, error = parse_language_name("hu")
+        self.assertIsNone(language)
+        self.assertIn("full language name", error or "")
+
+    def test_selected_language_is_included_in_instructions(self) -> None:
+        instructions = build_instructions(response_language="Hungarian")
+        self.assertIn("Reply in Hungarian", instructions)
+
     def test_self_harm_interlock_requires_credible_urgency(self) -> None:
         self.assertFalse(credible_self_harm_risk("kys lol"))
         self.assertFalse(credible_self_harm_risk("i wanna die jk"))
+        self.assertFalse(
+            credible_self_harm_risk("you make me wanna kill myself")
+        )
+        self.assertFalse(
+            credible_self_harm_risk("this game makes me want to kill myself lol")
+        )
         self.assertTrue(credible_self_harm_risk("i want to die tonight and im not joking"))
+        self.assertTrue(credible_self_harm_risk("i want to end my life tonight"))
+
+    def test_self_harm_language_is_caught_before_provider_response(self) -> None:
+        self.assertTrue(contains_self_harm_language("you making me want to overdose"))
+        self.assertTrue(contains_self_harm_language("kys lol"))
+        self.assertFalse(contains_self_harm_language("you are annoying me"))
 
     def test_quality_validator_detects_leaks_repetition_and_dots(self) -> None:
         issues = quality_issues("your persona contract.\nyour persona contract.")
@@ -63,6 +124,17 @@ class BotHelperTests(unittest.TestCase):
         self.assertGreater(len(chunks), 1)
         self.assertTrue(all(0 < len(chunk) <= 80 for chunk in chunks))
         self.assertEqual(" ".join(chunks), text)
+
+    def test_discord_split_keeps_long_python_fence_valid(self) -> None:
+        text = "```python\n" + "print('hello')\n" * 40 + "```"
+        chunks = split_discord_message(text, limit=80)
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(0 < len(chunk) <= 80 for chunk in chunks))
+        self.assertTrue(all(chunk.count("```") % 2 == 0 for chunk in chunks))
+        self.assertTrue(chunks[0].startswith("```python"))
+        self.assertTrue(all(chunk.startswith("```python") for chunk in chunks[1:]))
+        self.assertTrue(chunks[-1].endswith("```"))
 
     def test_context_helpers_bound_large_values(self) -> None:
         text = "x" * 100

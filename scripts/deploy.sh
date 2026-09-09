@@ -20,7 +20,11 @@ from pathlib import Path
 root = Path(os.environ["ROOT_DIR"])
 deploy_path = Path(os.environ["OWAUA_DEPLOY_SCRIPT"])
 
-excluded = {Path("scripts/deploy.sh"), Path("scripts/update-persona.sh")}
+excluded = {
+    Path("scripts/deploy.sh"),
+    Path("scripts/update-persona.sh"),
+    Path("personas/update-persona.sh"),
+}
 required_runtime = {
     Path("bot.py"),
     Path("memory_store.py"),
