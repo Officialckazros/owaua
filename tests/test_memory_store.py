@@ -17,6 +17,16 @@ class MemoryStoreTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
 
+    def test_application_settings_survive_reopening(self) -> None:
+        self.assertEqual(self.store.get_setting("selected_persona_model", "gpt"), "gpt")
+        self.store.set_setting("selected_persona_model", "deepseek")
+
+        reopened = MemoryStore(self.path)
+
+        self.assertEqual(
+            reopened.get_setting("selected_persona_model", "gpt"), "deepseek"
+        )
+
     def test_messages_survive_reopening_and_duplicate_events_are_ignored(self) -> None:
         inserted = self.store.append_message(
             event_id="discord:1",

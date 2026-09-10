@@ -88,7 +88,15 @@ class PersonaBot(discord.Client, BotService):
         self.response_languages: dict[tuple[str, str], str] = {}
         self.voice_locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
         self.music_tracks: dict[int, dict[str, str]] = {}
-        self.selected_model = "mistral" if settings.MISTRAL_API_KEY else "gpt"
+        default_model = "mistral" if settings.MISTRAL_API_KEY else "gpt"
+        saved_model = self.memory.get_setting("selected_persona_model", default_model)
+        if saved_model not in settings.PERSONA_ALIASES.values():
+            saved_model = default_model
+        if saved_model == "mistral" and not settings.MISTRAL_API_KEY:
+            saved_model = default_model
+        if saved_model == "deepseek" and not settings.DEEPSEEK_API_KEY:
+            saved_model = default_model
+        self.selected_model = saved_model
 
     async def speak_in_voice(self, voice_client: discord.VoiceClient, text: str) -> str:
         """Generate and play one short TTS line, choosing a voice at random."""
@@ -557,6 +565,7 @@ class PersonaBot(discord.Client, BotService):
                 reply = "mistral is not configured (set MISTRAL_API_KEY first)"
             else:
                 self.selected_model = settings.PERSONA_ALIASES[requested]
+                self.memory.set_setting("selected_persona_model", self.selected_model)
                 reply = f"persona: {requested} ({self.active_model})"
             await message.channel.send(
                 reply,

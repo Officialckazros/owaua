@@ -83,6 +83,10 @@ class MemoryStore:
                     topic TEXT NOT NULL DEFAULT '',
                     updated_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 """
             )
             message_columns = {
@@ -181,6 +185,25 @@ class MemoryStore:
             os.chmod(self.path, 0o600)
         except OSError:
             pass
+
+    def get_setting(self, key: str, default: str = "") -> str:
+        """Return a persisted application setting, or ``default`` when unset."""
+        with self._lock, self._managed_connection() as db:
+            row = db.execute(
+                "SELECT value FROM app_settings WHERE key = ?", (key,)
+            ).fetchone()
+        return default if row is None else str(row["value"])
+
+    def set_setting(self, key: str, value: str) -> None:
+        """Persist one application setting across bot restarts and deployments."""
+        with self._lock, self._managed_connection() as db:
+            db.execute(
+                """
+                INSERT INTO app_settings (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (key, value),
+            )
 
     def register_scope(self, scope_id: str, server_id: str) -> int:
         """Associate a Discord channel with its guild and return its wipe generation."""
