@@ -414,6 +414,8 @@ class BotService:
         prompt: str,
         *,
         on_delta: settings.DeltaCallback | None = None,
+        active_mode: bool = False,
+        topic: str = "",
     ) -> str | None:
         scope_id, user_id = self.conversation_key(message)
         guild = getattr(message, "guild", None)
@@ -515,6 +517,8 @@ class BotService:
             response_language=getattr(self, "response_languages", {}).get(
                 (scope_id, user_id), "English"
             ),
+            active_mode=active_mode,
+            topic=topic,
         )
         context_items: list[dict[str, object]] = []
         context_tokens = 0

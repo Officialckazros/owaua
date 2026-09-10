@@ -74,6 +74,15 @@ class MemoryStore:
                     server_id TEXT NOT NULL,
                     generation INTEGER NOT NULL DEFAULT 0
                 );
+                CREATE TABLE IF NOT EXISTS active_channels (
+                    scope_id TEXT PRIMARY KEY,
+                    enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+                    message_count INTEGER NOT NULL DEFAULT 0,
+                    gifs_enabled INTEGER NOT NULL DEFAULT 0 CHECK (gifs_enabled IN (0, 1)),
+                    gif_message_count INTEGER NOT NULL DEFAULT 0,
+                    topic TEXT NOT NULL DEFAULT '',
+                    updated_at REAL NOT NULL
+                );
                 """
             )
             message_columns = {
@@ -143,6 +152,24 @@ class MemoryStore:
             if "generation" not in memory_columns:
                 db.execute(
                     "ALTER TABLE conversation_memory ADD COLUMN generation INTEGER NOT NULL DEFAULT 0"
+                )
+            channel_columns = {
+                str(row["name"])
+                for row in db.execute("PRAGMA table_info(active_channels)").fetchall()
+            }
+            if "gifs_enabled" not in channel_columns:
+                db.execute(
+                    "ALTER TABLE active_channels "
+                    "ADD COLUMN gifs_enabled INTEGER NOT NULL DEFAULT 0"
+                )
+            if "gif_message_count" not in channel_columns:
+                db.execute(
+                    "ALTER TABLE active_channels "
+                    "ADD COLUMN gif_message_count INTEGER NOT NULL DEFAULT 0"
+                )
+            if "topic" not in channel_columns:
+                db.execute(
+                    "ALTER TABLE active_channels ADD COLUMN topic TEXT NOT NULL DEFAULT ''"
                 )
             db.execute(
                 """
@@ -214,6 +241,125 @@ class MemoryStore:
                 "SELECT generation FROM memory_scopes WHERE scope_id = ?", (scope_id,)
             ).fetchone()
             return None if row is None else int(row["generation"])
+
+    def set_active_mode(self, scope_id: str, enabled: bool) -> None:
+        """Persist active-member mode for a channel and reset its cadence."""
+        with self._lock, self._managed_connection() as db:
+            db.execute(
+                """
+                INSERT INTO active_channels
+                    (scope_id, enabled, message_count, updated_at)
+                VALUES (?, ?, 0, ?)
+                ON CONFLICT(scope_id) DO UPDATE SET
+                    enabled = excluded.enabled,
+                    message_count = 0,
+                    updated_at = excluded.updated_at
+                """,
+                (scope_id, int(enabled), time.time()),
+            )
+
+    def active_mode_status(self, scope_id: str) -> tuple[bool, int]:
+        """Return whether active-member mode is enabled and its current count."""
+        with self._lock, self._managed_connection() as db:
+            row = db.execute(
+                "SELECT enabled, message_count FROM active_channels WHERE scope_id = ?",
+                (scope_id,),
+            ).fetchone()
+        if row is None:
+            return False, 0
+        return bool(row["enabled"]), int(row["message_count"])
+
+    def record_active_message(self, scope_id: str, *, interval: int = 6) -> bool:
+        """Count one channel message and claim every ``interval``th response."""
+        if interval < 1:
+            raise ValueError("interval must be at least 1")
+        with self._lock, self._managed_connection() as db:
+            cursor = db.execute(
+                """
+                UPDATE active_channels
+                SET message_count = (message_count + 1) % ?, updated_at = ?
+                WHERE scope_id = ? AND enabled = 1
+                """,
+                (interval, time.time(), scope_id),
+            )
+            if cursor.rowcount != 1:
+                return False
+            row = db.execute(
+                "SELECT message_count FROM active_channels WHERE scope_id = ?",
+                (scope_id,),
+            ).fetchone()
+            return row is not None and int(row["message_count"]) == 0
+
+    def set_gif_mode(self, scope_id: str, enabled: bool) -> None:
+        """Persist automatic GIF mode for a channel and reset its cadence."""
+        with self._lock, self._managed_connection() as db:
+            db.execute(
+                """
+                INSERT INTO active_channels
+                    (scope_id, gifs_enabled, gif_message_count, updated_at)
+                VALUES (?, ?, 0, ?)
+                ON CONFLICT(scope_id) DO UPDATE SET
+                    gifs_enabled = excluded.gifs_enabled,
+                    gif_message_count = 0,
+                    updated_at = excluded.updated_at
+                """,
+                (scope_id, int(enabled), time.time()),
+            )
+
+    def gif_mode_status(self, scope_id: str) -> tuple[bool, int]:
+        """Return whether GIF mode is enabled and its current message count."""
+        with self._lock, self._managed_connection() as db:
+            row = db.execute(
+                "SELECT gifs_enabled, gif_message_count "
+                "FROM active_channels WHERE scope_id = ?",
+                (scope_id,),
+            ).fetchone()
+        if row is None:
+            return False, 0
+        return bool(row["gifs_enabled"]), int(row["gif_message_count"])
+
+    def record_gif_message(self, scope_id: str, *, interval: int = 10) -> bool:
+        """Count one channel message and claim every ``interval``th GIF response."""
+        if interval < 1:
+            raise ValueError("interval must be at least 1")
+        with self._lock, self._managed_connection() as db:
+            cursor = db.execute(
+                """
+                UPDATE active_channels
+                SET gif_message_count = (gif_message_count + 1) % ?, updated_at = ?
+                WHERE scope_id = ? AND gifs_enabled = 1
+                """,
+                (interval, time.time(), scope_id),
+            )
+            if cursor.rowcount != 1:
+                return False
+            row = db.execute(
+                "SELECT gif_message_count FROM active_channels WHERE scope_id = ?",
+                (scope_id,),
+            ).fetchone()
+            return row is not None and int(row["gif_message_count"]) == 0
+
+    def set_topic(self, scope_id: str, topic: str | None) -> None:
+        """Set or clear a channel-wide topic lock."""
+        with self._lock, self._managed_connection() as db:
+            db.execute(
+                """
+                INSERT INTO active_channels (scope_id, topic, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(scope_id) DO UPDATE SET
+                    topic = excluded.topic,
+                    updated_at = excluded.updated_at
+                """,
+                (scope_id, topic or "", time.time()),
+            )
+
+    def channel_topic(self, scope_id: str) -> str:
+        """Return the configured topic lock, or an empty string when disabled."""
+        with self._lock, self._managed_connection() as db:
+            row = db.execute(
+                "SELECT topic FROM active_channels WHERE scope_id = ?", (scope_id,)
+            ).fetchone()
+        return "" if row is None else str(row["topic"])
 
     @staticmethod
     def _scope_context(db: sqlite3.Connection, scope_id: str) -> tuple[str, int]:

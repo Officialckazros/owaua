@@ -63,6 +63,78 @@ class MemoryStoreTests(unittest.TestCase):
 
         self.assertEqual([message["content"] for message in recent], ["2", "3", "4"])
 
+    def test_active_mode_persists_and_claims_every_sixth_message(self) -> None:
+        self.assertEqual(self.store.active_mode_status("channel"), (False, 0))
+
+        self.store.set_active_mode("channel", True)
+        claims = [self.store.record_active_message("channel") for _ in range(12)]
+
+        self.assertEqual(
+            claims,
+            [False, False, False, False, False, True] * 2,
+        )
+        self.assertEqual(MemoryStore(self.path).active_mode_status("channel"), (True, 0))
+
+        self.store.set_active_mode("channel", False)
+        self.assertFalse(self.store.record_active_message("channel"))
+        self.assertEqual(self.store.active_mode_status("channel"), (False, 0))
+
+    def test_gif_mode_has_an_independent_ten_message_cadence(self) -> None:
+        self.store.set_active_mode("channel", True)
+        self.store.set_gif_mode("channel", True)
+
+        active_claims = []
+        gif_claims = []
+        for _ in range(10):
+            active_claims.append(self.store.record_active_message("channel", interval=6))
+            gif_claims.append(self.store.record_gif_message("channel", interval=10))
+
+        self.assertEqual(active_claims.count(True), 1)
+        self.assertEqual(gif_claims, [False] * 9 + [True])
+        self.assertEqual(self.store.active_mode_status("channel"), (True, 4))
+        self.assertEqual(self.store.gif_mode_status("channel"), (True, 0))
+
+        self.store.set_gif_mode("channel", False)
+        self.assertFalse(self.store.record_gif_message("channel"))
+        self.assertEqual(self.store.active_mode_status("channel"), (True, 4))
+
+    def test_topic_lock_persists_and_can_be_cleared(self) -> None:
+        self.assertEqual(self.store.channel_topic("channel"), "")
+        self.store.set_topic("channel", "yuri from ddlc")
+        self.assertEqual(
+            MemoryStore(self.path).channel_topic("channel"), "yuri from ddlc"
+        )
+
+        self.store.set_topic("channel", None)
+        self.assertEqual(self.store.channel_topic("channel"), "")
+
+    def test_existing_active_channel_table_is_migrated_without_losing_state(self) -> None:
+        legacy_path = Path(self.temporary_directory.name) / "legacy.sqlite3"
+        with sqlite3.connect(legacy_path) as db:
+            db.execute(
+                """
+                CREATE TABLE active_channels (
+                    scope_id TEXT PRIMARY KEY,
+                    enabled INTEGER NOT NULL DEFAULT 0,
+                    message_count INTEGER NOT NULL DEFAULT 0,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            db.execute(
+                "INSERT INTO active_channels VALUES ('channel', 1, 3, 1.0)"
+            )
+
+        migrated = MemoryStore(legacy_path)
+
+        self.assertEqual(migrated.active_mode_status("channel"), (True, 3))
+        self.assertEqual(migrated.gif_mode_status("channel"), (False, 0))
+        self.assertEqual(migrated.channel_topic("channel"), "")
+        migrated.set_gif_mode("channel", True)
+        migrated.set_topic("channel", "yuri from ddlc")
+        self.assertEqual(migrated.gif_mode_status("channel"), (True, 0))
+        self.assertEqual(migrated.channel_topic("channel"), "yuri from ddlc")
+
     def test_old_messages_roll_into_durable_summary_state(self) -> None:
         for number in range(8):
             self.store.append_message(

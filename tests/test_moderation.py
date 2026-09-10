@@ -425,10 +425,10 @@ class ExistingAdmissionControlsTests(unittest.TestCase):
         instance, _, _ = make_bot()
         with patch.multiple(bot_module, RATE_LIMIT_REQUESTS=1, RATE_LIMIT_WINDOW=45.0):
             self.assertEqual(
-                instance.admit_request(7, guild_id=1535083112709496903), (True, 0)
+                instance.admit_request(7, guild_id=1523255979280437328), (True, 0)
             )
             self.assertEqual(
-                instance.admit_request(7, guild_id=1535083112709496903), (True, 0)
+                instance.admit_request(7, guild_id=1523255979280437328), (True, 0)
             )
 
     def test_safety_identifier_is_stable_and_user_scoped(self) -> None:

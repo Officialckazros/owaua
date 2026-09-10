@@ -21,10 +21,12 @@ from bot import (
     model_output_limit,
     moderation_result_is_rejected,
     parse_language_name,
+    parse_topic_name,
     public_reply_text,
     quality_issues,
     response_text,
     split_discord_message,
+    klipy_gif_urls,
     to_chat_completions_payload,
     truncate_for_context,
 )
@@ -93,6 +95,46 @@ class BotHelperTests(unittest.TestCase):
     def test_selected_language_is_included_in_instructions(self) -> None:
         instructions = build_instructions(response_language="Hungarian")
         self.assertIn("Reply in Hungarian", instructions)
+
+    def test_active_member_instructions_do_not_control_gifs(self) -> None:
+        instructions = build_instructions(active_mode=True)
+
+        self.assertIn("ACTIVE MEMBER MODE", instructions)
+        self.assertNotIn("active-gif", instructions)
+        self.assertNotIn("GIF", instructions)
+        self.assertNotIn("ACTIVE MEMBER MODE", build_instructions())
+
+    def test_topic_lock_is_strict_and_treats_topic_as_data(self) -> None:
+        instructions = build_instructions(topic='yuri from ddlc "on topic"')
+
+        self.assertIn("CHANNEL TOPIC LOCK", instructions)
+        self.assertIn("Stay strictly on that topic", instructions)
+        self.assertIn('yuri from ddlc \\"on topic\\"', instructions)
+        self.assertNotIn("CHANNEL TOPIC LOCK", build_instructions())
+
+    def test_topic_names_are_normalized_and_bounded(self) -> None:
+        self.assertEqual(parse_topic_name("  yuri   from ddlc "), ("yuri from ddlc", None))
+        topic, error = parse_topic_name("x" * 101)
+        self.assertIsNone(topic)
+        self.assertIn("100 characters", error or "")
+
+    def test_klipy_parser_only_returns_direct_https_gifs(self) -> None:
+        payload = {
+            "results": [
+                {
+                    "media_formats": {
+                        "gif": {"url": "https://static.klipy.com/abc/example.gif"}
+                    }
+                },
+                {"media_formats": {"gif": {"url": "http://unsafe.example/gif"}}},
+                {"media_formats": {"tinygif": {"url": "https://static.klipy.com/no"}}},
+            ]
+        }
+
+        self.assertEqual(
+            klipy_gif_urls(payload),
+            ["https://static.klipy.com/abc/example.gif"],
+        )
 
     def test_self_harm_interlock_requires_credible_urgency(self) -> None:
         self.assertFalse(credible_self_harm_risk("kys lol"))
@@ -218,6 +260,7 @@ class BotHelperTests(unittest.TestCase):
         self.assertNotIn("instructions", payload)
 
     def test_deepseek_payload_disables_thinking(self) -> None:
+        self.assertEqual(DEEPSEEK_MODEL, "deepseek-flash")
         payload = to_chat_completions_payload(
             {
                 "model": DEEPSEEK_MODEL,

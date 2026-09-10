@@ -14,11 +14,22 @@ import hashlib
 import importlib.machinery
 import importlib.util
 import os
+import shlex
 import time
 from pathlib import Path
 
 root = Path(os.environ["ROOT_DIR"])
 deploy_path = Path(os.environ["OWAUA_DEPLOY_SCRIPT"])
+
+klipy_api_key = ""
+env_file = root / ".env"
+if env_file.is_file():
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        if line.startswith("KLIPY_API_KEY="):
+            klipy_api_key = line.partition("=")[2].strip().strip("\"'")
+            break
+if not klipy_api_key:
+    raise RuntimeError("KLIPY_API_KEY is missing from the local .env")
 
 excluded = {
     Path("scripts/deploy.sh"),
@@ -78,7 +89,10 @@ for local_path in files:
 
 client.update_startup_variable("STARTUP_CMD", "")
 client.update_startup_variable(
-    "SECOND_CMD", "cd persona-test-bot && bash scripts/run-bots.sh"
+    "SECOND_CMD",
+    "cd persona-test-bot && KLIPY_API_KEY="
+    + shlex.quote(klipy_api_key)
+    + " bash scripts/run-bots.sh",
 )
 print(f"Restarting {config.get('server_name', config['server_id'])}...")
 client.restart()

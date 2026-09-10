@@ -26,7 +26,9 @@ from bot import (
     ModerationUnavailable,
     image_url,
     parse_language_name,
+    parse_topic_name,
     split_discord_message,
+    klipy_gif_urls,
 )
 
 log = logging.getLogger("owaua")
@@ -158,6 +160,29 @@ class PersonaBot(discord.Client, BotService):
                 }
         return await asyncio.to_thread(extract)
 
+    async def search_gif(self, query: str) -> str | None:
+        """Return a real, directly embeddable Klipy GIF for a search phrase."""
+        try:
+            response = await self.provider_http.get(
+                f"{settings.KLIPY_BASE_URL}/search",
+                params={
+                    "q": query,
+                    "key": settings.KLIPY_API_KEY,
+                    "limit": settings.GIF_SEARCH_LIMIT,
+                    "media_filter": "gif",
+                    "contentfilter": "medium",
+                    "random": "true",
+                },
+            )
+            response.raise_for_status()
+            urls = klipy_gif_urls(response.json())
+        except (httpx.HTTPError, ValueError, TypeError):
+            # Do not log the HTTP exception itself: its request URL contains the
+            # Klipy API key as a query parameter.
+            log.warning("Klipy GIF search failed")
+            return None
+        return random.choice(urls) if urls else None
+
     def play_music_track(self, voice_client: discord.VoiceClient, track: dict[str, str]) -> None:
         source = discord.FFmpegPCMAudio(
             track["url"],
@@ -198,6 +223,136 @@ class PersonaBot(discord.Client, BotService):
             await asyncio.to_thread(
                 self.memory.register_scope, str(message.channel.id), str(message.guild.id)
             )
+        if parts and parts[0].lower() == "!help":
+            await message.channel.send(
+                settings.HELP_TEXT,
+                reference=message,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        if parts and parts[0].lower() == "!active":
+            if message.guild is None:
+                reply = "!active only works in a server channel"
+            else:
+                scope_id = str(message.channel.id)
+                action = parts[1].strip().casefold() if len(parts) == 2 else ""
+                if action == "on":
+                    await asyncio.to_thread(
+                        self.memory.set_active_mode, scope_id, True
+                    )
+                    reply = (
+                        "active mode on — I’ll respond to every 6th message "
+                        "in this channel"
+                    )
+                elif action == "off":
+                    await asyncio.to_thread(
+                        self.memory.set_active_mode, scope_id, False
+                    )
+                    reply = "active mode off in this channel"
+                elif not action or action == "status":
+                    enabled, count = await asyncio.to_thread(
+                        self.memory.active_mode_status, scope_id
+                    )
+                    if enabled:
+                        remaining = settings.ACTIVE_RESPONSE_INTERVAL - count
+                        reply = (
+                            "active mode is on — next automatic response in "
+                            f"{remaining} message{'s' if remaining != 1 else ''}"
+                        )
+                    else:
+                        reply = "active mode is off in this channel"
+                else:
+                    reply = "usage: !active on | !active off | !active status"
+            await message.channel.send(
+                reply,
+                reference=message,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        if parts and parts[0].lower() == "!gifs":
+            if message.guild is None:
+                reply = "!gifs only works in a server channel"
+            else:
+                scope_id = str(message.channel.id)
+                action = parts[1].strip().casefold() if len(parts) == 2 else ""
+                if action == "on" and not settings.KLIPY_API_KEY:
+                    reply = (
+                        "GIF search is not configured — add KLIPY_API_KEY to .env "
+                        "and restart the bot"
+                    )
+                elif action == "on":
+                    await asyncio.to_thread(self.memory.set_gif_mode, scope_id, True)
+                    reply = (
+                        "GIFs on — I’ll send a relevant GIF every 10th message "
+                        "in this channel"
+                    )
+                elif action == "off":
+                    await asyncio.to_thread(self.memory.set_gif_mode, scope_id, False)
+                    reply = "GIFs off in this channel"
+                elif not action or action == "status":
+                    enabled, count = await asyncio.to_thread(
+                        self.memory.gif_mode_status, scope_id
+                    )
+                    if enabled:
+                        remaining = settings.GIF_RESPONSE_INTERVAL - count
+                        topic = await asyncio.to_thread(
+                            self.memory.channel_topic, scope_id
+                        )
+                        topic_note = f" for `{topic}`" if topic else ""
+                        reply = (
+                            f"GIFs are on{topic_note} — next GIF in {remaining} "
+                            f"message{'s' if remaining != 1 else ''}"
+                        )
+                        if not settings.KLIPY_API_KEY:
+                            reply += " (KLIPY_API_KEY is currently missing)"
+                    else:
+                        reply = "GIFs are off in this channel"
+                else:
+                    reply = "usage: !gifs on | !gifs off | !gifs status"
+            await message.channel.send(
+                reply,
+                reference=message,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        if parts and parts[0].lower() == "!topic":
+            if message.guild is None:
+                reply = "!topic only works in a server channel"
+            else:
+                scope_id = str(message.channel.id)
+                argument = parts[1].strip() if len(parts) == 2 else ""
+                if argument.casefold() == "off":
+                    await asyncio.to_thread(self.memory.set_topic, scope_id, None)
+                    reply = "topic lock off in this channel"
+                else:
+                    topic_parts = argument.rsplit(maxsplit=1)
+                    if len(topic_parts) == 2 and topic_parts[1].casefold() == "on":
+                        topic, error = parse_topic_name(topic_parts[0])
+                        if error is not None:
+                            reply = error
+                        else:
+                            assert topic is not None
+                            await asyncio.to_thread(
+                                self.memory.set_topic, scope_id, topic
+                            )
+                            reply = f"topic locked to `{topic}`"
+                    elif not argument or argument.casefold() == "status":
+                        topic = await asyncio.to_thread(
+                            self.memory.channel_topic, scope_id
+                        )
+                        reply = (
+                            f"topic is locked to `{topic}`"
+                            if topic
+                            else "topic lock is off in this channel"
+                        )
+                    else:
+                        reply = "usage: !topic <topic> on | !topic off"
+            await message.channel.send(
+                reply,
+                reference=message,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
         if message.guild is not None and parts and parts[0].lower() == "!memory":
             action = parts[1].strip().lower() if len(parts) == 2 else ""
             if action != "erase":
@@ -423,7 +578,45 @@ class PersonaBot(discord.Client, BotService):
 
         is_dm = message.guild is None
         mentioned = self.user is not None and self.user in message.mentions
-        if not (is_dm or mentioned):
+        active_enabled = False
+        active_turn = False
+        gif_enabled = False
+        gif_turn = False
+        topic = ""
+        if not is_dm:
+            scope_id = str(message.channel.id)
+            topic = await asyncio.to_thread(self.memory.channel_topic, scope_id)
+            if not message.content.lstrip().startswith("!"):
+                (active_enabled, _), (gif_enabled, _) = await asyncio.gather(
+                    asyncio.to_thread(self.memory.active_mode_status, scope_id),
+                    asyncio.to_thread(self.memory.gif_mode_status, scope_id),
+                )
+                cadence_checks = []
+                if active_enabled:
+                    cadence_checks.append(
+                        asyncio.to_thread(
+                            self.memory.record_active_message,
+                            scope_id,
+                            interval=settings.ACTIVE_RESPONSE_INTERVAL,
+                        )
+                    )
+                if gif_enabled:
+                    cadence_checks.append(
+                        asyncio.to_thread(
+                            self.memory.record_gif_message,
+                            scope_id,
+                            interval=settings.GIF_RESPONSE_INTERVAL,
+                        )
+                    )
+                results = await asyncio.gather(*cadence_checks)
+                result_index = 0
+                if active_enabled:
+                    active_turn = results[result_index]
+                    result_index += 1
+                if gif_enabled:
+                    gif_turn = results[result_index]
+        should_ai_reply = is_dm or mentioned or active_turn
+        if not (should_ai_reply or gif_turn):
             return
         prompt = message.content
         if self.user is not None:
@@ -446,6 +639,19 @@ class PersonaBot(discord.Client, BotService):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             return
+
+        if gif_turn:
+            gif_query = topic or prompt[: settings.MAX_TOPIC_CHARS]
+            gif_url = await self.search_gif(gif_query)
+            if gif_url is not None:
+                await message.channel.send(
+                    gif_url,
+                    reference=message,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                return
+            if not should_ai_reply:
+                return
 
         scope_id, user_id = self.conversation_key(message)
         key = (scope_id, user_id, self.active_model)
@@ -490,7 +696,13 @@ class PersonaBot(discord.Client, BotService):
         try:
             async with self.conversation_locks[key]:
                 async with message.channel.typing():
-                    answer = await self.ask(message, prompt, on_delta=show_delta)
+                    answer = await self.ask(
+                        message,
+                        prompt,
+                        on_delta=show_delta,
+                        active_mode=active_enabled,
+                        topic=topic,
+                    )
             if answer is None:
                 return
             chunks = split_discord_message(answer)

@@ -7,6 +7,10 @@ The voice lives in plain Python files, so changing Owaua’s personality does no
 ## What it does
 
 - Replies in DMs and on mentions
+- Can join a server channel's conversation with `!active on`, replying to every
+  sixth human message
+- Can independently post a relevant Klipy GIF every tenth message with `!gifs on`
+- Can keep every response and GIF locked to a channel topic with `!topic <topic> on`
 - Handles image attachments
 - Keeps separate per-user, per-channel memory for each AI in SQLite
 - Supports three editable voices: everyday, playful, and curious
@@ -74,6 +78,21 @@ include `!music start`, `!music pause`, `!music resume`, `!music stop`,
 `!music skip`, `!music now`, and `!music leave`. Music lookup uses `yt-dlp`, and
 FFmpeg must be installed and available on `PATH`.
 
+Use `!active on` in a server channel to make the bot participate like a member.
+It replies to every sixth non-command message in that channel. Use `!active off`
+to stop it, or `!active status` to see the current cadence.
+
+GIF mode is separate from active mode. Add a Klipy API key to `.env`, then use
+`!gifs on` to send a relevant GIF every tenth non-command message. Use
+`!gifs off` to stop it or `!gifs status` to see its cadence. GIF mode works even
+when active mode is off.
+
+Use `!topic yuri from ddlc on` to lock the channel to a subject. Normal replies
+stay strictly on that subject, and GIF searches use the exact topic as their
+search phrase. Use `!topic off` to remove the lock or `!topic status` to inspect
+it. Active, GIF, and topic settings survive bot restarts. Run `!help` in Discord
+for the full command list.
+
 To permanently erase all locally stored conversation messages and summaries for
 every user and channel in one server, a member with the **Manage Server**
 permission can run:
@@ -91,7 +110,9 @@ cannot be saved or retrieved after it.
 Copy [`.env.example`](.env.example) to `.env` and add the credentials you need. The most useful settings are:
 
 - `DISCORD_TOKEN` — the Discord bot token
-- `OPENAI_API_KEY`, `MISTRAL_API_KEY`, `DEEPSEEK_API_KEY` — provider credentials
+- `OPENAI_API_KEY`, `MISTRAL_API_KEY`, `DEEPSEEK_API_KEY` — AI provider credentials
+- `DEEPSEEK_MODEL` — DeepSeek model ID; defaults to `deepseek-flash`
+- `KLIPY_API_KEY` — Klipy v2 API key used by `!gifs on`
 - `MEMORY_DB` — SQLite path, defaulting to `data/memory.sqlite3`
 - Each provider has an isolated memory namespace: GPT, DeepSeek, and Mistral cannot read one another's conversation history or summaries
 - `MAX_CONTEXT_TURNS` — recent turns kept verbatim
