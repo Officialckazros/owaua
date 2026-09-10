@@ -412,7 +412,7 @@ class PersonaBot(discord.Client, BotService):
             scope_id, user_id = self.conversation_key(message)
             language_arg = parts[1] if len(parts) == 2 else ""
             if not language_arg.strip():
-                language = self.response_languages.get((scope_id, user_id), "English")
+                language = self.response_language(scope_id, user_id)
                 reply = f"language: {language}"
             else:
                 language, error = parse_language_name(language_arg)
@@ -420,7 +420,7 @@ class PersonaBot(discord.Client, BotService):
                     reply = error
                 else:
                     assert language is not None
-                    self.response_languages[(scope_id, user_id)] = language
+                    self.set_response_language(scope_id, user_id, language)
                     reply = f"language set to {language}; I’ll reply in it from now on"
             await message.channel.send(
                 reply,

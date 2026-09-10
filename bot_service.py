@@ -76,6 +76,30 @@ class BotService:
     def conversation_key(message: discord.Message) -> tuple[str, str]:
         return str(message.channel.id), str(message.author.id)
 
+    @staticmethod
+    def language_setting_key(scope_id: str, user_id: str) -> str:
+        return f"response_language:{scope_id}:{user_id}"
+
+    def response_language(self, scope_id: str, user_id: str) -> str:
+        """Read a user's channel language, retaining compatibility with test stores."""
+        cached = getattr(self, "response_languages", {}).get((scope_id, user_id))
+        if cached:
+            return cached
+        getter = getattr(self.memory, "get_setting", None)
+        language = (
+            getter(self.language_setting_key(scope_id, user_id), "English")
+            if getter is not None
+            else "English"
+        )
+        getattr(self, "response_languages", {})[(scope_id, user_id)] = language
+        return language
+
+    def set_response_language(self, scope_id: str, user_id: str, language: str) -> None:
+        getattr(self, "response_languages", {})[(scope_id, user_id)] = language
+        setter = getattr(self.memory, "set_setting", None)
+        if setter is not None:
+            setter(self.language_setting_key(scope_id, user_id), language)
+
     def memory_get(
         self, scope_id: str, user_id: str, model_id: str
     ) -> tuple[str, list[str], int]:
@@ -514,9 +538,7 @@ class BotService:
             facts=facts,
             message_kind=classify_message(prompt, has_image=bool(metadata)),
             explicit_roleplay=self.explicit_roleplay,
-            response_language=getattr(self, "response_languages", {}).get(
-                (scope_id, user_id), "English"
-            ),
+            response_language=self.response_language(scope_id, user_id),
             active_mode=active_mode,
             topic=topic,
         )

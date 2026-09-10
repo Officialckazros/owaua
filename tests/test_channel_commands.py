@@ -46,6 +46,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         self.bot.message_events = MessageEventGuard()
         self.bot._connection = SimpleNamespace(user=SimpleNamespace(id=99))
         self.bot.admit_request = lambda *_args, **_kwargs: (True, 0)
+        self.bot.response_languages = {}
 
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
@@ -82,6 +83,18 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(self.store.active_mode_status("22"), (False, 0))
         self.assertEqual(self.store.gif_mode_status("22"), (True, 0))
+
+    async def test_language_command_persists_for_the_same_user_and_channel(self) -> None:
+        channel = FakeChannel()
+
+        await self.bot.on_message(make_message("!language hebrew", 1, channel))
+        self.bot.response_languages.clear()
+        await self.bot.on_message(make_message("!language", 2, channel))
+
+        self.assertEqual(channel.sent, [
+            "language set to hebrew; I’ll reply in it from now on",
+            "language: hebrew",
+        ])
 
 
 if __name__ == "__main__":
