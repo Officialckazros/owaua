@@ -19,12 +19,13 @@ import bot as settings  # Read mutable runtime settings through the facade.
 from memory_store import MemoryStore
 from bot import (
     InputTooLarge,
-    ModerationBlocked,
-    ModerationRejected,
-    ModerationUnavailable,
     ProviderError,
+    age_restricted_channel,
+    apply_speed_options,
     attachment_metadata,
+    ai_generated_score,
     build_instructions,
+    build_turn_context,
     chat_completion_text,
     classify_message,
     contains_self_harm_language,
@@ -33,9 +34,10 @@ from bot import (
     image_url,
     is_unlimited_guild,
     looks_like_leaked_reasoning,
+    missing_bot_permissions,
     model_context_limits,
     model_output_limit,
-    moderation_result_is_rejected,
+    public_reply_text,
     quality_issues,
     response_text,
     safety_identifier,
@@ -49,6 +51,82 @@ log = logging.getLogger("owaua")
 
 
 class BotService:
+
+    async def detect_ai_generated_image(self, url: str) -> float | None:
+        """Return Sightengine's confidence that one public image URL is AI-made.
+
+        A malformed response or an unavailable detector deliberately produces no
+        deletion decision. The calling moderation path must never remove a
+        member's message merely because the detector failed.
+        """
+        if not (settings.SIGHTENGINE_API_USER and settings.SIGHTENGINE_API_SECRET):
+            return None
+        try:
+            response = await self.provider_http.get(
+                settings.SIGHTENGINE_API_URL,
+                params={
+                    "models": "genai",
+                    "url": url,
+                    "api_user": settings.SIGHTENGINE_API_USER,
+                    "api_secret": settings.SIGHTENGINE_API_SECRET,
+                },
+                timeout=settings.AI_IMAGE_DETECTOR_TIMEOUT,
+            )
+            response.raise_for_status()
+            score = ai_generated_score(response.json())
+        except asyncio.CancelledError:
+            raise
+        except (httpx.HTTPError, TypeError, ValueError):
+            # Do not include the exception or request URL: both can expose the
+            # API secret because Sightengine accepts credentials as parameters.
+            log.warning("AI-image detector request failed")
+            return None
+        if score is None:
+            log.warning("AI-image detector returned an invalid response")
+        return score
+
+    async def remove_ai_generated_images(self, message: discord.Message) -> bool:
+        """Delete a Discord message when any attached image crosses the threshold.
+
+        Discord attachments cannot be removed independently, so deleting the
+        source message is the only way to remove an identified image. This only
+        runs when both Sightengine credentials are configured.
+        """
+        if not (settings.SIGHTENGINE_API_USER and settings.SIGHTENGINE_API_SECRET):
+            return False
+        if missing_bot_permissions(
+            message.channel, getattr(self, "user", None), "manage_messages"
+        ):
+            return False
+        urls = [
+            url
+            for attachment in message.attachments
+            if (url := image_url(attachment))
+        ]
+        if not urls:
+            return False
+        scores = await asyncio.gather(
+            *(self.detect_ai_generated_image(url) for url in urls)
+        )
+        for score in scores:
+            if score is None or score < settings.AI_IMAGE_DETECTION_THRESHOLD:
+                continue
+            try:
+                await message.delete()
+            except (discord.HTTPException, discord.Forbidden):
+                log.warning(
+                    "Could not delete detected AI image; message=%s confidence=%.3f",
+                    message.id,
+                    score,
+                )
+                return False
+            log.info(
+                "Deleted detected AI image; message=%s confidence=%.3f",
+                message.id,
+                score,
+            )
+            return True
+        return False
 
     def memory_generation(self, scope_id: str) -> int | None:
         """Get the guild wipe generation when the backing store supports it."""
@@ -64,6 +142,22 @@ class BotService:
     def explicit_roleplay(self) -> bool:
         return self.active_model == settings.MISTRAL_MODEL
 
+    def persona_alias_for(self, channel: object) -> str:
+        """Use explicit only in age-restricted channels; otherwise fall back."""
+        selected = getattr(self, "selected_model", "gpt")
+        if selected != "mistral" or age_restricted_channel(channel):
+            return selected
+        if settings.OPENAI_API_KEY:
+            return "gpt"
+        if settings.DEEPSEEK_API_KEY:
+            return "deepseek"
+        return "gpt"
+
+    def model_for(self, channel: object) -> str:
+        return settings.MODEL_ALIASES.get(
+            self.persona_alias_for(channel), settings.GPT_MODEL
+        )
+
     @staticmethod
     def provider_settings(model: str) -> tuple[str, str]:
         if model == settings.DEEPSEEK_MODEL:
@@ -77,28 +171,38 @@ class BotService:
         return str(message.channel.id), str(message.author.id)
 
     @staticmethod
-    def language_setting_key(scope_id: str, user_id: str) -> str:
-        return f"response_language:{scope_id}:{user_id}"
+    def language_scope_key(message: discord.Message) -> str:
+        """One language for a whole guild; DMs keep their own setting."""
+        guild = getattr(message, "guild", None)
+        if guild is not None:
+            return f"guild:{guild.id}"
+        return f"dm:{message.channel.id}"
 
-    def response_language(self, scope_id: str, user_id: str) -> str:
-        """Read a user's channel language, retaining compatibility with test stores."""
-        cached = getattr(self, "response_languages", {}).get((scope_id, user_id))
+    @staticmethod
+    def language_setting_key(scope_key: str) -> str:
+        return f"response_language:{scope_key}"
+
+    def response_language(self, message: discord.Message) -> str:
+        """Read the server language, retaining compatibility with test stores."""
+        scope_key = self.language_scope_key(message)
+        cached = getattr(self, "response_languages", {}).get(scope_key)
         if cached:
             return cached
         getter = getattr(self.memory, "get_setting", None)
         language = (
-            getter(self.language_setting_key(scope_id, user_id), "English")
+            getter(self.language_setting_key(scope_key), "English")
             if getter is not None
             else "English"
         )
-        getattr(self, "response_languages", {})[(scope_id, user_id)] = language
+        getattr(self, "response_languages", {})[scope_key] = language
         return language
 
-    def set_response_language(self, scope_id: str, user_id: str, language: str) -> None:
-        getattr(self, "response_languages", {})[(scope_id, user_id)] = language
+    def set_response_language(self, message: discord.Message, language: str) -> None:
+        scope_key = self.language_scope_key(message)
+        getattr(self, "response_languages", {})[scope_key] = language
         setter = getattr(self.memory, "set_setting", None)
         if setter is not None:
-            setter(self.language_setting_key(scope_id, user_id), language)
+            setter(self.language_setting_key(scope_key), language)
 
     def memory_get(
         self, scope_id: str, user_id: str, model_id: str
@@ -163,108 +267,6 @@ class BotService:
             return False, retry_after
         window.append(now)
         return True, 0
-
-    def moderation_block_retry_after(self, user_id: int) -> int:
-        now = time.monotonic()
-        blocked_until = self.moderation_blocks.get(user_id)
-        if blocked_until is None:
-            return 0
-        if blocked_until <= now:
-            self.moderation_blocks.pop(user_id, None)
-            return 0
-        return max(1, int(blocked_until - now + 0.999))
-
-    def record_moderation_rejection(self, user_id: int, *, image_count: int) -> None:
-        now = time.monotonic()
-        window = self.moderation_failures[user_id]
-        while window and now - window[0] >= settings.MODERATION_ABUSE_WINDOW:
-            window.popleft()
-        window.append(now)
-        if len(window) >= settings.MODERATION_ABUSE_MAX_FLAGGED:
-            self.moderation_blocks[user_id] = (
-                now + settings.MODERATION_ABUSE_BLOCK_SECONDS
-            )
-        log.info(
-            "Moderation rejected input; user=%s images=%s recent_rejections=%s blocked=%s",
-            safety_identifier(user_id)[:12],
-            image_count,
-            len(window),
-            user_id in self.moderation_blocks,
-        )
-
-    async def moderate_user_input(
-        self,
-        user_id: int,
-        prompt: str,
-        image_urls: list[str],
-        attachment_filenames: list[str] | None = None,
-        *,
-        allow_adult_sexual: bool = False,
-        guild_id: int | None = None,
-    ) -> None:
-        """Fail closed before a Discord input can reach memory or Responses."""
-        if is_unlimited_guild(guild_id):
-            return
-        retry_after = self.moderation_block_retry_after(user_id)
-        if retry_after:
-            raise ModerationBlocked(retry_after)
-
-        moderation_input: list[dict[str, object]] = [{"type": "text", "text": prompt}]
-        moderation_input.extend(
-            {"type": "text", "text": f"Attachment filename: {filename}"}
-            for filename in (attachment_filenames or [])
-        )
-        moderation_input.extend(
-            {
-                "type": "image_url",
-                "image_url": {"url": url},
-            }
-            for url in image_urls
-        )
-        headers = {
-            "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
-            "Content-Type": "application/json",
-        }
-        try:
-            response = await self.provider_http.post(
-                f"{settings.OPENAI_BASE_URL}/moderations",
-                headers=headers,
-                json={"model": settings.MODERATION_MODEL, "input": moderation_input},
-                timeout=settings.MODERATION_TIMEOUT,
-            )
-            response.raise_for_status()
-            data = response.json()
-        except asyncio.CancelledError:
-            raise
-        except (httpx.HTTPError, TypeError, ValueError) as exc:
-            log.warning("Moderation request failed; error=%s", type(exc).__name__)
-            raise ModerationUnavailable("Moderation request failed") from exc
-
-        if not isinstance(data, dict):
-            log.warning("Moderation response had an invalid top-level shape")
-            raise ModerationUnavailable("Moderation response was malformed")
-        results = data.get("results")
-        if not isinstance(results, list) or not results:
-            log.warning("Moderation response did not contain results")
-            raise ModerationUnavailable("Moderation response was malformed")
-        flagged = False
-        for result in results:
-            if not isinstance(result, dict) or not isinstance(
-                result.get("flagged"), bool
-            ):
-                log.warning("Moderation response contained an invalid result")
-                raise ModerationUnavailable("Moderation response was malformed")
-            try:
-                flagged = flagged or moderation_result_is_rejected(
-                    result, allow_adult_sexual=allow_adult_sexual
-                )
-            except ModerationUnavailable:
-                log.warning("Moderation response contained an invalid result")
-                raise
-        if flagged:
-            if not is_unlimited_guild(guild_id):
-                self.record_moderation_rejection(user_id, image_count=len(image_urls))
-            raise ModerationRejected("Moderation rejected the input")
 
     async def _request_once(
         self,
@@ -337,10 +339,22 @@ class BotService:
                             if isinstance(piece, str) and piece:
                                 pieces.append(piece)
                                 await on_delta("".join(pieces))
-        answer = "".join(pieces).strip()
+        answer = public_reply_text("".join(pieces))
         if not answer:
             raise ProviderError("The AI provider returned an empty streamed response")
         return answer
+
+    @staticmethod
+    def _service_tier_rejected(exc: BaseException, payload: dict[str, object]) -> bool:
+        if "service_tier" not in payload:
+            return False
+        if not isinstance(exc, httpx.HTTPStatusError) or exc.response.status_code != 400:
+            return False
+        try:
+            body = exc.response.text
+        except Exception:
+            body = ""
+        return "service_tier" in body.casefold()
 
     async def request_ai(
         self,
@@ -348,6 +362,7 @@ class BotService:
         *,
         on_delta: settings.DeltaCallback | None = None,
         allow_fallback: bool = True,
+        fast_lane: bool = True,
     ) -> str:
         selected = str(payload["model"])
         if selected not in settings.ALLOWED_MODELS:
@@ -363,8 +378,9 @@ class BotService:
             models.append(settings.FALLBACK_MODEL)
         last_error: Exception | None = None
         for model in models:
-            model_payload = dict(payload)
-            model_payload["model"] = model
+            model_payload = apply_speed_options(
+                {**payload, "model": model}, fast_lane=fast_lane
+            )
             api_key, base_url = self.provider_settings(model)
             if not api_key:
                 last_error = ProviderError(f"No API key configured for model {model}")
@@ -380,6 +396,23 @@ class BotService:
                 except asyncio.CancelledError:
                     raise
                 except (httpx.HTTPError, ProviderError) as exc:
+                    if self._service_tier_rejected(exc, model_payload):
+                        model_payload.pop("service_tier", None)
+                        log.warning(
+                            "Provider rejected service_tier; retrying without it; model=%s",
+                            model,
+                        )
+                        try:
+                            return await self._request_once(
+                                model_payload,
+                                on_delta=on_delta,
+                                api_key=api_key,
+                                base_url=base_url,
+                            )
+                        except asyncio.CancelledError:
+                            raise
+                        except (httpx.HTTPError, ProviderError) as retry_exc:
+                            exc = retry_exc
                     last_error = exc
                     status = (
                         exc.response.status_code
@@ -454,18 +487,12 @@ class BotService:
             url for attachment in message.attachments if (url := image_url(attachment))
         ]
 
-        await self.moderate_user_input(
-            message.author.id,
-            prompt,
-            image_urls,
-            [item["filename"] for item in metadata],
-            allow_adult_sexual=self.explicit_roleplay,
-            guild_id=guild_id,
-        )
-
         # Capture the provider for this turn so a persona switch cannot move a
         # message or its summary into another provider's memory mid-request.
-        active_model = self.active_model
+        # Explicit stays locked to age-restricted channels even if it is selected.
+        persona_alias = self.persona_alias_for(message.channel)
+        active_model = self.model_for(message.channel)
+        explicit_roleplay = persona_alias == "mistral"
         expected_generation = self.memory_generation(scope_id)
 
         inserted = await asyncio.to_thread(
@@ -522,6 +549,7 @@ class BotService:
         if unlimited_guild:
             context_message_limit = 1_000_000
             input_token_limit = 1_000_000_000
+        selected_language = self.response_language(message)
         (summary, facts, _), recent = await asyncio.gather(
             asyncio.to_thread(self.memory_get, scope_id, user_id, active_model),
             asyncio.to_thread(
@@ -534,17 +562,27 @@ class BotService:
         )
         instructions = build_instructions(
             model=active_model,
-            memory_summary=summary,
-            facts=facts,
-            message_kind=classify_message(prompt, has_image=bool(metadata)),
-            explicit_roleplay=self.explicit_roleplay,
-            response_language=self.response_language(scope_id, user_id),
+            explicit_roleplay=explicit_roleplay,
+            response_language=selected_language,
             active_mode=active_mode,
             topic=topic,
+            persona_alias=persona_alias,
+            in_server=guild is not None,
+            age_restricted=age_restricted_channel(message.channel),
+        )
+        turn_context = build_turn_context(
+            message_kind=classify_message(prompt, has_image=bool(metadata)),
+            memory_summary=summary,
+            facts=facts,
         )
         context_items: list[dict[str, object]] = []
         context_tokens = 0
-        context_budget = max(256, input_token_limit - estimate_tokens(instructions))
+        context_budget = max(
+            256,
+            input_token_limit
+            - estimate_tokens(instructions)
+            - estimate_tokens(turn_context),
+        )
         for record in reversed(recent):
             role = str(record["role"])
             text = (
@@ -568,13 +606,22 @@ class BotService:
                     image_note = (
                         f"\n[This message included image attachment(s): {names}]"
                     )
+                is_latest = int(record["id"]) == int(recent[-1]["id"])
+                language_tag = (
+                    f"[application setting: write this reply in {selected_language}]\n"
+                    if is_latest
+                    else ""
+                )
                 content: list[dict[str, object]] = [
                     {
                         "type": "input_text",
-                        "text": f"<user_message>\n{text}{image_note}\n</user_message>",
+                        "text": (
+                            f"{language_tag}<user_message>\n{text}{image_note}\n"
+                            "</user_message>"
+                        ),
                     }
                 ]
-                if int(record["id"]) == int(recent[-1]["id"]):
+                if is_latest:
                     for url in (
                         image_urls
                         if unlimited_guild
@@ -589,7 +636,8 @@ class BotService:
             context_items.append(candidate)
             context_tokens += candidate_tokens
 
-        api_input = list(reversed(context_items))
+        api_input = [{"role": "system", "content": turn_context}]
+        api_input.extend(reversed(context_items))
 
         payload: dict[str, object] = {
             "model": active_model,
@@ -597,7 +645,9 @@ class BotService:
             "instructions": instructions,
             "input": api_input,
             "safety_identifier": safety_identifier(message.author.id),
-            "prompt_cache_key": f"persona:{message.author.id}",
+            "prompt_cache_key": (
+                f"owaua:{active_model}:{selected_language.casefold()}"
+            ),
         }
         if not unlimited_guild:
             payload["max_output_tokens"] = model_output_limit(active_model)
@@ -656,12 +706,9 @@ class BotService:
             content=answer,
             expected_generation=expected_generation,
         )
-        if expected_generation is None:
-            self.schedule_memory_refresh(scope_id, user_id)
-        else:
-            self.schedule_memory_refresh(
-                scope_id, user_id, expected_generation=expected_generation
-            )
+        self.schedule_memory_refresh(
+            scope_id, user_id, active_model, expected_generation=expected_generation
+        )
         return answer
 
     def schedule_memory_refresh(
@@ -762,7 +809,9 @@ class BotService:
                 },
             }
             try:
-                raw = await self.request_ai(payload, allow_fallback=False)
+                raw = await self.request_ai(
+                    payload, allow_fallback=False, fast_lane=False
+                )
                 updated = json.loads(raw)
                 summary = str(updated.get("summary", "")).strip()
                 facts = updated.get("facts", [])

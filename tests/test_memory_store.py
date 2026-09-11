@@ -89,9 +89,8 @@ class MemoryStoreTests(unittest.TestCase):
         self.assertFalse(self.store.record_active_message("channel"))
         self.assertEqual(self.store.active_mode_status("channel"), (False, 0))
 
-    def test_gif_mode_has_an_independent_ten_message_cadence(self) -> None:
+    def test_gif_cadence_is_always_on_and_independent_of_active_mode(self) -> None:
         self.store.set_active_mode("channel", True)
-        self.store.set_gif_mode("channel", True)
 
         active_claims = []
         gif_claims = []
@@ -102,11 +101,14 @@ class MemoryStoreTests(unittest.TestCase):
         self.assertEqual(active_claims.count(True), 1)
         self.assertEqual(gif_claims, [False] * 9 + [True])
         self.assertEqual(self.store.active_mode_status("channel"), (True, 4))
-        self.assertEqual(self.store.gif_mode_status("channel"), (True, 0))
+        self.assertEqual(self.store.gif_message_count("channel"), 0)
 
-        self.store.set_gif_mode("channel", False)
-        self.assertFalse(self.store.record_gif_message("channel"))
-        self.assertEqual(self.store.active_mode_status("channel"), (True, 4))
+        fresh_claims = [
+            self.store.record_gif_message("other-channel", interval=10)
+            for _ in range(10)
+        ]
+        self.assertEqual(fresh_claims, [False] * 9 + [True])
+        self.assertEqual(self.store.gif_message_count("other-channel"), 0)
 
     def test_topic_lock_persists_and_can_be_cleared(self) -> None:
         self.assertEqual(self.store.channel_topic("channel"), "")
@@ -138,11 +140,11 @@ class MemoryStoreTests(unittest.TestCase):
         migrated = MemoryStore(legacy_path)
 
         self.assertEqual(migrated.active_mode_status("channel"), (True, 3))
-        self.assertEqual(migrated.gif_mode_status("channel"), (False, 0))
+        self.assertEqual(migrated.gif_message_count("channel"), 0)
         self.assertEqual(migrated.channel_topic("channel"), "")
-        migrated.set_gif_mode("channel", True)
         migrated.set_topic("channel", "yuri from ddlc")
-        self.assertEqual(migrated.gif_mode_status("channel"), (True, 0))
+        self.assertFalse(migrated.record_gif_message("channel", interval=10))
+        self.assertEqual(migrated.gif_message_count("channel"), 1)
         self.assertEqual(migrated.channel_topic("channel"), "yuri from ddlc")
 
     def test_old_messages_roll_into_durable_summary_state(self) -> None:

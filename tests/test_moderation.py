@@ -6,15 +6,12 @@ import unittest
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 
 import bot as bot_module
 from bot import (
-    ModerationBlocked,
-    ModerationRejected,
-    ModerationUnavailable,
     PersonaBot,
     safety_identifier,
 )
@@ -36,12 +33,20 @@ class FakeHTTP:
         self.calls: list[tuple[str, dict[str, object]]] = []
         self.moderation: object = {"results": [{"flagged": False}]}
         self.responses: object = {"output_text": "allowed reply"}
+        self.detection: object = {"status": "success", "type": {"ai_generated": 0.1}}
 
     async def post(self, url: str, **kwargs: object) -> FakeResponse:
         self.calls.append((url, copy.deepcopy(kwargs)))
         result = self.moderation if url.endswith("/moderations") else self.responses
         if isinstance(result, list):
             result = result.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return FakeResponse(result)
+
+    async def get(self, url: str, **kwargs: object) -> FakeResponse:
+        self.calls.append((url, copy.deepcopy(kwargs)))
+        result = self.detection
         if isinstance(result, Exception):
             raise result
         return FakeResponse(result)
@@ -90,11 +95,10 @@ def make_bot() -> tuple[PersonaBot, FakeHTTP, FakeMemory]:
     instance.provider_http = http
     instance.memory = memory
     instance.rate_windows = defaultdict(deque)
-    instance.moderation_failures = defaultdict(deque)
-    instance.moderation_blocks = {}
     instance.summary_locks = defaultdict(asyncio.Lock)
     instance.background_tasks = set()
-    instance.schedule_memory_refresh = lambda scope_id, user_id: None
+    instance.selected_model = "gpt"
+    instance.schedule_memory_refresh = lambda *args, **kwargs: None
     return instance, http, memory
 
 
@@ -105,6 +109,8 @@ def make_message(
     image_urls: list[str] | None = None,
     filenames: list[str] | None = None,
     guild_id: int | None = None,
+    nsfw: bool = False,
+    message_id: int = 99,
 ) -> SimpleNamespace:
     attachments = [
         SimpleNamespace(
@@ -115,9 +121,9 @@ def make_message(
         for index, url in enumerate(image_urls or [], start=1)
     ]
     return SimpleNamespace(
-        id=99,
+        id=message_id,
         author=SimpleNamespace(id=user_id),
-        channel=SimpleNamespace(id=123),
+        channel=SimpleNamespace(id=123, nsfw=nsfw),
         attachments=attachments,
         created_at=datetime.now(timezone.utc),
         content=text,
@@ -126,15 +132,119 @@ def make_message(
 
 
 class ModerationGateTests(unittest.IsolatedAsyncioTestCase):
-    async def test_benign_text_reaches_responses_only_after_moderation(self) -> None:
+    async def test_ai_image_detection_uses_sightengine_and_deletes_at_threshold(self) -> None:
+        instance, http, _ = make_bot()
+        message = make_message(image_urls=["https://cdn.discordapp.com/ai.png"])
+        message.delete = AsyncMock()
+        http.detection = {"status": "success", "type": {"ai_generated": 0.95}}
+
+        with patch.multiple(
+            bot_module,
+            SIGHTENGINE_API_USER="user-id",
+            SIGHTENGINE_API_SECRET="secret",
+            AI_IMAGE_DETECTION_THRESHOLD=0.90,
+        ):
+            removed = await instance.remove_ai_generated_images(message)
+
+        self.assertTrue(removed)
+        message.delete.assert_awaited_once()
+        detector_calls = http.calls_to("/check.json")
+        self.assertEqual(len(detector_calls), 1)
+        self.assertEqual(
+            detector_calls[0]["params"],
+            {
+                "models": "genai",
+                "url": "https://cdn.discordapp.com/ai.png",
+                "api_user": "user-id",
+                "api_secret": "secret",
+            },
+        )
+
+    async def test_ai_image_detection_keeps_images_below_threshold_or_on_failure(self) -> None:
+        instance, http, _ = make_bot()
+        message = make_message(image_urls=["https://cdn.discordapp.com/photo.png"])
+        message.delete = AsyncMock()
+
+        with patch.multiple(
+            bot_module,
+            SIGHTENGINE_API_USER="user-id",
+            SIGHTENGINE_API_SECRET="secret",
+            AI_IMAGE_DETECTION_THRESHOLD=0.90,
+        ):
+            self.assertFalse(await instance.remove_ai_generated_images(message))
+            http.detection = httpx.ReadTimeout("timeout")
+            self.assertFalse(await instance.remove_ai_generated_images(message))
+
+        message.delete.assert_not_awaited()
+
+    async def test_benign_text_reaches_responses(self) -> None:
         instance, http, memory = make_bot()
 
         answer = await instance.ask(make_message(), "hello")
 
         self.assertEqual(answer, "allowed reply")
-        self.assertEqual(len(http.calls_to("/moderations")), 1)
+        self.assertEqual(len(http.calls_to("/moderations")), 0)
         self.assertEqual(len(http.calls_to("/responses")), 1)
         self.assertEqual(len(memory.records), 2)
+
+    async def test_selected_language_is_sent_to_the_provider(self) -> None:
+        instance, http, _ = make_bot()
+        instance.response_languages = {"dm:123": "Hungarian"}
+
+        await instance.ask(make_message(), "hello")
+
+        payload = http.calls_to("/responses")[0]["json"]
+        self.assertIn("Reply in Hungarian", payload["instructions"])
+        self.assertIn("Write the entire Discord reply in Hungarian", payload["instructions"])
+        self.assertIn("SELF-KNOWLEDGE", payload["instructions"])
+        self.assertIn("a direct message", payload["instructions"])
+        self.assertIn("You are Owaua", payload["instructions"])
+        self.assertIn("hungarian", payload["prompt_cache_key"].casefold())
+        self.assertEqual(payload["reasoning"], {"effort": "none"})
+        self.assertEqual(payload["service_tier"], "fast")
+        self.assertEqual(
+            payload["prompt_cache_options"], {"mode": "implicit", "ttl": "30m"}
+        )
+        self.assertEqual(payload["input"][0]["role"], "system")
+        self.assertIn("UNTRUSTED MEMORY DATA", payload["input"][0]["content"])
+        user_text = payload["input"][-1]["content"][0]["text"]
+        self.assertIn("write this reply in Hungarian", user_text)
+        self.assertIn("<user_message>", user_text)
+
+    async def test_guild_language_applies_to_every_member(self) -> None:
+        instance, http, _ = make_bot()
+        instance.response_languages = {"guild:55": "Hebrew"}
+
+        await instance.ask(
+            make_message(user_id=7, guild_id=55, message_id=1), "hello"
+        )
+        await instance.ask(make_message(user_id=8, guild_id=55, message_id=2), "hey")
+
+        payloads = http.calls_to("/responses")
+        self.assertEqual(len(payloads), 2)
+        for payload in payloads:
+            self.assertIn("Reply in Hebrew", payload["json"]["instructions"])
+
+    async def test_openai_fast_tier_is_dropped_after_a_400(self) -> None:
+        instance, http, _ = make_bot()
+        http.responses = [
+            httpx.HTTPStatusError(
+                "invalid service_tier",
+                request=httpx.Request("POST", "https://example.test/responses"),
+                response=httpx.Response(
+                    400, text='{"error":{"message":"invalid service_tier"}}'
+                ),
+            ),
+            {"output_text": "recovered reply"},
+        ]
+        with patch.multiple(bot_module, REQUEST_RETRIES=0):
+            answer = await instance.ask(make_message(), "hello")
+
+        self.assertEqual(answer, "recovered reply")
+        calls = http.calls_to("/responses")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0]["json"]["service_tier"], "fast")
+        self.assertNotIn("service_tier", calls[1]["json"])
 
     async def test_allowed_input_can_still_use_the_configured_fallback(self) -> None:
         instance, http, _ = make_bot()
@@ -150,7 +260,7 @@ class ModerationGateTests(unittest.IsolatedAsyncioTestCase):
             answer = await instance.ask(make_message(), "hello")
 
         self.assertEqual(answer, "fallback reply")
-        self.assertEqual(len(http.calls_to("/moderations")), 1)
+        self.assertEqual(len(http.calls_to("/moderations")), 0)
         response_calls = http.calls_to("/responses")
         self.assertEqual(len(response_calls), 2)
         self.assertEqual(response_calls[1]["json"]["model"], "fallback-model")
@@ -162,16 +272,19 @@ class ModerationGateTests(unittest.IsolatedAsyncioTestCase):
             "choices": [{"message": {"role": "assistant", "content": "mistral reply"}}]
         }
         with patch.multiple(bot_module, MISTRAL_API_KEY="mistral-test"):
-            answer = await instance.ask(make_message(), "hello")
+            answer = await instance.ask(make_message(nsfw=True), "hello")
 
         self.assertEqual(answer, "mistral reply")
-        self.assertEqual(len(http.calls_to("/moderations")), 1)
+        self.assertEqual(len(http.calls_to("/moderations")), 0)
         self.assertEqual(len(http.calls_to("/responses")), 0)
         chat_calls = http.calls_to("/chat/completions")
         self.assertEqual(len(chat_calls), 1)
         payload = chat_calls[0]["json"]
         self.assertEqual(payload["model"], bot_module.MISTRAL_MODEL)
         self.assertEqual(payload["safe_prompt"], False)
+        self.assertEqual(payload["reasoning_effort"], "none")
+        self.assertEqual(payload["service_tier"], "auto")
+        self.assertIn("owaua:", payload["prompt_cache_key"])
         self.assertEqual(payload["messages"][0]["role"], "system")
         self.assertIn("EXPLICIT ROLEPLAY POLICY", payload["messages"][0]["content"])
 
@@ -199,6 +312,9 @@ class ModerationGateTests(unittest.IsolatedAsyncioTestCase):
         payload = chat_calls[0]["json"]
         self.assertEqual(payload["model"], bot_module.DEEPSEEK_MODEL)
         self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertNotIn("service_tier", payload)
+        self.assertNotIn("prompt_cache_key", payload)
+        self.assertNotIn("reasoning_effort", payload)
 
     async def test_deepseek_does_not_make_a_second_completion_for_leaked_reasoning(self) -> None:
         instance, http, _ = make_bot()
@@ -221,183 +337,37 @@ class ModerationGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(answer, "huh")
         self.assertEqual(len(http.calls_to("/chat/completions")), 1)
 
-    async def test_mistral_allows_adult_sexual_flags_but_not_minors(self) -> None:
+    async def test_images_are_sent_to_the_provider_with_their_filenames(self) -> None:
         instance, http, memory = make_bot()
-        instance.selected_model = "mistral"
-        http.moderation = {
-            "results": [
-                {
-                    "flagged": True,
-                    "categories": {"sexual": True, "sexual/minors": False},
-                }
-            ]
-        }
-        http.responses = {
-            "choices": [{"message": {"role": "assistant", "content": "explicit ok"}}]
-        }
-        with patch.multiple(bot_module, MISTRAL_API_KEY="mistral-test"):
-            answer = await instance.ask(make_message(text="erp"), "erp")
-
-        self.assertEqual(answer, "explicit ok")
-        self.assertEqual(len(http.calls_to("/chat/completions")), 1)
-        self.assertEqual(len(memory.records), 2)
-
-        http.moderation = {
-            "results": [
-                {
-                    "flagged": True,
-                    "categories": {"sexual": True, "sexual/minors": True},
-                }
-            ]
-        }
-        with patch.multiple(bot_module, MISTRAL_API_KEY="mistral-test"):
-            with self.assertRaises(ModerationRejected):
-                await instance.ask(make_message(text="blocked", user_id=8), "blocked")
-        self.assertEqual(len(http.calls_to("/chat/completions")), 1)
-
-    async def test_flagged_text_is_not_sent_to_responses_or_memory(self) -> None:
-        instance, http, memory = make_bot()
-        http.moderation = {"results": [{"flagged": True}]}
-
-        with self.assertRaises(ModerationRejected):
-            await instance.ask(make_message(text="blocked"), "blocked")
-
-        self.assertEqual(len(http.calls_to("/responses")), 0)
-        self.assertEqual(memory.records, [])
-
-    async def test_benign_image_uses_multimodal_moderation_before_responses(self) -> None:
-        instance, http, _ = make_bot()
         image = "https://cdn.discordapp.com/image.png"
+        filename = "user-controlled-name.png"
 
-        await instance.ask(make_message(image_urls=[image]), "what is this")
-
-        moderation = http.calls_to("/moderations")[0]["json"]
-        self.assertEqual(
-            moderation["input"],
-            [
-                {"type": "text", "text": "what is this"},
-                {"type": "text", "text": "Attachment filename: image-1.png"},
-                {"type": "image_url", "image_url": {"url": image}},
-            ],
+        await instance.ask(
+            make_message(image_urls=[image], filenames=[filename]),
+            "look",
         )
+
+        self.assertEqual(len(http.calls_to("/moderations")), 0)
+        self.assertEqual(memory.records[0]["attachments"][0]["filename"], filename)
         response_payload = http.calls_to("/responses")[0]["json"]
         self.assertIn(
             {"type": "input_image", "image_url": image},
             response_payload["input"][-1]["content"],
         )
+        self.assertIn(filename, response_payload["input"][-1]["content"][0]["text"])
 
-    async def test_image_filename_is_moderated_before_context_reuses_it(self) -> None:
-        instance, http, memory = make_bot()
-        filename = "user-controlled-name.png"
-
-        await instance.ask(
-            make_message(
-                image_urls=["https://cdn.discordapp.com/image.png"], filenames=[filename]
-            ),
-            "look",
-        )
-
-        moderation_input = http.calls_to("/moderations")[0]["json"]["input"]
-        self.assertIn(
-            {"type": "text", "text": f"Attachment filename: {filename}"},
-            moderation_input,
-        )
-        self.assertEqual(memory.records[0]["attachments"][0]["filename"], filename)
-        response_content = http.calls_to("/responses")[0]["json"]["input"][-1]["content"]
-        self.assertIn(filename, response_content[0]["text"])
-
-    async def test_flagged_image_is_not_sent_to_responses_or_memory(self) -> None:
-        instance, http, memory = make_bot()
-        http.moderation = {"results": [{"flagged": True}]}
-
-        with self.assertRaises(ModerationRejected):
-            await instance.ask(
-                make_message(image_urls=["https://cdn.discordapp.com/blocked.png"]),
-                "look",
-            )
-
-        self.assertEqual(len(http.calls_to("/responses")), 0)
-        self.assertEqual(memory.records, [])
-
-    async def test_mixed_text_and_image_are_moderated_together(self) -> None:
+    async def test_explicit_persona_does_not_run_outside_age_restricted_channels(self) -> None:
         instance, http, _ = make_bot()
-        image = "https://cdn.discordapp.com/mixed.png"
-
-        await instance.ask(make_message(image_urls=[image]), "describe this image")
-
-        payload = http.calls_to("/moderations")[0]["json"]
-        self.assertEqual(payload["model"], "omni-moderation-latest")
-        self.assertEqual(len(payload["input"]), 3)
-
-    async def test_timeout_http_errors_and_malformed_responses_fail_closed(self) -> None:
-        cases: list[object] = [
-            httpx.ReadTimeout("timeout"),
-            httpx.HTTPStatusError(
-                "client error",
-                request=httpx.Request("POST", "https://example.test/moderations"),
-                response=httpx.Response(400),
-            ),
-            httpx.HTTPStatusError(
-                "provider error",
-                request=httpx.Request("POST", "https://example.test/moderations"),
-                response=httpx.Response(500),
-            ),
-            ValueError("invalid JSON"),
-            {"results": []},
-            {"results": [{}]},
-            "not a moderation object",
-        ]
-        for result in cases:
-            with self.subTest(result=type(result).__name__):
-                instance, http, memory = make_bot()
-                http.moderation = result
-                with self.assertRaises(ModerationUnavailable):
-                    await instance.ask(make_message(), "safe input")
-                self.assertEqual(len(http.calls_to("/responses")), 0)
-                self.assertEqual(memory.records, [])
-
-    async def test_repeated_rejections_temporarily_block_without_another_api_call(self) -> None:
-        instance, http, _ = make_bot()
-        http.moderation = {"results": [{"flagged": True}]}
+        instance.selected_model = "mistral"
+        http.responses = {"output_text": "sfw reply"}
         with patch.multiple(
-            bot_module,
-            MODERATION_ABUSE_MAX_FLAGGED=2,
-            MODERATION_ABUSE_WINDOW=60.0,
-            MODERATION_ABUSE_BLOCK_SECONDS=120.0,
+            bot_module, MISTRAL_API_KEY="mistral-test", OPENAI_API_KEY="gpt-key"
         ):
-            with self.assertRaises(ModerationRejected):
-                await instance.moderate_user_input(7, "one", [])
-            with self.assertRaises(ModerationRejected):
-                await instance.moderate_user_input(7, "two", [])
-            with self.assertRaises(ModerationBlocked) as blocked:
-                await instance.moderate_user_input(7, "three", [])
+            answer = await instance.ask(make_message(nsfw=False), "hello")
 
-        self.assertGreater(blocked.exception.retry_after, 0)
-        self.assertEqual(len(http.calls_to("/moderations")), 2)
-
-    async def test_flagged_turn_never_reaches_memory_summarization(self) -> None:
-        instance, http, memory = make_bot()
-        http.moderation = {"results": [{"flagged": True}]}
-
-        with self.assertRaises(ModerationRejected):
-            await instance.ask(make_message(text="rejected"), "rejected")
-        await instance.refresh_memory("123", "7")
-
-        self.assertEqual(memory.records, [])
-        self.assertEqual(len(http.calls_to("/responses")), 0)
-
-    async def test_credible_self_harm_cannot_bypass_moderation(self) -> None:
-        instance, http, memory = make_bot()
-        http.moderation = {"results": [{"flagged": True}]}
-
-        with self.assertRaises(ModerationRejected):
-            await instance.ask(
-                make_message(text="i want to die tonight and im not joking"),
-                "i want to die tonight and im not joking",
-            )
-
-        self.assertEqual(memory.records, [])
-        self.assertEqual(len(http.calls_to("/responses")), 0)
+        self.assertEqual(answer, "sfw reply")
+        self.assertEqual(len(http.calls_to("/chat/completions")), 0)
+        self.assertEqual(len(http.calls_to("/responses")), 1)
 
     async def test_accepted_credible_self_harm_still_uses_the_local_emergency_reply(self) -> None:
         instance, http, memory = make_bot()
@@ -406,7 +376,7 @@ class ModerationGateTests(unittest.IsolatedAsyncioTestCase):
         answer = await instance.ask(make_message(text=prompt), prompt)
 
         self.assertIn("immediate danger", answer or "")
-        self.assertEqual(len(http.calls_to("/moderations")), 1)
+        self.assertEqual(len(http.calls_to("/moderations")), 0)
         self.assertEqual(len(http.calls_to("/responses")), 0)
         self.assertEqual(len(memory.records), 2)
 

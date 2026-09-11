@@ -313,49 +313,32 @@ class MemoryStore:
             ).fetchone()
             return row is not None and int(row["message_count"]) == 0
 
-    def set_gif_mode(self, scope_id: str, enabled: bool) -> None:
-        """Persist automatic GIF mode for a channel and reset its cadence."""
-        with self._lock, self._managed_connection() as db:
-            db.execute(
-                """
-                INSERT INTO active_channels
-                    (scope_id, gifs_enabled, gif_message_count, updated_at)
-                VALUES (?, ?, 0, ?)
-                ON CONFLICT(scope_id) DO UPDATE SET
-                    gifs_enabled = excluded.gifs_enabled,
-                    gif_message_count = 0,
-                    updated_at = excluded.updated_at
-                """,
-                (scope_id, int(enabled), time.time()),
-            )
-
-    def gif_mode_status(self, scope_id: str) -> tuple[bool, int]:
-        """Return whether GIF mode is enabled and its current message count."""
+    def gif_message_count(self, scope_id: str) -> int:
+        """Return the current GIF cadence count for a channel."""
         with self._lock, self._managed_connection() as db:
             row = db.execute(
-                "SELECT gifs_enabled, gif_message_count "
-                "FROM active_channels WHERE scope_id = ?",
+                "SELECT gif_message_count FROM active_channels WHERE scope_id = ?",
                 (scope_id,),
             ).fetchone()
-        if row is None:
-            return False, 0
-        return bool(row["gifs_enabled"]), int(row["gif_message_count"])
+        return 0 if row is None else int(row["gif_message_count"])
 
     def record_gif_message(self, scope_id: str, *, interval: int = 10) -> bool:
         """Count one channel message and claim every ``interval``th GIF response."""
         if interval < 1:
             raise ValueError("interval must be at least 1")
         with self._lock, self._managed_connection() as db:
-            cursor = db.execute(
+            now = time.time()
+            db.execute(
                 """
-                UPDATE active_channels
-                SET gif_message_count = (gif_message_count + 1) % ?, updated_at = ?
-                WHERE scope_id = ? AND gifs_enabled = 1
+                INSERT INTO active_channels
+                    (scope_id, gif_message_count, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(scope_id) DO UPDATE SET
+                    gif_message_count = (gif_message_count + 1) % ?,
+                    updated_at = excluded.updated_at
                 """,
-                (interval, time.time(), scope_id),
+                (scope_id, 1 % interval, now, interval),
             )
-            if cursor.rowcount != 1:
-                return False
             row = db.execute(
                 "SELECT gif_message_count FROM active_channels WHERE scope_id = ?",
                 (scope_id,),

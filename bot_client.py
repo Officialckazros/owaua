@@ -21,12 +21,20 @@ import bot as settings  # Read mutable runtime settings through the facade.
 from memory_store import MemoryStore
 from bot import (
     InputTooLarge,
-    ModerationBlocked,
-    ModerationRejected,
-    ModerationUnavailable,
+    age_restricted_channel,
+    command_text,
     image_url,
+    is_owner_note_command,
+    lyrics_embed_chunks,
+    lyrics_text_from_record,
+    missing_bot_permissions,
+    missing_permission_reply,
+    music_duration_seconds,
+    music_metadata_text,
     parse_language_name,
+    parse_music_credits,
     parse_topic_name,
+    pick_lyrics_record,
     split_discord_message,
     klipy_gif_urls,
 )
@@ -41,6 +49,19 @@ VC_LINES = (
     "hello from the other side of the voice channel",
     "okay, I am here now, somebody say something interesting",
 )
+
+
+class _QuietYTDlpLogger:
+    """Keep yt-dlp's extractor diagnostics out of the bot console."""
+
+    def debug(self, message: str) -> None:
+        pass
+
+    def warning(self, message: str) -> None:
+        pass
+
+    def error(self, message: str) -> None:
+        pass
 
 from bot_service import BotService
 
@@ -72,7 +93,8 @@ class PersonaBot(discord.Client, BotService):
             intents=intents, allowed_mentions=discord.AllowedMentions.none()
         )
         self.memory = MemoryStore(settings.MEMORY_DB)
-        self.provider_http = httpx.AsyncClient(timeout=settings.REQUEST_TIMEOUT)
+        self.provider_http = settings.make_provider_http_client()
+        self._registered_scopes: set[tuple[str, str]] = set()
         self.conversation_locks: defaultdict[tuple[str, str, str], asyncio.Lock] = (
             defaultdict(asyncio.Lock)
         )
@@ -81,11 +103,9 @@ class PersonaBot(discord.Client, BotService):
         )
         self.active_requests: dict[tuple[str, str, str], asyncio.Task[object]] = {}
         self.rate_windows: defaultdict[int, deque[float]] = defaultdict(deque)
-        self.moderation_failures: defaultdict[int, deque[float]] = defaultdict(deque)
-        self.moderation_blocks: dict[int, float] = {}
         self.background_tasks: set[asyncio.Task[object]] = set()
         self.message_events = MessageEventGuard()
-        self.response_languages: dict[tuple[str, str], str] = {}
+        self.response_languages: dict[str, str] = {}
         self.voice_locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
         self.music_tracks: dict[int, dict[str, str]] = {}
         default_model = "mistral" if settings.MISTRAL_API_KEY else "gpt"
@@ -153,6 +173,7 @@ class PersonaBot(discord.Client, BotService):
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
+            "logger": _QuietYTDlpLogger(),
         }
         def extract() -> dict[str, str]:
             with yt_dlp.YoutubeDL(options) as downloader:
@@ -161,12 +182,132 @@ class PersonaBot(discord.Client, BotService):
                     info = next((entry for entry in info["entries"] if entry), None)
                 if not info or not info.get("url"):
                     raise ValueError("no playable audio found")
+                title = str(info.get("title", "unknown track"))
+                artist = music_metadata_text(
+                    info.get("artist") or info.get("artists") or info.get("creator")
+                )
+                artist = settings._MUSIC_TOPIC_SUFFIX.sub("", artist).strip(" -")
+                track_name = music_metadata_text(info.get("track"))
+                if not track_name or not artist:
+                    parsed_track, parsed_artist = parse_music_credits(title)
+                    track_name = track_name or parsed_track
+                    artist = artist or parsed_artist
+                duration = music_duration_seconds(info.get("duration"))
                 return {
-                    "title": str(info.get("title", "unknown track")),
+                    "title": title,
                     "url": str(info["url"]),
                     "query": str(info.get("webpage_url") or query),
+                    "artist": artist,
+                    "track": track_name,
+                    "album": music_metadata_text(info.get("album")),
+                    "duration": "" if duration is None else str(duration),
                 }
         return await asyncio.to_thread(extract)
+
+    async def fetch_track_lyrics(self, track: dict[str, str]) -> str:
+        """Look up plain lyrics for a resolved track via lrclib."""
+        cached = track.get("lyrics", "").strip()
+        if cached:
+            return cached
+        headers = {"User-Agent": settings.LRCLIB_USER_AGENT}
+        artist = (track.get("artist") or "").strip()
+        name = (track.get("track") or "").strip()
+        if not name:
+            name, parsed_artist = parse_music_credits(
+                track.get("title") or track.get("query") or ""
+            )
+            artist = artist or parsed_artist
+        duration = music_duration_seconds(track.get("duration"))
+        try:
+            if name and artist:
+                params: dict[str, str | int] = {
+                    "track_name": name,
+                    "artist_name": artist,
+                }
+                album = (track.get("album") or "").strip()
+                if album:
+                    params["album_name"] = album
+                if duration is not None:
+                    params["duration"] = duration
+                response = await self.provider_http.get(
+                    f"{settings.LRCLIB_BASE_URL}/get",
+                    params=params,
+                    headers=headers,
+                )
+                if response.status_code == 200:
+                    text = lyrics_text_from_record(response.json())
+                    if text:
+                        return text
+                elif response.status_code != 404:
+                    response.raise_for_status()
+            query = " ".join(part for part in (artist, name) if part) or (
+                track.get("title") or track.get("query") or ""
+            ).strip()
+            if not query:
+                return ""
+            response = await self.provider_http.get(
+                f"{settings.LRCLIB_BASE_URL}/search",
+                params={"q": query},
+                headers=headers,
+            )
+            response.raise_for_status()
+            record = pick_lyrics_record(response.json(), duration=duration)
+        except (httpx.HTTPError, ValueError, TypeError):
+            log.warning("Lyrics lookup failed")
+            return ""
+        return lyrics_text_from_record(record) if record else ""
+
+    async def post_track_lyrics(
+        self,
+        destination: discord.abc.Messageable,
+        track: dict[str, str],
+        lyrics: str,
+    ) -> None:
+        """Send lyrics as one or more Discord embeds."""
+        title = (track.get("track") or track.get("title") or "lyrics").strip() or "lyrics"
+        title = title[: settings.DISCORD_EMBED_TITLE_LIMIT]
+        artist = (track.get("artist") or "").strip()[: settings.DISCORD_EMBED_TITLE_LIMIT]
+        chunks = lyrics_embed_chunks(lyrics)
+        total = len(chunks)
+        for index, chunk in enumerate(chunks, start=1):
+            embed_title = title if total == 1 else f"{title} ({index}/{total})"
+            embed = discord.Embed(
+                title=embed_title[: settings.DISCORD_EMBED_TITLE_LIMIT],
+                description=chunk,
+            )
+            if artist:
+                embed.set_author(name=artist)
+            embed.set_footer(text="lyrics from lrclib")
+            await destination.send(
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+    async def share_track_lyrics(
+        self,
+        message: discord.Message,
+        voice_channel: discord.abc.Messageable | None,
+        track: dict[str, str],
+    ) -> bool:
+        """Post lyrics to the voice chat when they are available."""
+        lyrics = await self.fetch_track_lyrics(track)
+        if not lyrics:
+            return False
+        track["lyrics"] = lyrics
+        destination = voice_channel or message.channel
+        try:
+            await self.post_track_lyrics(destination, track, lyrics)
+            return True
+        except (discord.Forbidden, discord.HTTPException):
+            if destination is message.channel:
+                log.warning("Could not post lyrics")
+                return False
+            try:
+                await self.post_track_lyrics(message.channel, track, lyrics)
+                return True
+            except (discord.Forbidden, discord.HTTPException):
+                log.warning("Could not post lyrics")
+                return False
 
     async def search_gif(self, query: str) -> str | None:
         """Return a real, directly embeddable Klipy GIF for a search phrase."""
@@ -203,18 +344,64 @@ class PersonaBot(discord.Client, BotService):
         if error is not None:
             log.warning("Music playback failed: %s", error)
 
+    @staticmethod
+    def _music_error_reply(action: str, error: Exception) -> str:
+        """Turn extractor failures into concise, user-safe music replies."""
+        details = str(error).casefold()
+        if "available to this channel's members" in details or "members-only" in details:
+            return (
+                "I couldn't play that: the YouTube video is members-only. "
+                "Please use a public video or join the required channel membership."
+            )
+        return f"I couldn't {action}: {type(error).__name__}"
+
+    async def warmup_provider_connections(self) -> None:
+        """Open TLS sessions to the configured providers before the first reply."""
+        targets: list[tuple[str, str]] = []
+        if settings.OPENAI_API_KEY:
+            targets.append(
+                (f"{settings.OPENAI_BASE_URL}/models", settings.OPENAI_API_KEY)
+            )
+        if settings.DEEPSEEK_API_KEY:
+            targets.append(
+                (f"{settings.DEEPSEEK_BASE_URL}/models", settings.DEEPSEEK_API_KEY)
+            )
+        if settings.MISTRAL_API_KEY:
+            targets.append(
+                (f"{settings.MISTRAL_BASE_URL}/models", settings.MISTRAL_API_KEY)
+            )
+        if not targets:
+            return
+
+        async def ping(url: str, api_key: str) -> None:
+            try:
+                await self.provider_http.get(
+                    url,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    timeout=settings.REQUEST_CONNECT_TIMEOUT,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.debug("Provider warmup failed")
+
+        await asyncio.gather(*(ping(url, api_key) for url, api_key in targets))
+
     async def on_ready(self) -> None:
         if settings.MEMORY_RETENTION_DAYS:
             cutoff = time.time() - settings.MEMORY_RETENTION_DAYS * 86400
             removed = await asyncio.to_thread(self.memory.prune_older_than, cutoff)
             if removed:
                 log.info("Pruned %s expired memory messages", removed)
+        await self.warmup_provider_connections()
         log.info(
-            "Logged in as %s; model=%s; persona=%s; memory=%s",
+            "Logged in as %s; model=%s; persona=%s; memory=%s; stream=%s; openai_tier=%s",
             self.user,
             self.active_model,
             settings.MODEL_PERSONAS.get(self.selected_model, "rudeish"),
             settings.MEMORY_DB,
+            settings.STREAM_RESPONSES,
+            settings.OPENAI_SERVICE_TIER or "off",
         )
 
     async def on_message(self, message: discord.Message) -> None:
@@ -224,16 +411,45 @@ class PersonaBot(discord.Client, BotService):
             log.info("Ignoring redelivered Discord event %s", message.id)
             return
 
-        parts = message.content.split(maxsplit=1)
+        text = command_text(
+            message.content, None if self.user is None else self.user.id
+        )
+        parts = text.split(maxsplit=1)
         if message.guild is not None:
             # Register every guild channel before it can read or write memory.
             # This makes a server-wide erase exact even after a bot restart.
-            await asyncio.to_thread(
-                self.memory.register_scope, str(message.channel.id), str(message.guild.id)
+            scope_key = (str(message.channel.id), str(message.guild.id))
+            registered = getattr(self, "_registered_scopes", None)
+            if registered is None or scope_key not in registered:
+                await asyncio.to_thread(
+                    self.memory.register_scope,
+                    str(message.channel.id),
+                    str(message.guild.id),
+                )
+                if isinstance(registered, set):
+                    registered.add(scope_key)
+        # Run this before commands, GIFs, replies, and memory. If a message has
+        # multiple attachments, Discord requires deleting the whole message to
+        # remove the detected image.
+        if await self.remove_ai_generated_images(message):
+            return
+        if message.guild is not None and missing_bot_permissions(
+            message.channel, self.user, "send_messages"
+        ):
+            log.warning(
+                "Missing Send Messages in channel %s", message.channel.id
             )
+            return
         if parts and parts[0].lower() == "!help":
             await message.channel.send(
                 settings.HELP_TEXT,
+                reference=message,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        if is_owner_note_command(text):
+            await message.channel.send(
+                settings.OWNER_NOTE_TEXT,
                 reference=message,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
@@ -271,52 +487,6 @@ class PersonaBot(discord.Client, BotService):
                         reply = "active mode is off in this channel"
                 else:
                     reply = "usage: !active on | !active off | !active status"
-            await message.channel.send(
-                reply,
-                reference=message,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-            return
-        if parts and parts[0].lower() == "!gifs":
-            if message.guild is None:
-                reply = "!gifs only works in a server channel"
-            else:
-                scope_id = str(message.channel.id)
-                action = parts[1].strip().casefold() if len(parts) == 2 else ""
-                if action == "on" and not settings.KLIPY_API_KEY:
-                    reply = (
-                        "GIF search is not configured — add KLIPY_API_KEY to .env "
-                        "and restart the bot"
-                    )
-                elif action == "on":
-                    await asyncio.to_thread(self.memory.set_gif_mode, scope_id, True)
-                    reply = (
-                        "GIFs on — I’ll send a relevant GIF every 10th message "
-                        "in this channel"
-                    )
-                elif action == "off":
-                    await asyncio.to_thread(self.memory.set_gif_mode, scope_id, False)
-                    reply = "GIFs off in this channel"
-                elif not action or action == "status":
-                    enabled, count = await asyncio.to_thread(
-                        self.memory.gif_mode_status, scope_id
-                    )
-                    if enabled:
-                        remaining = settings.GIF_RESPONSE_INTERVAL - count
-                        topic = await asyncio.to_thread(
-                            self.memory.channel_topic, scope_id
-                        )
-                        topic_note = f" for `{topic}`" if topic else ""
-                        reply = (
-                            f"GIFs are on{topic_note} — next GIF in {remaining} "
-                            f"message{'s' if remaining != 1 else ''}"
-                        )
-                        if not settings.KLIPY_API_KEY:
-                            reply += " (KLIPY_API_KEY is currently missing)"
-                    else:
-                        reply = "GIFs are off in this channel"
-                else:
-                    reply = "usage: !gifs on | !gifs off | !gifs status"
             await message.channel.send(
                 reply,
                 reference=message,
@@ -409,10 +579,9 @@ class PersonaBot(discord.Client, BotService):
             )
             return
         if parts and parts[0].lower() == "!language":
-            scope_id, user_id = self.conversation_key(message)
             language_arg = parts[1] if len(parts) == 2 else ""
             if not language_arg.strip():
-                language = self.response_language(scope_id, user_id)
+                language = self.response_language(message)
                 reply = f"language: {language}"
             else:
                 language, error = parse_language_name(language_arg)
@@ -420,8 +589,16 @@ class PersonaBot(discord.Client, BotService):
                     reply = error
                 else:
                     assert language is not None
-                    self.set_response_language(scope_id, user_id, language)
-                    reply = f"language set to {language}; I’ll reply in it from now on"
+                    self.set_response_language(message, language)
+                    if message.guild is None:
+                        reply = (
+                            f"language set to {language}; I’ll reply in it from now on"
+                        )
+                    else:
+                        reply = (
+                            f"language set to {language}; I’ll reply in it "
+                            "in this server from now on"
+                        )
             await message.channel.send(
                 reply,
                 reference=message,
@@ -442,19 +619,36 @@ class PersonaBot(discord.Client, BotService):
                 reply = "join a voice channel first, then use `!vc`"
             else:
                 target_channel = message.author.voice.channel
-                voice_client = message.guild.voice_client
-                try:
-                    if voice_client is None:
-                        voice_client = await target_channel.connect()
-                    elif voice_client.channel.id != target_channel.id:
-                        await voice_client.move_to(target_channel)
-                    async with self.voice_locks[message.guild.id]:
-                        line = random.choice(VC_LINES)
-                        voice = await self.speak_in_voice(voice_client, line)
-                    reply = f"joined {target_channel.mention} and spoke in a random voice ({voice})"
-                except (discord.ClientException, discord.Forbidden, discord.HTTPException, OSError, RuntimeError) as exc:
-                    log.exception("Could not join or speak in voice channel")
-                    reply = f"I couldn't use voice chat right now: {type(exc).__name__}"
+                missing = missing_bot_permissions(
+                    target_channel, self.user, "connect", "speak"
+                )
+                if missing:
+                    reply = missing_permission_reply(missing)
+                else:
+                    voice_client = message.guild.voice_client
+                    try:
+                        if voice_client is None:
+                            voice_client = await target_channel.connect()
+                        elif voice_client.channel.id != target_channel.id:
+                            await voice_client.move_to(target_channel)
+                        async with self.voice_locks[message.guild.id]:
+                            line = random.choice(VC_LINES)
+                            voice = await self.speak_in_voice(voice_client, line)
+                        reply = (
+                            f"joined {target_channel.mention} and spoke "
+                            f"in a random voice ({voice})"
+                        )
+                    except (
+                        discord.ClientException,
+                        discord.Forbidden,
+                        discord.HTTPException,
+                        OSError,
+                        RuntimeError,
+                    ) as exc:
+                        log.exception("Could not join or speak in voice channel")
+                        reply = (
+                            f"I couldn't use voice chat right now: {type(exc).__name__}"
+                        )
             await message.channel.send(
                 reply,
                 reference=message,
@@ -501,19 +695,34 @@ class PersonaBot(discord.Client, BotService):
                     elif message.author.voice is None or message.author.voice.channel is None:
                         reply = "join a voice channel first, then use `!music start`"
                     else:
-                        try:
-                            target_channel = message.author.voice.channel
-                            if voice_client is None:
-                                voice_client = await target_channel.connect()
-                            elif voice_client.channel.id != target_channel.id:
-                                await voice_client.move_to(target_channel)
-                            refreshed = await self.resolve_music(track["query"])
-                            self.music_tracks[guild_id] = refreshed
-                            self.play_music_track(voice_client, refreshed)
-                            reply = f"playing: {refreshed['title']}"
-                        except (discord.ClientException, discord.Forbidden, discord.HTTPException, OSError, RuntimeError, ValueError) as exc:
-                            log.exception("Could not start music")
-                            reply = f"I couldn't start music: {type(exc).__name__}"
+                        target_channel = message.author.voice.channel
+                        missing = missing_bot_permissions(
+                            target_channel, self.user, "connect", "speak"
+                        )
+                        if missing:
+                            reply = missing_permission_reply(missing)
+                        else:
+                            try:
+                                if voice_client is None:
+                                    voice_client = await target_channel.connect()
+                                elif voice_client.channel.id != target_channel.id:
+                                    await voice_client.move_to(target_channel)
+                                refreshed = await self.resolve_music(track["query"])
+                                self.music_tracks[guild_id] = refreshed
+                                self.play_music_track(voice_client, refreshed)
+                                reply = f"playing: {refreshed['title']}"
+                            except (
+                                discord.ClientException,
+                                discord.Forbidden,
+                                discord.HTTPException,
+                                OSError,
+                                RuntimeError,
+                                ValueError,
+                            ) as exc:
+                                log.warning(
+                                    "Could not start music: %s", type(exc).__name__
+                                )
+                                reply = self._music_error_reply("start music", exc)
                 elif action_lower in {"stop", "skip"}:
                     if voice_client is not None and (voice_client.is_playing() or voice_client.is_paused()):
                         voice_client.stop()
@@ -524,21 +733,36 @@ class PersonaBot(discord.Client, BotService):
                     if message.author.voice is None or message.author.voice.channel is None:
                         reply = "join a voice channel first, then use `!music <song or URL>`"
                     else:
-                        try:
-                            target_channel = message.author.voice.channel
-                            if voice_client is None:
-                                voice_client = await target_channel.connect()
-                            elif voice_client.channel.id != target_channel.id:
-                                await voice_client.move_to(target_channel)
-                            track = await self.resolve_music(action)
-                            if voice_client.is_playing() or voice_client.is_paused():
-                                voice_client.stop()
-                            self.music_tracks[guild_id] = track
-                            self.play_music_track(voice_client, track)
-                            reply = f"playing: {track['title']}"
-                        except (discord.ClientException, discord.Forbidden, discord.HTTPException, OSError, RuntimeError, ValueError) as exc:
-                            log.exception("Could not play music")
-                            reply = f"I couldn't play that: {type(exc).__name__}"
+                        target_channel = message.author.voice.channel
+                        missing = missing_bot_permissions(
+                            target_channel, self.user, "connect", "speak"
+                        )
+                        if missing:
+                            reply = missing_permission_reply(missing)
+                        else:
+                            try:
+                                if voice_client is None:
+                                    voice_client = await target_channel.connect()
+                                elif voice_client.channel.id != target_channel.id:
+                                    await voice_client.move_to(target_channel)
+                                track = await self.resolve_music(action)
+                                if voice_client.is_playing() or voice_client.is_paused():
+                                    voice_client.stop()
+                                self.music_tracks[guild_id] = track
+                                self.play_music_track(voice_client, track)
+                                reply = f"playing: {track['title']}"
+                            except (
+                                discord.ClientException,
+                                discord.Forbidden,
+                                discord.HTTPException,
+                                OSError,
+                                RuntimeError,
+                                ValueError,
+                            ) as exc:
+                                log.warning(
+                                    "Could not play music: %s", type(exc).__name__
+                                )
+                                reply = self._music_error_reply("play that", exc)
             await message.channel.send(
                 reply,
                 reference=message,
@@ -548,11 +772,27 @@ class PersonaBot(discord.Client, BotService):
         if parts and parts[0].lower() == "!persona":
             requested = parts[1].strip().lower() if len(parts) == 2 else ""
             if not requested:
-                reply = f"persona: {settings.MODEL_PERSONAS.get(self.selected_model, 'rudeish')} ({self.active_model})"
+                current = settings.MODEL_PERSONAS.get(self.selected_model, "rudeish")
+                if self.selected_model == "mistral" and not age_restricted_channel(
+                    message.channel
+                ):
+                    fallback = settings.MODEL_PERSONAS.get(
+                        self.persona_alias_for(message.channel), "rudeish"
+                    )
+                    reply = (
+                        f"persona: {fallback} "
+                        "(explicit only works in age-restricted channels)"
+                    )
+                else:
+                    reply = f"persona: {current} ({self.model_for(message.channel)})"
             elif requested not in settings.PERSONA_ALIASES:
                 reply = (
                     "usage: !persona rudeish, !persona nerdish, or !persona explicit"
                 )
+            elif requested == "explicit" and not age_restricted_channel(
+                message.channel
+            ):
+                reply = "explicit only works in age-restricted channels"
             elif (
                 settings.PERSONA_ALIASES[requested] == "deepseek"
                 and not settings.DEEPSEEK_API_KEY
@@ -566,7 +806,7 @@ class PersonaBot(discord.Client, BotService):
             else:
                 self.selected_model = settings.PERSONA_ALIASES[requested]
                 self.memory.set_setting("selected_persona_model", self.selected_model)
-                reply = f"persona: {requested} ({self.active_model})"
+                reply = f"persona: {requested} ({self.model_for(message.channel)})"
             await message.channel.send(
                 reply,
                 reference=message,
@@ -574,33 +814,55 @@ class PersonaBot(discord.Client, BotService):
             )
             return
         if message.guild is not None and parts and parts[0].lower() == "!nuke":
-            if (
+            if not (
                 len(parts) == 2
                 and parts[1].isdigit()
                 and 1 <= int(parts[1]) <= settings.MAX_NUKE_MESSAGES
-                and isinstance(message.channel, discord.TextChannel)
-                and message.author.guild_permissions.manage_messages
-                and message.channel.permissions_for(message.guild.me).manage_messages
             ):
-                await message.channel.purge(limit=int(parts[1]))
+                reply = f"usage: !nuke <1-{settings.MAX_NUKE_MESSAGES}>"
+            elif not isinstance(message.channel, discord.TextChannel):
+                reply = "!nuke only works in a server text channel"
+            elif not message.author.guild_permissions.manage_messages:
+                reply = "you need the Manage Messages permission to nuke"
+            else:
+                missing = missing_bot_permissions(
+                    message.channel,
+                    self.user,
+                    "manage_messages",
+                    "read_message_history",
+                )
+                if missing:
+                    reply = missing_permission_reply(missing)
+                else:
+                    await message.channel.purge(limit=int(parts[1]))
+                    return
+            await message.channel.send(
+                reply,
+                reference=message,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
             return
 
         is_dm = message.guild is None
         mentioned = self.user is not None and self.user in message.mentions
         active_enabled = False
         active_turn = False
-        gif_enabled = False
         gif_turn = False
         topic = ""
         if not is_dm:
             scope_id = str(message.channel.id)
             topic = await asyncio.to_thread(self.memory.channel_topic, scope_id)
-            if not message.content.lstrip().startswith("!"):
-                (active_enabled, _), (gif_enabled, _) = await asyncio.gather(
-                    asyncio.to_thread(self.memory.active_mode_status, scope_id),
-                    asyncio.to_thread(self.memory.gif_mode_status, scope_id),
+            if not text.startswith("!"):
+                active_enabled, _ = await asyncio.to_thread(
+                    self.memory.active_mode_status, scope_id
                 )
-                cadence_checks = []
+                cadence_checks = [
+                    asyncio.to_thread(
+                        self.memory.record_gif_message,
+                        scope_id,
+                        interval=settings.GIF_RESPONSE_INTERVAL,
+                    )
+                ]
                 if active_enabled:
                     cadence_checks.append(
                         asyncio.to_thread(
@@ -609,21 +871,10 @@ class PersonaBot(discord.Client, BotService):
                             interval=settings.ACTIVE_RESPONSE_INTERVAL,
                         )
                     )
-                if gif_enabled:
-                    cadence_checks.append(
-                        asyncio.to_thread(
-                            self.memory.record_gif_message,
-                            scope_id,
-                            interval=settings.GIF_RESPONSE_INTERVAL,
-                        )
-                    )
                 results = await asyncio.gather(*cadence_checks)
-                result_index = 0
+                gif_turn = results[0]
                 if active_enabled:
-                    active_turn = results[result_index]
-                    result_index += 1
-                if gif_enabled:
-                    gif_turn = results[result_index]
+                    active_turn = results[1]
         should_ai_reply = is_dm or mentioned or active_turn
         if not (should_ai_reply or gif_turn):
             return
@@ -736,24 +987,6 @@ class PersonaBot(discord.Client, BotService):
                 except (discord.HTTPException, discord.Forbidden):
                     pass
             return
-        except ModerationBlocked as exc:
-            await message.channel.send(
-                f"AI requests are temporarily unavailable. Try again in {exc.retry_after}s.",
-                reference=message,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-        except ModerationRejected:
-            await message.channel.send(
-                "This request cannot be processed.",
-                reference=message,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-        except ModerationUnavailable:
-            await message.channel.send(
-                "I can't complete a safety check right now. Please try again later.",
-                reference=message,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
         except InputTooLarge:
             await message.channel.send(
                 "that message is too large please shorten it or attach fewer images",
