@@ -2,13 +2,24 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd -P)
-OWAUA_DEPLOY_SCRIPT=${OWAUA_DEPLOY_SCRIPT:-"$ROOT_DIR/../owaua/scripts/deploy"}
+if [[ -z "${OWAUA_DEPLOY_SCRIPT:-}" ]]; then
+  for candidate in \
+    "$HOME/.config/owaua-deploy/daki_client.py" \
+    "$ROOT_DIR/../owaua/scripts/deploy"
+  do
+    if [[ -f "$candidate" ]]; then
+      OWAUA_DEPLOY_SCRIPT=$candidate
+      break
+    fi
+  done
+fi
+OWAUA_DEPLOY_SCRIPT=${OWAUA_DEPLOY_SCRIPT:-"$HOME/.config/owaua-deploy/daki_client.py"}
 
 if [[ ! -f "$OWAUA_DEPLOY_SCRIPT" ]]; then
   echo "Cannot find the Daki deployment client: $OWAUA_DEPLOY_SCRIPT" >&2
   exit 1
 fi
-PERSONA_MODELS="${*:-mistral}"
+PERSONA_MODELS="${*:-rudeish nerdish explicit}"
 
 ROOT_DIR="$ROOT_DIR" OWAUA_DEPLOY_SCRIPT="$OWAUA_DEPLOY_SCRIPT" PERSONA_MODELS="$PERSONA_MODELS" python3 - <<'PY'
 import hashlib
@@ -20,9 +31,9 @@ from pathlib import Path
 root = Path(os.environ["ROOT_DIR"])
 deploy_path = Path(os.environ["OWAUA_DEPLOY_SCRIPT"])
 model_files = {
-    "mistral": "personas/persona.py",
-    "deepseek": "personas/deepseek_persona.py",
-    "gpt": "personas/gpt_persona.py",
+    "rudeish": "personas/rudeish.txt",
+    "nerdish": "personas/nerdish.txt",
+    "explicit": "personas/explicit.txt",
 }
 requested = os.environ["PERSONA_MODELS"].replace(",", " ").replace("/", " ").split()
 models = []
@@ -36,7 +47,7 @@ for model in requested:
     if model not in models:
         models.append(model)
 if not models:
-    models = ["mistral"]
+    models = ["rudeish", "nerdish", "explicit"]
 
 files = {model: root / model_files[model] for model in models}
 missing = [str(path) for path in files.values() if not path.is_file()]

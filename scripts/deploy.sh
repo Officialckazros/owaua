@@ -2,7 +2,18 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd -P)
-OWAUA_DEPLOY_SCRIPT=${OWAUA_DEPLOY_SCRIPT:-"$ROOT_DIR/../owaua/scripts/deploy"}
+if [[ -z "${OWAUA_DEPLOY_SCRIPT:-}" ]]; then
+  for candidate in \
+    "$HOME/.config/owaua-deploy/daki_client.py" \
+    "$ROOT_DIR/../owaua/scripts/deploy"
+  do
+    if [[ -f "$candidate" ]]; then
+      OWAUA_DEPLOY_SCRIPT=$candidate
+      break
+    fi
+  done
+fi
+OWAUA_DEPLOY_SCRIPT=${OWAUA_DEPLOY_SCRIPT:-"$HOME/.config/owaua-deploy/daki_client.py"}
 
 if [[ ! -f "$OWAUA_DEPLOY_SCRIPT" ]]; then
   echo "Cannot find the Daki deployment client: $OWAUA_DEPLOY_SCRIPT" >&2
@@ -32,7 +43,12 @@ excluded = {
 }
 required_runtime = {
     Path("bot.py"),
-    Path("memory_store.py"),
+    Path("ask.py"),
+    Path("memory.py"),
+    Path("music.py"),
+    Path("personas/rudeish.txt"),
+    Path("personas/nerdish.txt"),
+    Path("personas/explicit.txt"),
     Path("requirements.txt"),
     Path("scripts/run-bots.sh"),
 }
@@ -42,7 +58,10 @@ files = sorted(
     if path.is_file()
     and not any(part.startswith(".") for part in path.relative_to(root).parts)
     and path.relative_to(root) not in excluded
-    and (path.suffix == ".py" or path.suffix in {".sh", ".txt"})
+    and (
+        path.suffix == ".py"
+        or path.suffix in {".sh", ".txt", ".png", ".jpg", ".jpeg", ".webp", ".gif"}
+    )
 )
 if not files:
     raise RuntimeError("No deployable runtime files found")
@@ -63,8 +82,13 @@ loader.exec_module(module)
 
 config = module.load_config()
 client = module.DakiClient(config["panel_url"], config["api_key"], config["server_id"])
-if client.state() != "running":
-    raise RuntimeError("Daki Bots server is not running; deployment was not uploaded")
+state = client.state()
+if state not in {"running", "offline", "starting"}:
+    raise RuntimeError(
+        f"Daki Bots server is {state}; deployment was not uploaded"
+    )
+if state != "running":
+    print(f"Server is {state}; uploading, then starting")
 
 for local_path in files:
     relative_path = local_path.relative_to(root).as_posix()
