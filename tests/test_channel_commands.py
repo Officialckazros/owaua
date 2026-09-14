@@ -59,6 +59,7 @@ def make_message(
     manage_guild: bool = False,
     mentions: list[object] | None = None,
     reference: object | None = None,
+    attachments: list[object] | None = None,
 ) -> SimpleNamespace:
     guild = None
     if guild_id is not None:
@@ -80,7 +81,7 @@ def make_message(
         guild=guild,
         mentions=mentions or [],
         reference=reference,
-        attachments=[],
+        attachments=attachments or [],
         created_at=datetime.now(timezone.utc),
     )
 
@@ -102,8 +103,6 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         self.bot.conversation_locks = defaultdict(asyncio.Lock)
         self.bot.music_tracks = {}
         self.bot.response_languages = {}
-        self.bot.debate_topics = {}
-        self.bot.debate_starters = {}
 
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
@@ -115,14 +114,14 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(channel.sent, [HELP_TEXT])
         self.assertEqual(channel.send_kwargs[0].get("suppress_embeds"), True)
-        self.assertIn("!active on|off|status", channel.sent[0])
+        self.assertNotIn("!active", channel.sent[0])
         self.assertIn("!persona rudeish|nerdish|explicit|host default gpt/deepseek/mistral", channel.sent[0])
         self.assertIn("!owner's note", channel.sent[0])
         self.assertIn("!memory erase", channel.sent[0])
         self.assertIn("!music help", channel.sent[0])
         self.assertIn("!language <full name>|reset", channel.sent[0])
-        self.assertIn("!debate <topic>|off|status", channel.sent[0])
         self.assertIn("25s cooldown", channel.sent[0])
+        self.assertNotIn("!debate", channel.sent[0])
         self.assertNotIn("!topic", channel.sent[0])
         self.assertNotIn("!vc", channel.sent[0])
         self.assertNotIn("!nuke", channel.sent[0])
@@ -170,14 +169,16 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(channel.sent, ["persona: nerdish"])
         self.assertEqual(self.bot.selected_persona, "nerdish")
 
-    async def test_host_default_persona_defaults_to_gpt(self) -> None:
+    async def test_host_default_persona_defaults_to_deepseek(self) -> None:
         channel = FakeChannel()
         with patch("bot.host_model_error", return_value=None):
             await self.bot.on_message(make_message("!persona host default", 1, channel))
 
-        self.assertEqual(channel.sent, ["persona: host default (gpt)"])
-        self.assertEqual(self.bot.selected_persona, "host-default-gpt")
-        self.assertEqual(self.store.get_setting("selected_persona"), "host-default-gpt")
+        self.assertEqual(channel.sent, ["persona: host default (deepseek)"])
+        self.assertEqual(self.bot.selected_persona, "host-default-deepseek")
+        self.assertEqual(
+            self.store.get_setting("selected_persona"), "host-default-deepseek"
+        )
 
     async def test_host_default_persona_selects_deepseek_and_mistral(self) -> None:
         channel = FakeChannel()
@@ -222,18 +223,51 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(channel.sent, ["deepseek is not configured"])
         self.assertEqual(self.bot.selected_persona, "rudeish")
 
-    async def test_active_mode_replies_on_the_sixth_message(self) -> None:
+    async def test_active_command_is_gone(self) -> None:
         channel = FakeChannel()
         with patch("bot.ask", AsyncMock(return_value="hey")) as mocked_ask:
             await self.bot.on_message(make_message("!active on", 1, channel))
-            for message_id in range(2, 8):
+            for message_id in range(2, 10):
                 await self.bot.on_message(
                     make_message(f"ordinary message {message_id}", message_id, channel)
                 )
 
+        mocked_ask.assert_not_awaited()
+        self.assertEqual(channel.sent, [])
+
+    async def test_empty_ping_does_not_call_the_provider(self) -> None:
+        channel = FakeChannel()
+        with patch("bot.ask", AsyncMock(return_value="hey")) as mocked_ask:
+            await self.bot.on_message(
+                make_message("<@99>", 1, channel, mentions=[self.bot.user])
+            )
+
+        mocked_ask.assert_not_awaited()
+        self.assertEqual(channel.sent, [])
+
+    async def test_image_only_ping_still_calls_the_provider(self) -> None:
+        channel = FakeChannel()
+        image = SimpleNamespace(
+            content_type="image/png",
+            url="https://cdn.discordapp.com/image.png",
+        )
+        with patch("bot.ask", AsyncMock(return_value="nice pic")) as mocked_ask:
+            await self.bot.on_message(
+                make_message(
+                    "<@99>",
+                    1,
+                    channel,
+                    mentions=[self.bot.user],
+                    attachments=[image],
+                )
+            )
+
         mocked_ask.assert_awaited_once()
-        self.assertEqual(channel.sent[-1], "hey")
-        self.assertTrue(self.store.active_mode_status("22")[0])
+        self.assertEqual(
+            mocked_ask.await_args.kwargs["image_urls"],
+            ["https://cdn.discordapp.com/image.png"],
+        )
+        self.assertEqual(channel.sent, ["nice pic"])
 
     async def test_memory_erase_requires_manage_server(self) -> None:
         channel = FakeChannel()
@@ -485,216 +519,17 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         message.guild.me.edit.assert_not_called()
         self.assertIn("full language name", channel.sent[0])
 
-    async def test_debate_without_a_topic_reports_status(self) -> None:
-        channel = FakeChannel()
-
-        await self.bot.on_message(make_message("!debate", 1, channel))
-
-        self.assertEqual(channel.sent, ["debate is off in this channel"])
-
-    async def test_debate_command_announces_the_topic_without_debating(self) -> None:
-        channel = FakeChannel()
-        self.bot.selected_persona = "nerdish"
-
-        with patch("bot.ask", AsyncMock(return_value="full debate")) as mocked_ask:
-            await self.bot.on_message(
-                make_message("!debate pineapple on pizza", 1, channel)
-            )
-
-        mocked_ask.assert_not_awaited()
-        self.assertEqual(channel.sent, ["debate is on — topic: pineapple on pizza"])
-        self.assertEqual(
-            self.store.get_setting("debate_topic:22"), "pineapple on pizza"
-        )
-        self.assertEqual(self.store.get_setting("debate_starter:22"), "1")
-        self.assertEqual(self.bot.selected_persona, "nerdish")
-
-    async def test_debate_ignores_ordinary_channel_messages(self) -> None:
-        channel = FakeChannel()
-
-        with patch("bot.ask", AsyncMock(return_value="take")) as mocked_ask:
-            await self.bot.on_message(make_message("!debate religion", 1, channel))
-            await self.bot.on_message(make_message("what do you think", 2, channel))
-
-        mocked_ask.assert_not_awaited()
-        self.assertEqual(channel.sent, ["debate is on — topic: religion"])
-
-    async def test_debate_replies_when_pinged(self) -> None:
-        channel = FakeChannel()
-
-        with patch("bot.ask", AsyncMock(return_value="full debate")) as mocked_ask:
-            await self.bot.on_message(make_message("!debate religion", 1, channel))
-            await self.bot.on_message(
-                make_message(
-                    "go",
-                    2,
-                    channel,
-                    mentions=[self.bot.user],
-                )
-            )
-
-        mocked_ask.assert_awaited_once()
-        kwargs = mocked_ask.await_args.kwargs
-        self.assertEqual(kwargs["debate_topic"], "religion")
-        self.assertEqual(kwargs["prompt"], "go")
-        self.assertEqual(
-            channel.sent, ["debate is on — topic: religion", "full debate"]
-        )
-
-    async def test_debate_replies_when_the_command_is_replied_to(self) -> None:
-        channel = FakeChannel()
-        starter = make_message("!debate religion", 1, channel)
-
-        with patch("bot.ask", AsyncMock(return_value="full debate")) as mocked_ask:
-            await self.bot.on_message(starter)
-            await self.bot.on_message(
-                make_message(
-                    "ok start",
-                    2,
-                    channel,
-                    reference=SimpleNamespace(message_id=1, resolved=starter),
-                )
-            )
-
-        mocked_ask.assert_awaited_once()
-        self.assertEqual(mocked_ask.await_args.kwargs["debate_topic"], "religion")
-        self.assertEqual(
-            channel.sent, ["debate is on — topic: religion", "full debate"]
-        )
-
-    async def test_debate_replies_when_the_bot_is_replied_to(self) -> None:
-        channel = FakeChannel()
-        bot_reply = SimpleNamespace(author=self.bot.user)
-
-        with patch("bot.ask", AsyncMock(return_value="still on it")) as mocked_ask:
-            await self.bot.on_message(make_message("!debate religion", 1, channel))
-            await self.bot.on_message(
-                make_message(
-                    "that's wrong",
-                    2,
-                    channel,
-                    reference=SimpleNamespace(message_id=99, resolved=bot_reply),
-                )
-            )
-
-        mocked_ask.assert_awaited_once()
-        self.assertEqual(mocked_ask.await_args.kwargs["prompt"], "that's wrong")
-        self.assertEqual(
-            channel.sent, ["debate is on — topic: religion", "still on it"]
-        )
-
-    async def test_debate_does_not_use_active_mode(self) -> None:
-        channel = FakeChannel()
-
-        with patch("bot.ask", AsyncMock(return_value="hey")) as mocked_ask:
-            await self.bot.on_message(make_message("!active on", 1, channel))
-            await self.bot.on_message(make_message("!debate religion", 2, channel))
-            for message_id in range(3, 9):
-                await self.bot.on_message(
-                    make_message(f"ordinary message {message_id}", message_id, channel)
-                )
-
-        mocked_ask.assert_not_awaited()
-        self.assertEqual(channel.sent[0].startswith("active mode on"), True)
-
-    async def test_debate_follow_up_stays_on_the_same_topic(self) -> None:
-        channel = FakeChannel()
-        self.bot.selected_persona = "nerdish"
-
-        with patch("bot.ask", AsyncMock(return_value="still on it")) as mocked_ask:
-            await self.bot.on_message(
-                make_message("!debate pineapple on pizza", 1, channel)
-            )
-            await self.bot.on_message(
-                make_message(
-                    "that's wrong",
-                    2,
-                    channel,
-                    mentions=[self.bot.user],
-                )
-            )
-
-        mocked_ask.assert_awaited_once()
-        follow_up = mocked_ask.await_args.kwargs
-        self.assertEqual(follow_up["debate_topic"], "pineapple on pizza")
-        self.assertEqual(follow_up["prompt"], "that's wrong")
-        self.assertEqual(follow_up["persona"], "nerdish")
-        self.assertEqual(
-            channel.sent,
-            ["debate is on — topic: pineapple on pizza", "still on it"],
-        )
-
-    async def test_debate_off_restores_persona_replies(self) -> None:
-        channel = FakeChannel()
-        self.bot.selected_persona = "nerdish"
-
-        with patch("bot.ask", AsyncMock(return_value="ok")) as mocked_ask:
-            await self.bot.on_message(make_message("!debate cats", 1, channel))
-            self.bot.command_used.clear()
-            await self.bot.on_message(make_message("!debate off", 2, channel))
-            await self.bot.on_message(
-                make_message("hello", 3, channel, guild_id=None)
-            )
-
-        self.assertEqual(
-            channel.sent,
-            [
-                "debate is on — topic: cats",
-                "debate off — persona replies are back",
-                "ok",
-            ],
-        )
-        self.assertEqual(mocked_ask.await_args.kwargs["debate_topic"], None)
-        self.assertEqual(self.store.get_setting("debate_topic:22"), "")
-
-    async def test_debate_does_not_leak_across_channels(self) -> None:
-        first = FakeChannel(22)
-        second = FakeChannel(44)
-
-        await self.bot.on_message(make_message("!debate cats", 1, first))
-        self.bot.command_used.clear()
-        await self.bot.on_message(make_message("!debate", 2, second))
-
-        self.assertEqual(first.sent, ["debate is on — topic: cats"])
-        self.assertEqual(second.sent, ["debate is off in this channel"])
-
-    async def test_debate_command_still_matches_when_the_bot_is_pinged(self) -> None:
-        channel = FakeChannel()
-
-        with patch("bot.ask", AsyncMock(return_value="take")) as mocked_ask:
-            await self.bot.on_message(
-                make_message("<@99> !debate pineapple on pizza", 1, channel)
-            )
-
-        mocked_ask.assert_not_awaited()
-        self.assertEqual(channel.sent, ["debate is on — topic: pineapple on pizza"])
-        self.assertEqual(
-            self.store.get_setting("debate_topic:22"), "pineapple on pizza"
-        )
-
-    async def test_debate_rejects_an_oversized_topic(self) -> None:
-        channel = FakeChannel()
-
-        with patch("bot.ask", AsyncMock(return_value="take")) as mocked_ask:
-            await self.bot.on_message(make_message("!debate " + ("x" * 201), 1, channel))
-
-        mocked_ask.assert_not_awaited()
-        self.assertIn("too long", channel.sent[0])
-        self.assertEqual(self.bot.debate_topic_for(make_message("x", 2, channel)), "")
-
-    async def test_long_debate_reply_is_sent_in_chunks(self) -> None:
+    async def test_long_reply_is_sent_in_chunks(self) -> None:
         channel = FakeChannel()
         long = "a" * (DISCORD_MESSAGE_LIMIT + 40)
 
         with patch("bot.ask", AsyncMock(return_value=long)):
-            await self.bot.on_message(make_message("!debate cats", 1, channel))
             await self.bot.on_message(
-                make_message("go", 2, channel, mentions=[self.bot.user])
+                make_message("go", 1, channel, mentions=[self.bot.user])
             )
 
-        self.assertEqual(channel.sent[0], "debate is on — topic: cats")
-        self.assertEqual(len(channel.sent), 3)
-        self.assertEqual("".join(channel.sent[1:]), long)
+        self.assertEqual(len(channel.sent), 2)
+        self.assertEqual("".join(channel.sent), long)
 
     async def test_language_command_in_a_dm_does_not_touch_any_server_picture(
         self,

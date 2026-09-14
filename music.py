@@ -4,10 +4,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shlex
+import subprocess
 
 import discord
 
 log = logging.getLogger("owaua")
+FFMPEG_BEFORE_OPTIONS = (
+    "-nostdin -reconnect 1 -reconnect_streamed 1 "
+    "-reconnect_delay_max 5 -thread_queue_size 1024"
+)
+FFMPEG_OPTIONS = "-vn"
+YTDLP_FORMAT = (
+    "bestaudio[acodec=opus][abr<=160]/"
+    "bestaudio[acodec=opus]/"
+    "bestaudio/best"
+)
 
 MUSIC_USAGE = (
     "usage: !music <song or URL> | !music start | !music pause | "
@@ -73,11 +85,37 @@ def permission_reply(missing: list[str]) -> str:
     )
 
 
-def play_track(voice_client: discord.VoiceClient, track: dict[str, str]) -> None:
-    source = discord.FFmpegPCMAudio(
-        track["url"],
-        before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
-        options="-vn",
+def ffmpeg_before_options(headers: object = None) -> str:
+    """FFmpeg input flags that keep a YouTube stream from underrunning."""
+    before = FFMPEG_BEFORE_OPTIONS
+    if not isinstance(headers, dict) or not headers:
+        return before
+    packed = "".join(
+        f"{key}: {value}\r\n"
+        for key, value in headers.items()
+        if key is not None and value is not None
+    )
+    if not packed:
+        return before
+    return f"{before} -headers {shlex.quote(packed)}"
+
+
+def opus_codec(acodec: object = None) -> str | None:
+    """Copy existing Opus instead of re-encoding it on the VPS."""
+    name = str(acodec or "").split(".")[0].casefold().strip()
+    return "copy" if name == "opus" else None
+
+
+def play_track(
+    voice_client: discord.VoiceClient, track: dict[str, object]
+) -> None:
+    source = discord.FFmpegOpusAudio(
+        str(track["url"]),
+        bitrate=96,
+        codec=opus_codec(track.get("acodec")),
+        before_options=ffmpeg_before_options(track.get("http_headers")),
+        options=FFMPEG_OPTIONS,
+        stderr=subprocess.DEVNULL,
     )
     voice_client.play(source, after=_playback_finished)
 
@@ -87,21 +125,39 @@ def _playback_finished(error: Exception | None) -> None:
         log.warning("Music playback failed: %s", error)
 
 
-async def resolve_music(query: str) -> dict[str, str]:
+def _http_headers(info: object) -> dict[str, str]:
+    if not isinstance(info, dict):
+        return {}
+    headers = info.get("http_headers")
+    if not isinstance(headers, dict):
+        return {}
+    packed: dict[str, str] = {}
+    for key, value in headers.items():
+        if key is None or value is None:
+            continue
+        packed[str(key)] = str(value)
+    return packed
+
+
+async def resolve_music(query: str) -> dict[str, object]:
     import yt_dlp
 
     lookup = (
         query if query.startswith(("http://", "https://")) else f"ytsearch1:{query}"
     )
     options = {
-        "format": "bestaudio/best",
+        "format": YTDLP_FORMAT,
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
         "logger": _QuietYTDlpLogger(),
+        "retries": 3,
+        "fragment_retries": 3,
+        "socket_timeout": 15,
+        "cachedir": False,
     }
 
-    def extract() -> dict[str, str]:
+    def extract() -> dict[str, object]:
         with yt_dlp.YoutubeDL(options) as downloader:
             info = downloader.extract_info(lookup, download=False)
             if "entries" in info:
@@ -112,6 +168,8 @@ async def resolve_music(query: str) -> dict[str, str]:
                 "title": str(info.get("title", "unknown track")),
                 "url": str(info["url"]),
                 "query": str(info.get("webpage_url") or query),
+                "acodec": str(info.get("acodec") or ""),
+                "http_headers": _http_headers(info),
             }
 
     return await asyncio.to_thread(extract)
@@ -128,10 +186,27 @@ async def _connect_to_author(
         return None, permission_reply(missing)
     voice_client = message.guild.voice_client
     if voice_client is None:
-        voice_client = await target_channel.connect()
+        try:
+            voice_client = await target_channel.connect(self_deaf=True)
+        except TypeError:
+            voice_client = await target_channel.connect()
     elif voice_client.channel.id != target_channel.id:
         await voice_client.move_to(target_channel)
+    await _self_deafen(voice_client)
     return voice_client, None
+
+
+async def _self_deafen(voice_client: object) -> None:
+    """Stop decoding everyone else's voice while we play music."""
+    guild = getattr(voice_client, "guild", None)
+    channel = getattr(voice_client, "channel", None)
+    change = getattr(guild, "change_voice_state", None)
+    if channel is None or not callable(change):
+        return
+    try:
+        await change(channel=channel, self_deaf=True)
+    except Exception:
+        log.debug("Could not self-deafen for music", exc_info=True)
 
 
 async def handle_music_command(
@@ -143,7 +218,7 @@ async def handle_music_command(
     action = argument.strip()
     action_lower = action.casefold()
     voice_client = message.guild.voice_client
-    tracks: dict[int, dict[str, str]] = bot.music_tracks  # type: ignore[attr-defined]
+    tracks: dict[int, dict[str, object]] = bot.music_tracks  # type: ignore[attr-defined]
 
     if action_lower in {"help", ""}:
         return MUSIC_USAGE
@@ -176,12 +251,16 @@ async def handle_music_command(
             return f"resumed: {track['title']}" if track else "music resumed"
         if track is None:
             return "choose a song first with `!music <song or URL>`"
-        return await _play_or_restart(bot, message, track["query"], verb="playing")
+        return await _play_or_restart(
+            bot, message, str(track["query"]), verb="playing"
+        )
     if action_lower == "restart":
         track = tracks.get(guild_id)
         if track is None:
             return "choose a song first with `!music <song or URL>`"
-        return await _play_or_restart(bot, message, track["query"], verb="restarted")
+        return await _play_or_restart(
+            bot, message, str(track["query"]), verb="restarted"
+        )
 
     return await _play_or_restart(bot, message, action, verb="playing")
 

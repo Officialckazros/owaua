@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
 from io import BytesIO
+from unittest.mock import AsyncMock, Mock, patch
 
 from PIL import Image
 
@@ -27,11 +30,17 @@ from bot import (
     parse_persona_argument,
     prepare_avatar_bytes,
     prepare_banner_bytes,
-    referenced_author_id,
-    referenced_message_id,
     split_reply,
 )
-from music import MUSIC_USAGE, music_error_reply
+from music import (
+    MUSIC_USAGE,
+    _connect_to_author,
+    ffmpeg_before_options,
+    music_error_reply,
+    opus_codec,
+    play_track,
+    resolve_music,
+)
 
 
 class BotHelperTests(unittest.TestCase):
@@ -52,7 +61,8 @@ class BotHelperTests(unittest.TestCase):
         self.assertEqual(matched_command("!help"), "!help")
         self.assertEqual(matched_command("!HELP"), "!help")
         self.assertEqual(matched_command("!persona nerdish"), "!persona")
-        self.assertEqual(matched_command("!debate pineapple on pizza"), "!debate")
+        self.assertIsNone(matched_command("!active on"))
+        self.assertIsNone(matched_command("!debate pineapple on pizza"))
         self.assertEqual(matched_command("!music skip"), "!music")
         self.assertEqual(matched_command("!owner's note"), "!owner's note")
         self.assertEqual(matched_command("!OWNER’S NOTE"), "!owner's note")
@@ -63,7 +73,9 @@ class BotHelperTests(unittest.TestCase):
 
     def test_parse_persona_argument_accepts_host_default_models(self) -> None:
         self.assertEqual(parse_persona_argument("rudeish"), ("rudeish", None))
-        self.assertEqual(parse_persona_argument("host default"), ("host-default-gpt", None))
+        self.assertEqual(
+            parse_persona_argument("host default"), ("host-default-deepseek", None)
+        )
         self.assertEqual(
             parse_persona_argument("host default GPT"), ("host-default-gpt", None)
         )
@@ -195,17 +207,45 @@ class BotHelperTests(unittest.TestCase):
         self.assertIn("!music restart", MUSIC_USAGE)
         self.assertIn("!music pause", MUSIC_USAGE)
 
-    def test_referenced_message_helpers_read_discord_replies(self) -> None:
-        self.assertIsNone(referenced_message_id(SimpleNamespace()))
-        self.assertIsNone(referenced_author_id(SimpleNamespace()))
-        reply = SimpleNamespace(
-            reference=SimpleNamespace(
-                message_id=7,
-                resolved=SimpleNamespace(author=SimpleNamespace(id=99)),
-            )
-        )
-        self.assertEqual(referenced_message_id(reply), 7)
-        self.assertEqual(referenced_author_id(reply), 99)
+    def test_ffmpeg_before_options_buffer_and_headers(self) -> None:
+        plain = ffmpeg_before_options()
+        self.assertIn("-thread_queue_size 1024", plain)
+        self.assertIn("-reconnect 1", plain)
+        self.assertIn("-nostdin", plain)
+        self.assertNotIn("-headers", plain)
+
+        with_headers = ffmpeg_before_options({"User-Agent": "yt-dlp"})
+        self.assertIn("-headers", with_headers)
+        self.assertIn("User-Agent", with_headers)
+        self.assertIn("yt-dlp", with_headers)
+
+    def test_opus_codec_copies_opus_only(self) -> None:
+        self.assertEqual(opus_codec("opus"), "copy")
+        self.assertEqual(opus_codec("opus.webm"), "copy")
+        self.assertIsNone(opus_codec("aac"))
+        self.assertIsNone(opus_codec(""))
+
+    def test_play_track_uses_buffered_opus(self) -> None:
+        voice = SimpleNamespace(play=Mock())
+        track = {
+            "url": "https://example.test/audio",
+            "acodec": "opus",
+            "http_headers": {"User-Agent": "yt-dlp"},
+        }
+        source = object()
+
+        with patch("discord.FFmpegOpusAudio", return_value=source) as opus:
+            play_track(voice, track)
+
+        kwargs = opus.call_args.kwargs
+        self.assertEqual(opus.call_args.args[0], "https://example.test/audio")
+        self.assertEqual(kwargs["bitrate"], 96)
+        self.assertEqual(kwargs["codec"], "copy")
+        self.assertIn("-thread_queue_size", kwargs["before_options"])
+        self.assertIn("User-Agent", kwargs["before_options"])
+        self.assertEqual(kwargs["options"], "-vn")
+        voice.play.assert_called_once()
+        self.assertIs(voice.play.call_args.args[0], source)
 
     def test_split_reply_keeps_short_text_and_breaks_long_text(self) -> None:
         self.assertEqual(split_reply("hello"), ["hello"])
@@ -220,6 +260,64 @@ class BotHelperTests(unittest.TestCase):
         self.assertGreater(len(broken), 1)
         self.assertTrue(all(len(chunk) <= 80 for chunk in broken))
         self.assertEqual(" ".join(broken), paragraph)
+
+
+class MusicAsyncTests(unittest.IsolatedAsyncioTestCase):
+    async def test_resolve_music_keeps_stream_headers_and_codec(self) -> None:
+        class FakeYoutubeDL:
+            def __init__(self, options: dict[str, object]) -> None:
+                self.options = options
+
+            def __enter__(self) -> FakeYoutubeDL:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def extract_info(
+                self, lookup: str, download: bool = False
+            ) -> dict[str, object]:
+                self.lookup = lookup
+                self.download = download
+                return {
+                    "title": "Creep",
+                    "url": "https://example.test/audio",
+                    "webpage_url": "https://youtube.test/watch?v=1",
+                    "acodec": "opus",
+                    "http_headers": {"User-Agent": "yt-dlp", "Accept": "*/*"},
+                }
+
+        fake_module = types.ModuleType("yt_dlp")
+        fake_module.YoutubeDL = FakeYoutubeDL  # type: ignore[attr-defined]
+        with patch.dict(sys.modules, {"yt_dlp": fake_module}):
+            track = await resolve_music("radiohead creep")
+
+        self.assertEqual(track["title"], "Creep")
+        self.assertEqual(track["url"], "https://example.test/audio")
+        self.assertEqual(track["acodec"], "opus")
+        self.assertEqual(
+            track["http_headers"],
+            {"User-Agent": "yt-dlp", "Accept": "*/*"},
+        )
+
+    async def test_connect_self_deafens(self) -> None:
+        voice = SimpleNamespace(channel=SimpleNamespace(id=7), guild=None)
+        channel = SimpleNamespace(
+            id=7,
+            guild=SimpleNamespace(),
+            connect=AsyncMock(return_value=voice),
+        )
+        guild = SimpleNamespace(voice_client=None, me=None)
+        message = SimpleNamespace(
+            author=SimpleNamespace(voice=SimpleNamespace(channel=channel)),
+            guild=guild,
+        )
+
+        client, error = await _connect_to_author(message, None)
+
+        self.assertIs(client, voice)
+        self.assertIsNone(error)
+        channel.connect.assert_awaited_once_with(self_deaf=True)
 
 
 if __name__ == "__main__":

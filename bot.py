@@ -19,7 +19,6 @@ from PIL import Image
 from ask import (
     HOST_DEFAULT_MODELS,
     MAX_ATTACHMENTS,
-    MAX_DEBATE_TOPIC_CHARS,
     PERSONAS,
     ask,
     host_default_model,
@@ -43,31 +42,27 @@ log = logging.getLogger("owaua")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip().replace("\\_", "_")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 MEMORY_DB = ROOT / "data" / "memory.sqlite3"
-ACTIVE_RESPONSE_INTERVAL = 6
-RATE_LIMIT_REQUESTS = 25
-RATE_LIMIT_WINDOW = 45.0
+RATE_LIMIT_REQUESTS = 8
+RATE_LIMIT_WINDOW = 60.0
 COMMAND_COOLDOWN = 25.0
 COOLDOWN_EXEMPT_USER_IDS = frozenset({1172433512364769342})
 COMMANDS = frozenset(
     {
         "!help",
-        "!active",
         "!persona",
         "!language",
         "!music",
-        "!debate",
         "!memory",
     }
 )
 DISCORD_MESSAGE_LIMIT = 1900
+ASK_TIMEOUT = 40.0
 
 HELP_TEXT = """**Owaua commands**
 `!help` — show this command list
 `!owner's note` — a note from the bot's owner
-`!active on|off|status` — reply to every 6th channel message
 `!persona rudeish|nerdish|explicit|host default gpt/deepseek/mistral` — view or switch persona (explicit: age-restricted channels only)
 `!language <full name>|reset` — this server's reply language (and matching picture and banner); reset restores English and the original look
-`!debate <topic>|off|status` — lock a topic (waits for ping/reply); GPT-5.6 Terra; skips persona
 `!music help` — play a song in your voice channel
 `!memory erase` — erase server memory (Manage Server required)
 
@@ -302,27 +297,6 @@ def language_scope_key(message: object) -> str:
     return f"dm:{getattr(message.channel, 'id', '')}"
 
 
-def debate_scope_key(message: object) -> str:
-    return f"debate_topic:{getattr(getattr(message, 'channel', None), 'id', '')}"
-
-
-def debate_starter_key(message: object) -> str:
-    return f"debate_starter:{getattr(getattr(message, 'channel', None), 'id', '')}"
-
-
-def referenced_message_id(message: object) -> int | None:
-    reference = getattr(message, "reference", None)
-    message_id = getattr(reference, "message_id", None)
-    return message_id if isinstance(message_id, int) else None
-
-
-def referenced_author_id(message: object) -> int | None:
-    reference = getattr(message, "reference", None)
-    resolved = getattr(reference, "resolved", None)
-    author_id = getattr(getattr(resolved, "author", None), "id", None)
-    return author_id if isinstance(author_id, int) else None
-
-
 def split_reply(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
     remaining = text.strip()
     if not remaining:
@@ -403,10 +377,8 @@ class PersonaBot(discord.Client):
         )
         self.rate_windows: defaultdict[int, deque[float]] = defaultdict(deque)
         self.command_used: dict[tuple[int, str], float] = {}
-        self.music_tracks: dict[int, dict[str, str]] = {}
+        self.music_tracks: dict[int, dict[str, object]] = {}
         self.response_languages: dict[str, str] = {}
-        self.debate_topics: dict[str, str] = {}
-        self.debate_starters: dict[str, str] = {}
         saved = self.memory.get_setting("selected_persona", "")
         if not valid_persona(saved):
             legacy = self.memory.get_setting("selected_persona_model", "")
@@ -432,44 +404,6 @@ class PersonaBot(discord.Client):
         scope_key = language_scope_key(message)
         self.response_languages[scope_key] = language
         self.memory.set_setting(f"response_language:{scope_key}", language)
-
-    def debate_topic_for(self, message: object) -> str:
-        scope_key = debate_scope_key(message)
-        if scope_key in self.debate_topics:
-            return self.debate_topics[scope_key]
-        topic = self.memory.get_setting(scope_key, "")
-        self.debate_topics[scope_key] = topic
-        return topic
-
-    def set_debate_topic(
-        self, message: object, topic: str, *, starter_id: str = ""
-    ) -> None:
-        scope_key = debate_scope_key(message)
-        starter_key = debate_starter_key(message)
-        self.debate_topics[scope_key] = topic
-        self.debate_starters[starter_key] = starter_id
-        self.memory.set_setting(scope_key, topic)
-        self.memory.set_setting(starter_key, starter_id)
-
-    def debate_starter_for(self, message: object) -> str:
-        starter_key = debate_starter_key(message)
-        if starter_key in self.debate_starters:
-            return self.debate_starters[starter_key]
-        starter = self.memory.get_setting(starter_key, "")
-        self.debate_starters[starter_key] = starter
-        return starter
-
-    def is_debate_trigger(self, message: object, *, mentioned: bool) -> bool:
-        if mentioned:
-            return True
-        starter = self.debate_starter_for(message)
-        ref_id = referenced_message_id(message)
-        if starter and ref_id is not None and str(ref_id) == starter:
-            return True
-        bot_user = self.user
-        return (
-            bot_user is not None and referenced_author_id(message) == bot_user.id
-        )
 
     def persona_for(self, channel: object) -> str:
         if self.selected_persona != "explicit" or age_restricted_channel(channel):
@@ -534,9 +468,6 @@ class PersonaBot(discord.Client):
         if is_owner_note_command(text):
             await self._reply(message, OWNER_NOTE_TEXT)
             return
-        if name == "!active":
-            await self._reply(message, await self._active_command(message, argument))
-            return
         if name == "!persona":
             await self._reply(message, self._persona_command(message, argument))
             return
@@ -550,33 +481,14 @@ class PersonaBot(discord.Client):
                 message, await handle_music_command(self, message, argument)
             )
             return
-        if name == "!debate":
-            await self._debate_command(message, argument)
-            return
         if name == "!memory":
             await self._reply(message, await self._memory_command(message, argument))
             return
 
         is_dm = message.guild is None
         mentioned = self.user is not None and self.user in message.mentions
-        debate_topic = self.debate_topic_for(message)
-        if debate_topic:
-            if not (is_dm or self.is_debate_trigger(message, mentioned=mentioned)):
-                return
-        else:
-            active_turn = False
-            if not is_dm and not text.startswith("!"):
-                enabled, _ = await asyncio.to_thread(
-                    self.memory.active_mode_status, str(message.channel.id)
-                )
-                if enabled:
-                    active_turn = await asyncio.to_thread(
-                        self.memory.record_active_message,
-                        str(message.channel.id),
-                        interval=ACTIVE_RESPONSE_INTERVAL,
-                    )
-            if not (is_dm or mentioned or active_turn):
-                return
+        if not (is_dm or mentioned):
+            return
 
         prompt = message.content
         if self.user is not None:
@@ -594,11 +506,7 @@ class PersonaBot(discord.Client):
         if looks_like_decode_request(prompt) or looks_like_repeat_request(prompt):
             image_urls = []
         if not prompt and not image_urls:
-            prompt = (
-                f"Debate this topic fully: {debate_topic}"
-                if debate_topic
-                else "Hello."
-            )
+            return
 
         admitted, retry_after = self.admit_request(message.author.id)
         if not admitted:
@@ -611,21 +519,25 @@ class PersonaBot(discord.Client):
         try:
             async with self.conversation_locks[key]:
                 async with message.channel.typing():
-                    answer = await ask(
-                        self.provider_http,
-                        self.memory,
-                        event_id=str(message.id),
-                        scope_id=scope_id,
-                        user_id=user_id,
-                        server_id=(
-                            str(message.guild.id) if message.guild is not None else ""
+                    answer = await asyncio.wait_for(
+                        ask(
+                            self.provider_http,
+                            self.memory,
+                            event_id=str(message.id),
+                            scope_id=scope_id,
+                            user_id=user_id,
+                            server_id=(
+                                str(message.guild.id)
+                                if message.guild is not None
+                                else ""
+                            ),
+                            prompt=prompt,
+                            image_urls=image_urls,
+                            persona=self.persona_for(message.channel),
+                            language=self.response_language(message),
+                            created_at=message.created_at.timestamp(),
                         ),
-                        prompt=prompt,
-                        image_urls=image_urls,
-                        persona=self.persona_for(message.channel),
-                        language=self.response_language(message),
-                        created_at=message.created_at.timestamp(),
-                        debate_topic=debate_topic or None,
+                        timeout=ASK_TIMEOUT,
                     )
             if not answer:
                 return
@@ -635,55 +547,6 @@ class PersonaBot(discord.Client):
         except Exception:
             log.exception("AI reply failed in channel %s", message.channel.id)
             await self._reply(message, "I couldn't reach the AI provider just now.")
-
-    async def _active_command(self, message: discord.Message, argument: str) -> str:
-        if message.guild is None:
-            return "!active only works in a server channel"
-        scope_id = str(message.channel.id)
-        action = argument.casefold()
-        if action == "on":
-            await asyncio.to_thread(self.memory.set_active_mode, scope_id, True)
-            return "active mode on — I’ll respond to every 6th message in this channel"
-        if action == "off":
-            await asyncio.to_thread(self.memory.set_active_mode, scope_id, False)
-            return "active mode off in this channel"
-        if not action or action == "status":
-            enabled, count = await asyncio.to_thread(
-                self.memory.active_mode_status, scope_id
-            )
-            if enabled:
-                remaining = ACTIVE_RESPONSE_INTERVAL - count
-                return (
-                    "active mode is on — next automatic response in "
-                    f"{remaining} message{'s' if remaining != 1 else ''}"
-                )
-            return "active mode is off in this channel"
-        return "usage: !active on | !active off | !active status"
-
-    async def _debate_command(
-        self, message: discord.Message, argument: str
-    ) -> None:
-        action = argument.casefold()
-        if not argument or action == "status":
-            topic = self.debate_topic_for(message)
-            if topic:
-                await self._reply(message, f"debate is on — topic: {topic}")
-            else:
-                await self._reply(message, "debate is off in this channel")
-            return
-        if action in {"off", "stop"}:
-            self.set_debate_topic(message, "")
-            await self._reply(message, "debate off — persona replies are back")
-            return
-        topic = " ".join(argument.split())
-        if len(topic) > MAX_DEBATE_TOPIC_CHARS:
-            await self._reply(
-                message,
-                f"topic is too long; keep it under {MAX_DEBATE_TOPIC_CHARS} characters",
-            )
-            return
-        self.set_debate_topic(message, topic, starter_id=str(message.id))
-        await self._reply(message, f"debate is on — topic: {topic}")
 
     def _persona_command(self, message: discord.Message, requested: str) -> str:
         if not requested.strip():
