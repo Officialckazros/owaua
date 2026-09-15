@@ -17,27 +17,33 @@ from dotenv import load_dotenv
 from PIL import Image
 
 from ask import (
+    FULL_MODE_MAX_ATTACHMENTS,
     HOST_DEFAULT_MODELS,
     MAX_ATTACHMENTS,
     PERSONAS,
     ask,
-    host_default_model,
     host_default_persona,
     host_model_error,
     looks_like_decode_request,
     looks_like_repeat_request,
     persona_label,
+    persona_provider,
     sanitize_user_text,
+    truncate,
     valid_persona,
 )
 from memory import MemoryStore
-from music import handle_music_command
+from security import (OWNER_IDS, BLOCKED_USERS, ALLOWED_GUILDS, ALLOW_DMS,
+                      MAX_INFLIGHT, MAX_INPUT_CHARS, MAX_REPLY_CHARS, MAX_TRACKED_USERS)
+from music import abandon_music_if_needed, handle_music_command
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("owaua")
+# CDN URLs can contain bearer-like query signatures. Do not log request URLs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip().replace("\\_", "_")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
@@ -53,18 +59,42 @@ COMMANDS = frozenset(
         "!language",
         "!music",
         "!memory",
+        "!security",
     }
 )
 DISCORD_MESSAGE_LIMIT = 1900
 ASK_TIMEOUT = 40.0
+FULL_MODE_ASK_TIMEOUT = 600.0
+HANDLER_TIMEOUT = 140.0
+FULL_MODE_HANDLER_TIMEOUT = 620.0
+MAX_HANDLERS = 16
+FULL_MODE_GUILD_ID = 1535083112709496903
+FULL_MODE_CHANNEL_ID = 1535083114219700227
+FULL_MODE_BLOCKED_USER_IDS = frozenset({470617205667790868})
+FULL_MODE_ENABLE_USER_IDS = frozenset({1172433512364769342})
+FULL_MODE_ALLOWED_USER_IDS = frozenset(
+    {
+        1172433512364769342,
+        836988339491962881,
+        1121021729649737813,
+        1124004905292664985,
+        1511064708764139536,
+        932956672815689758,
+        1439254983219482625,
+        1391094791210536970,
+    }
+)
+FULL_MODE_USAGE = "usage: !full mode on"
 
 HELP_TEXT = """**Owaua commands**
 `!help` — show this command list
 `!owner's note` — a note from the bot's owner
-`!persona rudeish|nerdish|explicit|host default gpt/deepseek/mistral` — view or switch persona (explicit: age-restricted channels only)
-`!language <full name>|reset` — this server's reply language (and matching picture and banner); reset restores English and the original look
+`!persona rudeish|nerdish|explicit|host default gpt/deepseek/mistral` — view or switch this server's persona (Manage Server; explicit: age-restricted channels only)
+`!language <full name>|reset` — this server's reply language and profile (Manage Server)
 `!music help` — play a song in your voice channel
 `!memory erase` — erase server memory (Manage Server required)
+`!memory erase mine` — erase your own conversation history
+`!security status|pause|resume` — API usage and emergency pause (bot owner only)
 
 Each command has a 25s cooldown."""
 
@@ -97,6 +127,38 @@ def matched_command(text: str) -> str | None:
     if name in COMMANDS:
         return name
     return None
+
+
+def is_full_mode_command(content: str) -> bool:
+    """Match `!full` and `!full ...` after command_text normalization."""
+    normalized = " ".join(content.casefold().split())
+    return normalized == "!full" or normalized.startswith("!full ")
+
+
+def full_mode_location(message: object) -> bool:
+    """True only in the one guild/channel where full mode is allowed."""
+    guild = getattr(message, "guild", None)
+    channel = getattr(message, "channel", None)
+    return (
+        getattr(guild, "id", None) == FULL_MODE_GUILD_ID
+        and getattr(channel, "id", None) == FULL_MODE_CHANNEL_ID
+    )
+
+
+def full_mode_blocked(user_id: object) -> bool:
+    return user_id in FULL_MODE_BLOCKED_USER_IDS
+
+
+def full_mode_can_enable(user_id: object) -> bool:
+    return user_id in FULL_MODE_ENABLE_USER_IDS or full_mode_allowed(user_id)
+
+
+def full_mode_allowed(user_id: object) -> bool:
+    return user_id in FULL_MODE_ALLOWED_USER_IDS and not full_mode_blocked(user_id)
+
+
+def full_mode_setting_key(user_id: object) -> str:
+    return f"full_mode:{user_id}"
 
 
 PERSONA_USAGE = (
@@ -213,6 +275,8 @@ def looks_like_image(data: bytes) -> bool:
 
 def read_image_bytes(path: Path) -> bytes | None:
     try:
+        if path.stat().st_size > MAX_PROFILE_IMAGE_BYTES:
+            return None
         data = path.read_bytes()
     except OSError:
         log.exception("Could not read profile image %s", path)
@@ -247,7 +311,9 @@ def prepare_avatar_bytes(data: bytes) -> bytes | None:
     if data.startswith((b"GIF87a", b"GIF89a")) and len(data) <= MAX_PROFILE_IMAGE_BYTES:
         return data
     try:
-        with Image.open(io.BytesIO(data)) as image:
+        with Image.open(io.BytesIO(data), formats=["PNG", "JPEG", "GIF", "WEBP"]) as image:
+            if image.width * image.height > 16000000:
+                return None
             image.load()
             square = _cover_resize(image.convert("RGB"), (AVATAR_SIZE, AVATAR_SIZE))
             for quality in (90, 80, 65):
@@ -262,7 +328,9 @@ def prepare_avatar_bytes(data: bytes) -> bytes | None:
 
 def prepare_banner_bytes(data: bytes) -> bytes | None:
     try:
-        with Image.open(io.BytesIO(data)) as image:
+        with Image.open(io.BytesIO(data), formats=["PNG", "JPEG", "GIF", "WEBP"]) as image:
+            if image.width * image.height > 16000000:
+                return None
             image.load()
             banner = _cover_resize(image.convert("RGB"), BANNER_SIZE)
             for quality in (90, 80, 65):
@@ -315,6 +383,33 @@ def split_reply(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
     return chunks
 
 
+def referenced_message_context(
+    message: object, bot_user_id: int | None = None, *, unbounded: bool = False
+) -> str:
+    """Quote the Discord message this one is a reply to, if it is cached."""
+    reference = getattr(message, "reference", None)
+    resolved = getattr(reference, "resolved", None)
+    raw = getattr(resolved, "content", None)
+    if not isinstance(raw, str):
+        return ""
+    if bot_user_id is not None:
+        raw = raw.replace(f"<@{bot_user_id}>", " ").replace(
+            f"<@!{bot_user_id}>", " "
+        )
+    quoted = sanitize_user_text(raw).strip()
+    if not quoted:
+        return ""
+    if not unbounded:
+        quoted = truncate(quoted)
+    author = getattr(resolved, "author", None)
+    speaker = (
+        "you"
+        if bot_user_id is not None and getattr(author, "id", None) == bot_user_id
+        else "someone"
+    )
+    return f"(replying to {speaker}: {quoted})"
+
+
 def command_text(content: str, bot_user_id: int | None = None) -> str:
     """Normalize a message so prefix commands still match after a ping."""
     text = content.replace("！", "!").strip()
@@ -343,6 +438,7 @@ class MessageEventGuard:
 
     def __init__(self, *, ttl: float = 900.0) -> None:
         self.ttl = ttl
+        self.capacity = 4096
         self._seen: dict[int, float] = {}
 
     def claim(self, message_id: int, *, now: float | None = None) -> bool:
@@ -355,6 +451,8 @@ class MessageEventGuard:
         for event_id in expired:
             self._seen.pop(event_id, None)
         if message_id in self._seen:
+            return False
+        if len(self._seen) >= self.capacity:
             return False
         self._seen[message_id] = current
         return True
@@ -369,7 +467,9 @@ class PersonaBot(discord.Client):
         )
         self.memory = MemoryStore(MEMORY_DB)
         self.provider_http = httpx.AsyncClient(
-            timeout=httpx.Timeout(60.0, connect=4.0)
+            timeout=httpx.Timeout(60.0, connect=4.0),
+            trust_env=False, follow_redirects=False,
+            limits=httpx.Limits(max_connections=16)
         )
         self.message_events = MessageEventGuard()
         self.conversation_locks: defaultdict[tuple[str, str], asyncio.Lock] = (
@@ -379,15 +479,11 @@ class PersonaBot(discord.Client):
         self.command_used: dict[tuple[int, str], float] = {}
         self.music_tracks: dict[int, dict[str, object]] = {}
         self.response_languages: dict[str, str] = {}
-        saved = self.memory.get_setting("selected_persona", "")
-        if not valid_persona(saved):
-            legacy = self.memory.get_setting("selected_persona_model", "")
-            saved = {
-                "gpt": "rudeish",
-                "deepseek": "nerdish",
-                "mistral": "explicit",
-            }.get(legacy, "rudeish")
-        self.selected_persona = saved
+        # Legacy global state was writable by arbitrary users: do not migrate it.
+        self.selected_persona = "rudeish"
+        self.inflight_users: set[int] = set()
+        self.handler_count = 0
+        self.full_mode_users: set[int] = set()
 
     def response_language(self, message: object) -> str:
         scope_key = language_scope_key(message)
@@ -397,23 +493,68 @@ class PersonaBot(discord.Client):
         language = self.memory.get_setting(
             f"response_language:{scope_key}", "English"
         )
+        if len(self.response_languages) >= MAX_TRACKED_USERS:
+            self.response_languages.clear()
         self.response_languages[scope_key] = language
         return language
 
     def set_response_language(self, message: object, language: str) -> None:
         scope_key = language_scope_key(message)
+        if len(self.response_languages) >= MAX_TRACKED_USERS:
+            self.response_languages.clear()
         self.response_languages[scope_key] = language
         self.memory.set_setting(f"response_language:{scope_key}", language)
 
-    def persona_for(self, channel: object) -> str:
-        if self.selected_persona != "explicit" or age_restricted_channel(channel):
-            return self.selected_persona
-        return "rudeish"
+    def persona_for(self, channel: object, message: object | None = None) -> str:
+        selected = self.selected_persona
+        if message is not None:
+            selected = self.memory.get_setting(f"persona:{language_scope_key(message)}", "rudeish")
+            if not valid_persona(selected):
+                selected = "rudeish"
+        if selected == "explicit" and not age_restricted_channel(channel):
+            return "rudeish"
+        return selected
+
+    @staticmethod
+    def can_manage_settings(message: object) -> bool:
+        if getattr(message, "guild", None) is None:
+            return True
+        permissions = getattr(message.author, "guild_permissions", None)
+        return bool(getattr(permissions, "manage_guild", False))
+
+    def full_mode_enabled_for(self, user_id: object) -> bool:
+        try:
+            parsed = int(user_id)
+        except (TypeError, ValueError):
+            return False
+        if parsed in self.full_mode_users:
+            return True
+        if self.memory.get_setting(full_mode_setting_key(parsed), "") != "1":
+            return False
+        self.full_mode_users.add(parsed)
+        return True
+
+    def set_full_mode_for(self, user_id: int, enabled: bool) -> None:
+        if enabled:
+            self.full_mode_users.add(user_id)
+            self.memory.set_setting(full_mode_setting_key(user_id), "1")
+            return
+        self.full_mode_users.discard(user_id)
+        self.memory.set_setting(full_mode_setting_key(user_id), "0")
+
+    def full_mode_active(self, message: object) -> bool:
+        if not full_mode_location(message):
+            return False
+        author = getattr(message, "author", None)
+        user_id = getattr(author, "id", None)
+        return full_mode_allowed(user_id) and self.full_mode_enabled_for(user_id)
 
     def admit_request(self, user_id: int) -> tuple[bool, int]:
-        if user_id in COOLDOWN_EXEMPT_USER_IDS:
-            return True, 0
         now = time.monotonic()
+        if user_id not in self.rate_windows and len(self.rate_windows) >= MAX_TRACKED_USERS:
+            self.rate_windows = defaultdict(deque, {key: value for key, value in self.rate_windows.items() if value and now-value[-1] < RATE_LIMIT_WINDOW})
+            if len(self.rate_windows) >= MAX_TRACKED_USERS:
+                return False, 60
         window = self.rate_windows[user_id]
         while window and now - window[0] >= RATE_LIMIT_WINDOW:
             window.popleft()
@@ -426,8 +567,6 @@ class PersonaBot(discord.Client):
     def admit_command(
         self, user_id: int, command: str, *, now: float | None = None
     ) -> tuple[bool, int]:
-        if user_id in COOLDOWN_EXEMPT_USER_IDS:
-            return True, 0
         current = time.monotonic() if now is None else now
         key = (user_id, command)
         last = self.command_used.get(key)
@@ -436,17 +575,70 @@ class PersonaBot(discord.Client):
             if elapsed < COMMAND_COOLDOWN:
                 retry_after = max(1, int(COMMAND_COOLDOWN - elapsed + 0.999))
                 return False, retry_after
+        if len(self.command_used) >= MAX_TRACKED_USERS:
+            self.command_used = {key: value for key, value in self.command_used.items() if current-value < COMMAND_COOLDOWN}
+            if len(self.command_used) >= MAX_TRACKED_USERS:
+                return False, 25
         self.command_used[key] = current
         return True, 0
 
     async def on_ready(self) -> None:
         log.info("Logged in as %s; persona=%s", self.user, self.selected_persona)
 
+    async def setup_hook(self) -> None:
+        self.maintenance_task = asyncio.create_task(self._maintain_memory())
+
+    async def _maintain_memory(self) -> None:
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                await asyncio.to_thread(self.memory.prune)
+            except Exception:
+                log.warning("Memory maintenance failed")
+
+    async def on_voice_state_update(
+        self,
+        member: discord.Member,
+        before: discord.VoiceState,
+        after: discord.VoiceState,
+    ) -> None:
+        await abandon_music_if_needed(self, member, before, after)
+
     async def on_message(self, message: discord.Message) -> None:
-        if message.author.bot:
+        if message.author.bot or getattr(message, "webhook_id", None):
             return
-        if not self.message_events.claim(message.id):
-            log.info("Ignoring redelivered Discord event %s", message.id)
+        personal_erasure = command_text(message.content, None if self.user is None else self.user.id).casefold() == "!memory erase mine"
+        if message.author.id in BLOCKED_USERS and not personal_erasure:
+            return
+        if message.guild is None and not ALLOW_DMS and message.author.id not in OWNER_IDS and not personal_erasure:
+            return
+        if message.guild is not None and ALLOWED_GUILDS and message.guild.id not in ALLOWED_GUILDS:
+            return
+        unlimited = self.full_mode_active(message)
+        if not unlimited and len(message.content) > MAX_INPUT_CHARS:
+            return
+        normalized = command_text(message.content, None if self.user is None else self.user.id)
+        if (message.guild is not None and matched_command(normalized) is None
+                and not (full_mode_location(message) and is_full_mode_command(normalized))
+                and not (self.user is not None and self.user in message.mentions)):
+            return
+        # Bound complete event handlers, including outbound Discord API waits.
+        count = getattr(self, "handler_count", 0)
+        if not unlimited and count >= MAX_HANDLERS:
+            return
+        self.handler_count = count + 1
+        try:
+            await asyncio.wait_for(
+                self._handle_message(message),
+                timeout=FULL_MODE_HANDLER_TIMEOUT if unlimited else HANDLER_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            log.warning("Message handler exceeded deadline")
+        finally:
+            self.handler_count -= 1
+
+    async def _handle_message(self, message: discord.Message) -> None:
+        if message.author.bot:
             return
 
         text = command_text(
@@ -456,17 +648,37 @@ class PersonaBot(discord.Client):
         name = parts[0].lower() if parts else ""
         argument = parts[1].strip() if len(parts) == 2 else ""
         command = matched_command(text)
+        if (
+            command is None
+            and full_mode_location(message)
+            and is_full_mode_command(text)
+        ):
+            command = "!full"
+        unlimited = self.full_mode_active(message)
         if command is not None:
-            admitted, retry_after = self.admit_command(message.author.id, command)
-            if not admitted:
-                await self._reply(message, f"slow down try again in {retry_after}s")
+            if not unlimited:
+                admitted, retry_after = self.admit_command(message.author.id, command)
+                if not admitted:
+                    await self._reply(message, f"slow down try again in {retry_after}s")
+                    return
+            if not self.message_events.claim(message.id):
                 return
 
+        if name == "!security":
+            if message.author.id not in OWNER_IDS:
+                return
+            if argument.casefold() in {"pause", "resume"}:
+                self.memory.set_setting("api_paused", "1" if argument.casefold() == "pause" else "0")
+            await self._reply(message, self.memory.api_status() + "; paused=" + self.memory.get_setting("api_paused", "0"))
+            return
         if name == "!help":
             await self._reply(message, HELP_TEXT)
             return
         if is_owner_note_command(text):
             await self._reply(message, OWNER_NOTE_TEXT)
+            return
+        if command == "!full":
+            await self._reply(message, self._full_mode_command(message, argument))
             return
         if name == "!persona":
             await self._reply(message, self._persona_command(message, argument))
@@ -498,78 +710,129 @@ class PersonaBot(discord.Client):
                 .strip()
             )
         prompt = sanitize_user_text(prompt).strip()
+        full_mode = unlimited
+        attachment_limit = FULL_MODE_MAX_ATTACHMENTS if full_mode else MAX_ATTACHMENTS
         image_urls = [
             url
-            for attachment in message.attachments[:MAX_ATTACHMENTS]
+            for attachment in message.attachments[:attachment_limit]
             if (url := image_url(attachment))
         ]
-        if looks_like_decode_request(prompt) or looks_like_repeat_request(prompt):
+        relaxed_guardrails = full_mode
+        decode_now = not relaxed_guardrails and looks_like_decode_request(prompt)
+        repeat_now = not relaxed_guardrails and looks_like_repeat_request(prompt)
+        use_history = full_mode
+        if decode_now or repeat_now:
             image_urls = []
+        elif prompt or image_urls:
+            quoted = referenced_message_context(
+                message,
+                None if self.user is None else self.user.id,
+                unbounded=full_mode,
+            )
+            if quoted:
+                prompt = f"{quoted}\n{prompt}".strip()
+                use_history = True
         if not prompt and not image_urls:
             return
 
-        admitted, retry_after = self.admit_request(message.author.id)
-        if not admitted:
-            await self._reply(message, f"slow down try again in {retry_after}s")
+        if not full_mode:
+            admitted, retry_after = self.admit_request(message.author.id)
+            if not admitted:
+                await self._reply(message, f"slow down try again in {retry_after}s")
+                return
+        if not self.message_events.claim(message.id):
             return
 
         scope_id = str(message.channel.id)
         user_id = str(message.author.id)
-        key = (scope_id, user_id)
+        inflight = getattr(self, "inflight_users", None)
+        if inflight is None:
+            self.inflight_users = inflight = set()
+        occupies_slot = not full_mode
+        if occupies_slot:
+            if message.author.id in inflight or len(inflight) >= MAX_INFLIGHT:
+                return
+            inflight.add(message.author.id)
         try:
-            async with self.conversation_locks[key]:
-                async with message.channel.typing():
-                    answer = await asyncio.wait_for(
-                        ask(
-                            self.provider_http,
-                            self.memory,
-                            event_id=str(message.id),
-                            scope_id=scope_id,
-                            user_id=user_id,
-                            server_id=(
-                                str(message.guild.id)
-                                if message.guild is not None
-                                else ""
-                            ),
-                            prompt=prompt,
-                            image_urls=image_urls,
-                            persona=self.persona_for(message.channel),
-                            language=self.response_language(message),
-                            created_at=message.created_at.timestamp(),
+            async with message.channel.typing():
+                answer = await asyncio.wait_for(
+                    ask(
+                        self.provider_http,
+                        self.memory,
+                        event_id=str(message.id),
+                        scope_id=scope_id,
+                        user_id=user_id,
+                        server_id=(
+                            str(message.guild.id)
+                            if message.guild is not None
+                            else ""
                         ),
-                        timeout=ASK_TIMEOUT,
-                    )
+                        prompt=prompt,
+                        image_urls=image_urls,
+                        persona=self.persona_for(message.channel, message),
+                        language=self.response_language(message),
+                        created_at=message.created_at.timestamp(),
+                        full_mode=full_mode,
+                        use_history=use_history,
+                        relaxed_guardrails=relaxed_guardrails,
+                    ),
+                    timeout=FULL_MODE_ASK_TIMEOUT if full_mode else ASK_TIMEOUT,
+                )
             if not answer:
                 return
-            await self._reply(message, answer)
+            await self._reply(message, answer, unlimited=full_mode)
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.exception("AI reply failed in channel %s", message.channel.id)
+            log.warning("AI reply failed in channel %s", message.channel.id)
             await self._reply(message, "I couldn't reach the AI provider just now.")
+        finally:
+            if occupies_slot:
+                inflight.discard(message.author.id)
+
+    def _full_mode_command(self, message: discord.Message, requested: str) -> str:
+        user_id = message.author.id
+        if full_mode_blocked(user_id) or not full_mode_can_enable(user_id):
+            return "you can't use this"
+        text = " ".join(requested.casefold().split())
+        if text in {"", "mode"}:
+            return (
+                "full mode on"
+                if self.full_mode_enabled_for(user_id)
+                else "full mode off"
+            )
+        if text == "mode on":
+            problem = host_model_error("gpt")
+            if problem is not None:
+                return problem
+            self.set_full_mode_for(user_id, True)
+            return "full mode on"
+        if text == "mode off":
+            self.set_full_mode_for(user_id, False)
+            return "full mode off"
+        return FULL_MODE_USAGE
 
     def _persona_command(self, message: discord.Message, requested: str) -> str:
         if not requested.strip():
-            current = self.persona_for(message.channel)
+            current = self.persona_for(message.channel, message)
             if self.selected_persona == "explicit" and current != "explicit":
                 return (
                     f"persona: {persona_label(current)} "
                     "(explicit only works in age-restricted channels)"
                 )
             return f"persona: {persona_label(current)}"
+        if not self.can_manage_settings(message):
+            return "you need the Manage Server permission to change server settings"
         persona, error = parse_persona_argument(requested)
         if error is not None:
             return error
         assert persona is not None
         if persona == "explicit" and not age_restricted_channel(message.channel):
             return "explicit only works in age-restricted channels"
-        alias = host_default_model(persona)
-        if alias is not None:
-            problem = host_model_error(alias)
-            if problem is not None:
-                return problem
-        self.selected_persona = persona
-        self.memory.set_setting("selected_persona", persona)
+        problem = host_model_error(persona_provider(persona))
+        if problem is not None:
+            return problem
+        self.memory.set_setting(f"persona:{language_scope_key(message)}", persona)
         return f"persona: {persona_label(persona)}"
 
     async def _bot_member(self, guild: discord.Guild) -> object | None:
@@ -657,6 +920,8 @@ class PersonaBot(discord.Client):
     async def _language_command(self, message: discord.Message, argument: str) -> str:
         if not argument:
             return f"language: {self.response_language(message)}"
+        if not self.can_manage_settings(message):
+            return "you need the Manage Server permission to change server settings"
         if argument.casefold() == "reset":
             return await self._reset_language(message)
         language, error = parse_language_name(argument)
@@ -685,6 +950,8 @@ class PersonaBot(discord.Client):
         )
 
     async def _reset_language(self, message: discord.Message) -> str:
+        if not self.can_manage_settings(message):
+            return "you need the Manage Server permission to change server settings"
         self.set_response_language(message, "English")
         if message.guild is None:
             return "language reset to English; I’ll reply in it from now on"
@@ -703,6 +970,9 @@ class PersonaBot(discord.Client):
         )
 
     async def _memory_command(self, message: discord.Message, argument: str) -> str:
+        if argument.casefold() == "erase mine":
+            await asyncio.to_thread(self.memory.erase_user_memory, str(message.author.id))
+            return "your conversation memory has been erased; usage counters remain"
         if message.guild is None:
             return "!memory erase only works in a server"
         if argument.casefold() != "erase":
@@ -717,8 +987,11 @@ class PersonaBot(discord.Client):
         )
         return "server memory fully erased for every user and channel"
 
-    async def _reply(self, message: discord.Message, content: str) -> None:
-        chunks = split_reply(content)
+    async def _reply(
+        self, message: discord.Message, content: str, *, unlimited: bool = False
+    ) -> None:
+        text = content if unlimited else content[:MAX_REPLY_CHARS]
+        chunks = split_reply(text)
         for index, chunk in enumerate(chunks):
             try:
                 await message.channel.send(
@@ -732,6 +1005,13 @@ class PersonaBot(discord.Client):
                 return
 
     async def close(self) -> None:
+        task = getattr(self, "maintenance_task", None)
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        for voice in self.voice_clients:
+            voice.stop()
+            await voice.disconnect(force=True)
         await self.provider_http.aclose()
         await super().close()
 

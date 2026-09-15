@@ -10,6 +10,13 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from security import API_LIMITS, ApiLimits, BudgetExceeded, DuplicateRequest
+
+MAX_STORED_CHARS = 5700
+MAX_STORED_MESSAGES = 10000
+CONVERSATION_MESSAGES = 20
+RETENTION_SECONDS = 7 * 86400
+
 
 class MemoryStore:
     """One short-lived connection per operation."""
@@ -17,6 +24,7 @@ class MemoryStore:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.path.parent, 0o700)
         self._lock = threading.RLock()
         self._initialize()
 
@@ -24,8 +32,11 @@ class MemoryStore:
         connection = sqlite3.connect(self.path, timeout=10)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA synchronous=NORMAL")
+        # A committed charge must survive a crash before the HTTP request.
+        connection.execute("PRAGMA synchronous=FULL")
         connection.execute("PRAGMA busy_timeout=10000")
+        connection.execute("PRAGMA max_page_count=32768")
+        connection.execute("PRAGMA secure_delete=ON")
         return connection
 
     @contextmanager
@@ -66,12 +77,106 @@ class MemoryStore:
                 );
                 CREATE INDEX IF NOT EXISTS messages_conversation_idx
                     ON messages(scope_id, user_id, id);
+                CREATE TABLE IF NOT EXISTS api_usage (
+                    event_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    guild_id TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS api_usage_time_idx ON api_usage(created_at);
+                CREATE TABLE IF NOT EXISTS api_totals (
+                    id INTEGER PRIMARY KEY CHECK(id = 1),
+                    requests INTEGER NOT NULL DEFAULT 0,
+                    last_time REAL NOT NULL DEFAULT 0
+                );
+                INSERT OR IGNORE INTO api_totals(id) VALUES (1);
                 """
             )
-        try:
-            os.chmod(self.path, 0o600)
-        except OSError:
-            pass
+        os.chmod(self.path, 0o600)
+        with self._lock, self._managed_connection() as db:
+            self._prune(db)
+
+    @staticmethod
+    def _prune(db: sqlite3.Connection) -> None:
+        db.execute("DELETE FROM messages WHERE created_at<?", (time.time()-RETENTION_SECONDS,))
+        db.execute("DELETE FROM messages WHERE id IN (SELECT id FROM messages ORDER BY id DESC LIMIT -1 OFFSET ?)", (MAX_STORED_MESSAGES,))
+        db.execute("UPDATE messages SET content=substr(content,1,?) WHERE length(content)>?", (MAX_STORED_CHARS, MAX_STORED_CHARS))
+        db.execute(
+            "DELETE FROM messages WHERE id IN (SELECT id FROM "
+            "(SELECT id, row_number() OVER (PARTITION BY scope_id,user_id ORDER BY id DESC) AS n FROM messages) WHERE n>?)",
+            (CONVERSATION_MESSAGES,),
+        )
+
+    @staticmethod
+    def _generation(db: sqlite3.Connection, user_id: str, server_id: str) -> tuple[str, str]:
+        values = []
+        for key in (f"memory_user_epoch:{user_id}", f"memory_server_epoch:{server_id}"):
+            row = db.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
+            values.append("0" if row is None else row[0])
+        return tuple(values)
+
+    def memory_generation(self, user_id: str, server_id: str) -> tuple[str, str]:
+        with self._lock, self._managed_connection() as db:
+            return self._generation(db, user_id, server_id)
+
+    @staticmethod
+    def _bump_generation(db: sqlite3.Connection, key: str) -> None:
+        db.execute("INSERT INTO app_settings(key,value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1", (key,))
+
+    def reserve_api_request(
+        self, event_id: str, user_id: str, guild_id: str,
+        *, limits: ApiLimits = API_LIMITS, now: float | None = None,
+        expected_generation: tuple[str, str] | None = None,
+        server_id: str = "",
+        exempt: bool = False,
+    ) -> None:
+        """Charge before sending, atomically across processes; never refund errors.
+
+        The lifetime counter survives rolling retention and memory erasure.
+        Time is monotonic in the ledger even after a system-clock rollback.
+        Allowlisted full mode is exempt from attempt ceilings so it cannot
+        exhaust the shared budget; pause and erasure fences still apply.
+        """
+        with self._lock, self._managed_connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if expected_generation is not None and self._generation(db, user_id, server_id) != expected_generation:
+                raise BudgetExceeded("This request was cancelled by memory erasure")
+            row = db.execute("SELECT value FROM app_settings WHERE key='api_paused'").fetchone()
+            if row is not None and row[0] == "1":
+                raise BudgetExceeded("AI requests are paused by the owner")
+            if db.execute("SELECT 1 FROM api_usage WHERE event_id=?", (event_id,)).fetchone():
+                raise DuplicateRequest("Already charged this event")
+            if exempt:
+                return
+            total = db.execute("SELECT requests, last_time FROM api_totals WHERE id=1").fetchone()
+            current = max(time.time() if now is None else now, total["last_time"])
+            # Rolling windows avoid a midnight burst doubling the daily budget.
+            rows = db.execute(
+                "SELECT user_id, guild_id, created_at FROM api_usage WHERE created_at>?",
+                (current - 86400,),
+            ).fetchall()
+            checks = (
+                (total["requests"], limits.lifetime),
+                (len(rows), limits.per_day),
+                (sum(r["created_at"] > current - 60 for r in rows), limits.per_minute),
+                (sum(r["user_id"] == user_id for r in rows), limits.per_user_day),
+                (sum(r["guild_id"] == guild_id for r in rows), limits.per_guild_day),
+            )
+            if any(used >= ceiling for used, ceiling in checks):
+                raise BudgetExceeded("AI request budget reached; try later or contact the owner")
+            db.execute("INSERT INTO api_usage VALUES (?, ?, ?, ?)", (event_id, user_id, guild_id, current))
+            db.execute("UPDATE api_totals SET requests=requests+1, last_time=? WHERE id=1", (current,))
+            db.execute("DELETE FROM api_usage WHERE created_at<?", (current - RETENTION_SECONDS,))
+
+    def api_status(self) -> str:
+        with self._lock, self._managed_connection() as db:
+            total = db.execute("SELECT requests FROM api_totals WHERE id=1").fetchone()[0]
+            daily = db.execute("SELECT count(*) FROM api_usage WHERE created_at>?", (time.time()-86400,)).fetchone()[0]
+        return f"API attempts: {daily}/{API_LIMITS.per_day} in 24h; {total}/{API_LIMITS.lifetime} lifetime"
+
+    def prune(self) -> None:
+        with self._lock, self._managed_connection() as db:
+            self._prune(db)
 
     def get_setting(self, key: str, default: str = "") -> str:
         with self._lock, self._managed_connection() as db:
@@ -100,8 +205,12 @@ class MemoryStore:
         content: str,
         server_id: str = "",
         created_at: float | None = None,
+        expected_generation: tuple[str, str] | None = None,
     ) -> bool:
         with self._lock, self._managed_connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if expected_generation is not None and self._generation(db, user_id, server_id) != expected_generation:
+                return False
             cursor = db.execute(
                 """
                 INSERT OR IGNORE INTO messages
@@ -114,16 +223,31 @@ class MemoryStore:
                     user_id,
                     server_id,
                     role,
-                    content,
+                    content[:MAX_STORED_CHARS],
                     time.time() if created_at is None else created_at,
                 ),
             )
-            return cursor.rowcount == 1
+            inserted = cursor.rowcount == 1
+            db.execute(
+                "DELETE FROM messages WHERE scope_id=? AND user_id=? AND id NOT IN "
+                "(SELECT id FROM messages WHERE scope_id=? AND user_id=? ORDER BY id DESC LIMIT ?)",
+                (scope_id, user_id, scope_id, user_id, CONVERSATION_MESSAGES),
+            )
+            db.execute("DELETE FROM messages WHERE created_at<?", (time.time()-RETENTION_SECONDS,))
+            db.execute("DELETE FROM messages WHERE id IN (SELECT id FROM messages ORDER BY id DESC LIMIT -1 OFFSET ?)", (MAX_STORED_MESSAGES,))
+            return inserted
+
+    def erase_user_memory(self, user_id: str) -> int:
+        with self._lock, self._managed_connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._bump_generation(db, f"memory_user_epoch:{user_id}")
+            return db.execute("DELETE FROM messages WHERE user_id=?", (user_id,)).rowcount
 
     def recent_messages(
         self, scope_id: str, user_id: str, *, limit: int
     ) -> list[dict[str, object]]:
         with self._lock, self._managed_connection() as db:
+            db.execute("DELETE FROM messages WHERE created_at<?", (time.time()-RETENTION_SECONDS,))
             rows = db.execute(
                 """
                 SELECT id, role, content, created_at
@@ -146,6 +270,8 @@ class MemoryStore:
 
     def erase_server_memory(self, server_id: str) -> int:
         with self._lock, self._managed_connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._bump_generation(db, f"memory_server_epoch:{server_id}")
             cursor = db.execute(
                 "DELETE FROM messages WHERE server_id = ?", (server_id,)
             )

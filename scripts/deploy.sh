@@ -46,11 +46,15 @@ required_runtime = {
     Path("ask.py"),
     Path("memory.py"),
     Path("music.py"),
+    Path("security.py"),
+    Path("music_worker.py"),
+    Path("media_exec.py"),
     Path("personas/rudeish.txt"),
     Path("personas/nerdish.txt"),
     Path("personas/explicit.txt"),
     Path("requirements.txt"),
     Path("scripts/run-bots.sh"),
+    Path("scripts/check-runtime.py"),
 }
 files = sorted(
     path
@@ -70,7 +74,7 @@ missing_runtime = required_runtime - relative_files
 if missing_runtime:
     raise RuntimeError(
         "Deployment is incomplete; missing required runtime file(s): "
-        + ", ".join(sorted(missing_runtime))
+        + ", ".join(sorted(map(str, missing_runtime)))
     )
 
 loader = importlib.machinery.SourceFileLoader("daki_deploy", str(deploy_path))
@@ -87,8 +91,14 @@ if state not in {"running", "offline", "starting"}:
     raise RuntimeError(
         f"Daki Bots server is {state}; deployment was not uploaded"
     )
-if state != "running":
-    print(f"Server is {state}; uploading, then starting")
+if state != "offline":
+    print("Stopping the bot before replacing runtime files...", flush=True)
+    client.request("POST", client.server_path("/power"), {"signal": "stop"})
+    deadline = time.monotonic() + 90
+    while client.state() != "offline":
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Bot did not stop; no runtime files were replaced")
+        time.sleep(2)
 
 for local_path in files:
     relative_path = local_path.relative_to(root).as_posix()
@@ -122,14 +132,14 @@ print("Uploaded persona-test-bot/.env (verified)")
 client.update_startup_variable("STARTUP_CMD", "")
 client.update_startup_variable(
     "SECOND_CMD",
-    "cd persona-test-bot && bash scripts/run-bots.sh",
+    "cd persona-test-bot && OWAUA_VERIFY_DEPLOY=1 bash scripts/run-bots.sh",
 )
 print(f"Restarting {config.get('server_name', config['server_id'])}...")
 client.restart()
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
     if client.state() == "running":
-        print("Deployment completed successfully.")
+        print("Container started. Verify OWAUA_RUNTIME_VERIFIED, OWAUA_DEPLOY_TESTS_PASSED and Discord readiness in its console before declaring deployment healthy.")
         break
     time.sleep(2)
 else:

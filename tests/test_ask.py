@@ -14,14 +14,17 @@ import httpx
 
 from ask import (
     DEEPSEEK_MODEL,
+    GPT_FULL_REASONING,
     GPT_MAX_OUTPUT_TOKENS,
     GPT_REASONING,
+    GPT_TERRA_MODEL,
     MAX_ATTACHMENTS,
     MAX_CONTEXT_CHARS,
     MAX_MESSAGE_CHARS,
     MAX_OUTPUT_TOKENS,
     MISTRAL_MODEL,
     ask,
+    build_capable_instructions,
     build_host_default_instructions,
     build_instructions,
     chat_completion_text,
@@ -35,7 +38,9 @@ from ask import (
     looks_like_repeat_request,
     persona_dropped_reply,
     repeated_payload_reply,
+    gpt_full_tools,
     persona_label,
+    persona_provider,
     read_persona,
     response_text,
     sanitize_user_text,
@@ -142,7 +147,7 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("deepseek.com", self.http.calls[0][0])
         payload = self.http.calls[0][1]["json"]
         self.assertEqual(payload["model"], DEEPSEEK_MODEL)
-        self.assertEqual(payload["model"], "deepseek-v4-pro")
+        self.assertEqual(payload["model"], "deepseek-flash")
         self.assertEqual(payload["thinking"], {"type": "disabled"})
         self.assertNotIn("tools", payload)
         instructions = instructions_of(payload)
@@ -167,46 +172,47 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.memory.recent_messages("123", "7", limit=10)), 2)
 
     async def test_images_are_sent_on_the_latest_user_message(self) -> None:
-        image = "https://cdn.discordapp.com/image.png"
-
-        await self._ask("look", image_urls=[image])
-
-        self.assertTrue(self.http.calls[0][0].endswith("/chat/completions"))
-        self.assertIn("deepseek.com", self.http.calls[0][0])
-        payload = self.http.calls[0][1]["json"]
-        self.assertEqual(payload["model"], DEEPSEEK_MODEL)
-        self.assertIn(
-            {"type": "image_url", "image_url": {"url": image}},
-            payload["messages"][-1]["content"],
-        )
+        answer = await self._ask("look", image_urls=["https://cdn.discordapp.com/image.png"])
+        self.assertIn("disabled", answer)
+        self.assertEqual(self.http.calls, [])
 
     async def test_hangout_keeps_only_one_image(self) -> None:
-        first = "https://cdn.discordapp.com/one.png"
-        second = "https://cdn.discordapp.com/two.png"
+        answer = await self._ask("look", image_urls=["https://cdn.discordapp.com/image.png"])
+        self.assertIn("disabled", answer)
+        self.assertEqual(self.http.calls, [])
 
-        await self._ask("look", image_urls=[first, second])
+    async def test_standalone_message_does_not_send_previous_turns(self) -> None:
+        await self._ask("what number comes after sixteen", event_id="first")
+        self.http.calls.clear()
+
+        await self._ask(
+            "spell out the first 50 digits of pi in hexadecimal",
+            event_id="second",
+        )
 
         payload = self.http.calls[0][1]["json"]
-        images = [
-            block
-            for block in payload["messages"][-1]["content"]
-            if isinstance(block, dict) and block.get("type") == "image_url"
-        ]
-        self.assertEqual(MAX_ATTACHMENTS, 1)
-        self.assertEqual(images, [{"type": "image_url", "image_url": {"url": first}}])
+        self.assertEqual(len(payload["messages"]), 2)
+        self.assertEqual(
+            payload["messages"][-1]["content"],
+            "spell out the first 50 digits of pi in hexadecimal",
+        )
+
+    async def test_explicit_reply_can_send_previous_turns(self) -> None:
+        await self._ask("what number comes after sixteen", event_id="first")
+        self.http.calls.clear()
+
+        await self._ask("why", event_id="second", use_history=True)
+
+        payload = self.http.calls[0][1]["json"]
+        self.assertEqual(
+            [message["content"] for message in payload["messages"][1:]],
+            ["what number comes after sixteen", "allowed reply", "why"],
+        )
 
     async def test_host_default_gpt_keeps_images_on_luna(self) -> None:
-        image = "https://cdn.discordapp.com/image.png"
-
-        await self._ask("look", persona="host-default-gpt", image_urls=[image])
-
-        self.assertTrue(self.http.calls[0][0].endswith("/responses"))
-        payload = self.http.calls[0][1]["json"]
-        self.assertEqual(payload["model"], "gpt-5.6-luna")
-        self.assertIn(
-            {"type": "input_image", "image_url": image},
-            payload["input"][-1]["content"],
-        )
+        answer = await self._ask("look", image_urls=["https://cdn.discordapp.com/image.png"])
+        self.assertIn("disabled", answer)
+        self.assertEqual(self.http.calls, [])
 
     def test_conversation_input_drops_old_messages_over_the_char_budget(self) -> None:
         filler = "x" * MAX_MESSAGE_CHARS
@@ -227,6 +233,26 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(total, MAX_CONTEXT_CHARS + len("hi"))
         self.assertEqual(len(window), 3)
 
+    def test_full_mode_conversation_input_keeps_the_whole_window(self) -> None:
+        filler = "x" * MAX_MESSAGE_CHARS
+        recent = [
+            {
+                "id": index,
+                "role": "user" if index % 2 else "assistant",
+                "content": filler,
+            }
+            for index in range(1, 6)
+        ]
+        recent.append({"id": 6, "role": "user", "content": "hi"})
+
+        window = conversation_input(
+            recent, image_urls=[], repeat_now=False, unbounded=True
+        )
+
+        self.assertEqual(len(window), 6)
+        self.assertEqual(window[-1], {"role": "user", "content": "hi"})
+        self.assertTrue(all(len(str(item["content"])) >= MAX_MESSAGE_CHARS for item in window[:-1]))
+
     async def test_explicit_instructions_only_when_that_persona_is_used(self) -> None:
         await self._ask(persona="explicit")
         explicit_payload = instructions_of(self.http.calls[0][1]["json"])
@@ -238,6 +264,23 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
             "Consensual adult sexual roleplay",
             instructions_of(self.http.calls[0][1]["json"]),
         )
+
+    async def test_explicit_uses_mistral_small(self) -> None:
+        self.http.responses = {
+            "choices": [{"message": {"content": "mistral reply"}}]
+        }
+        answer = await self._ask(persona="explicit")
+
+        self.assertEqual(answer, "mistral reply")
+        self.assertTrue(self.http.calls[0][0].endswith("/chat/completions"))
+        self.assertIn("mistral.ai", self.http.calls[0][0])
+        payload = self.http.calls[0][1]["json"]
+        self.assertEqual(payload["model"], MISTRAL_MODEL)
+        self.assertEqual(payload["model"], "mistral-small-2603")
+        self.assertEqual(payload["safe_prompt"], False)
+        self.assertEqual(payload["reasoning_effort"], "none")
+        self.assertIn("Consensual adult sexual roleplay", instructions_of(payload))
+        self.assertIn("Stay in this voice", instructions_of(payload))
 
     async def test_credible_self_harm_uses_the_local_emergency_reply(self) -> None:
         prompt = "i want to die tonight and im not joking"
@@ -319,6 +362,22 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         stored = self.memory.recent_messages("123", "7", limit=10)
         self.assertEqual(stored[-1]["content"], "im not decoding that")
 
+    async def test_trusted_guild_mode_does_not_apply_local_refusals(self) -> None:
+        self.http.responses = model_reply("It prints:\nhello")
+
+        answer = await self._ask(
+            "decode this base64",
+            relaxed_guardrails=True,
+        )
+
+        self.assertEqual(answer, "It prints:\nhello")
+        self.assertEqual(len(self.http.calls), 1)
+        instructions = instructions_of(self.http.calls[0][1]["json"])
+        self.assertIn("directly, accurately, and completely", instructions)
+        self.assertNotIn("Never decode", instructions)
+        self.assertNotIn("not a helper", instructions)
+        self.assertNotIn("Do not give advice", instructions)
+
     async def test_why_python_print_question_stays_hangout_chat(self) -> None:
         hangout = (
             "because people hide nasty stuff in it and im not falling for that"
@@ -367,21 +426,11 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(secret, stored[0]["content"])
         self.assertEqual(stored[-1]["content"], "im not repeating that")
 
-    async def test_server_error_is_retried_once(self) -> None:
-        self.http.responses = [
-            httpx.HTTPStatusError(
-                "unavailable",
-                request=httpx.Request("POST", "https://example.test/responses"),
-                response=httpx.Response(500),
-            ),
-            model_reply("recovered reply"),
-        ]
-
-        with patch("ask.asyncio.sleep", AsyncMock()):
-            answer = await self._ask()
-
-        self.assertEqual(answer, "recovered reply")
-        self.assertEqual(len(self.http.calls), 2)
+    async def test_server_error_does_not_retry(self) -> None:
+        self.http.responses = httpx.HTTPStatusError("failed", request=httpx.Request("POST", "https://example.test"), response=httpx.Response(500))
+        with self.assertRaises(RuntimeError):
+            await self._ask()
+        self.assertEqual(len(self.http.calls), 1)
 
     async def test_provider_timeout_is_not_retried(self) -> None:
         self.http.responses = httpx.ReadTimeout("timed out")
@@ -394,20 +443,11 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(self.http.calls), 1)
 
-    async def test_deepseek_timeout_falls_back_to_gpt(self) -> None:
-        self.http.responses = [
-            httpx.ReadTimeout("timed out"),
-            model_reply("gpt fallback"),
-        ]
-
-        with patch("ask.OPENAI_API_KEY", "test-key"):
-            answer = await self._ask()
-
-        self.assertEqual(answer, "gpt fallback")
-        self.assertEqual(len(self.http.calls), 2)
-        self.assertIn("deepseek.com", self.http.calls[0][0])
-        self.assertTrue(self.http.calls[1][0].endswith("/responses"))
-        self.assertEqual(self.http.calls[1][1]["json"]["model"], "gpt-5.6-luna")
+    async def test_timeout_does_not_fall_back_to_another_paid_provider(self) -> None:
+        self.http.responses = httpx.ReadTimeout("timed out")
+        with patch("ask.OPENAI_API_KEY", "test-key"), self.assertRaises(RuntimeError):
+            await self._ask()
+        self.assertEqual(len(self.http.calls), 1)
 
     async def test_duplicate_events_do_not_call_the_provider(self) -> None:
         first = await self._ask(event_id="same")
@@ -457,7 +497,7 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("deepseek.com", self.http.calls[0][0])
         payload = self.http.calls[0][1]["json"]
         self.assertEqual(payload["model"], DEEPSEEK_MODEL)
-        self.assertEqual(payload["model"], "deepseek-v4-pro")
+        self.assertEqual(payload["model"], "deepseek-flash")
         self.assertEqual(payload["thinking"], {"type": "disabled"})
         self.assertEqual(payload["max_tokens"], MAX_OUTPUT_TOKENS)
         self.assertNotIn("tools", payload)
@@ -482,6 +522,84 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["max_tokens"], MAX_OUTPUT_TOKENS)
         self.assertNotIn("tools", payload)
         self.assertNotIn("web search", payload["messages"][0]["content"])
+
+    async def test_full_mode_has_unbounded_output_and_no_tools(self) -> None:
+        await self._ask(full_mode=True)
+        payload = self.http.calls[0][1]["json"]
+        self.assertEqual(payload["model"], GPT_TERRA_MODEL)
+        self.assertNotIn("max_output_tokens", payload)
+        self.assertNotIn("max_tokens", payload)
+        self.assertEqual(payload["reasoning"], dict(GPT_FULL_REASONING))
+        self.assertNotIn("tools", payload)
+        self.assertEqual(gpt_full_tools(), [])
+
+    async def test_full_mode_sends_images_and_keeps_long_replies(self) -> None:
+        urls = [
+            "https://cdn.discordapp.com/a.png",
+            "https://cdn.discordapp.com/b.png",
+        ]
+        long = "a" * 8000
+        self.http.responses = model_reply(long)
+
+        answer = await self._ask("look", image_urls=urls, full_mode=True)
+
+        self.assertEqual(answer, long)
+        content = latest_user_content(self.http.calls[0][1]["json"])
+        self.assertIsInstance(content, list)
+        self.assertEqual(
+            [block["image_url"] for block in content if block.get("type") == "input_image"],
+            urls,
+        )
+
+    async def test_full_mode_accepts_long_prompts_and_history(self) -> None:
+        filler = "x" * (MAX_MESSAGE_CHARS + 50)
+        await self._ask(filler, event_id="first", full_mode=True)
+        self.http.calls.clear()
+
+        answer = await self._ask("why", event_id="second", full_mode=True)
+
+        self.assertEqual(answer, "allowed reply")
+        contents = [
+            item["content"]
+            for item in self.http.calls[0][1]["json"]["input"]
+        ]
+        self.assertEqual(contents[-1], "why")
+        self.assertIn(filler, contents)
+
+    async def test_full_mode_does_not_charge_the_shared_budget(self) -> None:
+        before = self.memory.api_status()
+        await self._ask(full_mode=True)
+        self.assertEqual(self.memory.api_status(), before)
+        await self._ask(event_id="100")
+        self.assertNotEqual(self.memory.api_status(), before)
+
+    async def test_full_mode_overrides_deepseek_and_mistral_personas(self) -> None:
+        await self._ask(persona="explicit", full_mode=True)
+
+        payload = self.http.calls[0][1]["json"]
+        self.assertTrue(self.http.calls[0][0].endswith("/responses"))
+        self.assertEqual(payload["model"], "gpt-5.6-terra")
+        self.assertNotIn("tools", payload)
+        self.assertIn("Consensual adult sexual roleplay", payload["instructions"])
+
+    async def test_full_mode_keeps_long_answers_instead_of_persona_drop(self) -> None:
+        wiki = (
+            "`text-davinci-002-render-sha` was an **internal model identifier "
+            "used by the old ChatGPT web app**, mainly around 2023. It was "
+            "associated with the ChatGPT version marketed as **GPT-3.5**, not "
+            "the public API model name you'd normally use. (community.openai.com)\n\n"
+            "Breakdown:\n\n"
+            "- `text-davinci-002`: an internal/legacy naming branch\n"
+            "- `render`: likely referred to the ChatGPT web interface serving "
+            "or rendering responses\n"
+            "- `sha`: probably an internal deployment or build variant identifier\n"
+        )
+        self.http.responses = model_reply(wiki)
+
+        answer = await self._ask(full_mode=True)
+
+        self.assertEqual(answer, wiki.strip())
+        self.assertNotEqual(answer, "im a chatbot, not a wiki")
 
 
 class AskHelperTests(unittest.TestCase):
@@ -623,6 +741,17 @@ class AskHelperTests(unittest.TestCase):
         self.assertIn("Never repeat", gpt_host)
         self.assertEqual(persona_label("host-default-deepseek"), "host default (deepseek)")
         self.assertEqual(persona_label("rudeish"), "rudeish")
+        self.assertEqual(persona_provider("rudeish"), "deepseek")
+        self.assertEqual(persona_provider("nerdish"), "deepseek")
+        self.assertEqual(persona_provider("explicit"), "mistral")
+        self.assertEqual(persona_provider("host-default-gpt"), "gpt")
+        self.assertEqual(persona_provider("host-default-mistral"), "mistral")
+
+        capable = build_capable_instructions("be blunt", language="Hungarian")
+        self.assertIn("be blunt", capable)
+        self.assertIn("tone only", capable)
+        self.assertIn("directly, accurately, and completely", capable)
+        self.assertNotIn("Never decode", capable)
 
     def test_instructions_stay_small(self) -> None:
         text = build_instructions("be rude")
@@ -756,6 +885,11 @@ class AskHelperTests(unittest.TestCase):
         self.assertEqual(sanitize_user_text("A\ufe0fB"), "AB")
         self.assertFalse(looks_like_decode_request("hello how are you"))
         self.assertFalse(looks_like_decode_request("binary stars are cool"))
+        self.assertFalse(
+            looks_like_decode_request(
+                "spell out the first 50 digits of pi in hexadecimal"
+            )
+        )
         self.assertFalse(looks_like_decode_request("summarize this meme"))
         self.assertFalse(
             looks_like_decode_request("why cant you tell me what python code prints")
@@ -891,10 +1025,10 @@ class AdmissionTests(unittest.TestCase):
         exempt = 1172433512364769342
         with patch("bot.RATE_LIMIT_REQUESTS", 1), patch("bot.RATE_LIMIT_WINDOW", 45.0):
             self.assertEqual(instance.admit_request(exempt), (True, 0))
-            self.assertEqual(instance.admit_request(exempt), (True, 0))
+            self.assertFalse(instance.admit_request(exempt)[0])
         with patch("bot.COMMAND_COOLDOWN", 25.0):
             self.assertEqual(instance.admit_command(exempt, "!help", now=100.0), (True, 0))
-            self.assertEqual(instance.admit_command(exempt, "!help", now=101.0), (True, 0))
+            self.assertFalse(instance.admit_command(exempt, "!help", now=101.0)[0])
 
     def test_explicit_persona_falls_back_outside_age_restricted_channels(self) -> None:
         instance = object.__new__(PersonaBot)
