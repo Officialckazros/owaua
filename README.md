@@ -57,4 +57,3 @@ See [security verification and deployment notes](SECURITY-HARDENING.md) for rema
 MIT.
 
 
-(Special thanks to [@openai](https://github.com/openai) for developing GPT Astra 6 and helping me maintain this project's security)
