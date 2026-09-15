@@ -55,3 +55,6 @@ Memory keeps at most 20 records per conversation and 10,000 records overall. Exp
 See [security verification and deployment notes](SECURITY-HARDENING.md) for remaining host requirements and verification limits.
 
 MIT.
+
+
+(Special thanks to [@openai](https://github.com/openai) for developing GPT Astra 6 and helping me maintain this project's security)
