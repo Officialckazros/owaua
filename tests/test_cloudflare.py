@@ -44,42 +44,36 @@ class CloudflareHelperTests(unittest.TestCase):
             },
             clear=False,
         ):
-            self.assertIsNone(gateway_base("deepseek"))
+            self.assertIsNone(gateway_base("perplexity"))
             self.assertEqual(describe_protection(), "off")
 
     def test_gateway_urls_match_provider_paths(self) -> None:
         with patch.dict(os.environ, GATEWAY_ENV, clear=False):
             self.assertEqual(
-                gateway_base("deepseek"),
-                f"https://gateway.ai.cloudflare.com/v1/{ACCOUNT}/owaua/deepseek",
+                gateway_base("perplexity"),
+                f"https://gateway.ai.cloudflare.com/v1/{ACCOUNT}/owaua/compat",
             )
-            primary, fallback = provider_urls("deepseek", "https://api.deepseek.com")
-            self.assertEqual(
-                primary,
-                f"https://gateway.ai.cloudflare.com/v1/{ACCOUNT}/owaua/deepseek/chat/completions",
+            primary, fallback = provider_urls(
+                "perplexity", "https://api.perplexity.ai/v1"
             )
-            self.assertEqual(fallback, "https://api.deepseek.com/chat/completions")
-            openai_primary, openai_fallback = provider_urls("openai", "https://api.openai.com/v1")
-            self.assertTrue(openai_primary.endswith("/openai/responses"))
-            self.assertEqual(openai_fallback, "https://api.openai.com/v1/responses")
-            mistral_primary, _ = provider_urls("mistral", "https://api.mistral.ai/v1")
-            self.assertTrue(mistral_primary.endswith("/mistral/v1/chat/completions"))
+            self.assertEqual(primary, "https://api.perplexity.ai/v1/responses")
+            self.assertIsNone(fallback)
 
     def test_full_mode_never_uses_the_gateway(self) -> None:
         with patch.dict(os.environ, GATEWAY_ENV, clear=False):
             primary, fallback = provider_urls(
-                "openai", "https://api.openai.com/v1", full_mode=True
+                "perplexity", "https://api.perplexity.ai/v1", full_mode=True
             )
-            self.assertEqual(primary, "https://api.openai.com/v1/responses")
+            self.assertEqual(primary, "https://api.perplexity.ai/v1/responses")
             self.assertIsNone(fallback)
 
     def test_skip_cache_header_is_always_set_for_gateway_requests(self) -> None:
         with patch.dict(os.environ, GATEWAY_ENV, clear=False):
-            headers = request_headers(provider="deepseek", user_id="7", server_id="9")
+            headers = request_headers(provider="perplexity", user_id="7", server_id="9")
         self.assertEqual(headers["cf-aig-skip-cache"], "true")
         self.assertEqual(headers["cf-aig-authorization"], "Bearer gateway-token")
         metadata = json.loads(headers["cf-aig-metadata"])
-        self.assertEqual(metadata["provider"], "deepseek")
+        self.assertEqual(metadata["provider"], "perplexity")
         self.assertNotEqual(metadata["user"], "7")
         self.assertNotEqual(metadata["server"], "9")
         self.assertEqual(len(metadata["user"]), 16)
@@ -158,40 +152,32 @@ class CloudflareAskTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(answer, "allowed reply")
         self.assertEqual(len(self.http.calls), 1)
         url, recorded = self.http.calls[0]
-        self.assertIn("gateway.ai.cloudflare.com", url)
-        self.assertIn("/deepseek/chat/completions", url)
-        self.assertEqual(recorded["headers"]["cf-aig-skip-cache"], "true")
-        self.assertNotIn("deepseek.com", url)
+        self.assertIn("api.perplexity.ai", url)
+        self.assertTrue(url.endswith("/responses"))
+        self.assertNotIn("gateway.ai.cloudflare.com", url)
+        self.assertNotIn("cf-aig-skip-cache", recorded["headers"])
 
     async def test_full_mode_stays_on_openai_directly(self) -> None:
         with patch.dict(os.environ, GATEWAY_ENV, clear=False):
             await self._ask(full_mode=True)
         url, recorded = self.http.calls[0]
         self.assertIn("api.openai.com", url)
+        self.assertTrue(url.endswith("/v1/responses"))
         self.assertNotIn("gateway.ai.cloudflare.com", url)
         self.assertNotIn("cf-aig-skip-cache", recorded["headers"])
 
     async def test_missing_gateway_falls_back_to_the_same_provider(self) -> None:
-        self.http.responses = [
-            httpx.HTTPStatusError(
-                "missing",
-                request=httpx.Request("POST", "https://gateway.ai.cloudflare.com"),
-                response=httpx.Response(404),
-            ),
-            model_reply("direct reply"),
-        ]
         with patch.dict(os.environ, GATEWAY_ENV, clear=False):
             answer = await self._ask()
-        self.assertEqual(answer, "direct reply")
-        self.assertEqual(len(self.http.calls), 2)
-        self.assertIn("gateway.ai.cloudflare.com", self.http.calls[0][0])
-        self.assertIn("deepseek.com", self.http.calls[1][0])
-        self.assertNotIn("cf-aig-skip-cache", self.http.calls[1][1]["headers"])
+        self.assertEqual(answer, "allowed reply")
+        self.assertEqual(len(self.http.calls), 1)
+        self.assertIn("api.perplexity.ai", self.http.calls[0][0])
+        self.assertNotIn("cf-aig-skip-cache", self.http.calls[0][1]["headers"])
 
     async def test_provider_errors_through_the_gateway_are_not_retried(self) -> None:
         self.http.responses = httpx.HTTPStatusError(
             "failed",
-            request=httpx.Request("POST", "https://gateway.ai.cloudflare.com"),
+            request=httpx.Request("POST", "https://api.perplexity.ai/v1/responses"),
             response=httpx.Response(500),
         )
         with patch.dict(os.environ, GATEWAY_ENV, clear=False), self.assertRaises(RuntimeError):
@@ -211,7 +197,7 @@ class CloudflareAskTests(unittest.IsolatedAsyncioTestCase):
             clear=False,
         ):
             await self._ask()
-        self.assertIn("deepseek.com", self.http.calls[0][0])
+        self.assertIn("api.perplexity.ai", self.http.calls[0][0])
 
 
 class CloudflareLogTests(unittest.IsolatedAsyncioTestCase):

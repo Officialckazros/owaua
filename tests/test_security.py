@@ -162,7 +162,7 @@ class BotSecurityTests(unittest.IsolatedAsyncioTestCase):
         other = make_message("!persona", 101, FakeChannel(44), guild_id=12, author_id=44)
         await self.bot.on_message(other)
         self.assertEqual(other.channel.sent, ["persona: rudeish"])
-        private = make_message("!persona explicit", 102, FakeChannel(55, nsfw=True), guild_id=None, author_id=55)
+        private = make_message("!persona flirty", 102, FakeChannel(55, nsfw=True), guild_id=None, author_id=55)
         with patch("bot.host_model_error", return_value=None):
             await self.bot.on_message(private)
         self.assertEqual(self.bot.persona_for(first.channel, first), "nerdish")
@@ -242,6 +242,13 @@ class NetworkBoundaryTests(unittest.IsolatedAsyncioTestCase):
                     await download_audio({"url": url})
                 client.assert_not_called()
 
+    async def test_twitter_downloader_rejects_non_twitter_media_before_network(self):
+        for url in ("https://evil.twimg.com/video.mp4", "https://r1.googlevideo.com/audio"):
+            with self.subTest(url=url), patch("music.httpx.AsyncClient") as client:
+                with self.assertRaises(ValueError):
+                    await download_audio({"source": "twitter", "url": url})
+                client.assert_not_called()
+
     async def test_redirect_and_size_limit_are_enforced(self):
         class Stream(httpx.AsyncByteStream):
             async def __aiter__(self):
@@ -270,7 +277,7 @@ class NetworkBoundaryTests(unittest.IsolatedAsyncioTestCase):
         process = SimpleNamespace(returncode=None, communicate=communicate, kill=Mock(), wait=AsyncMock())
         with patch("music.asyncio.create_subprocess_exec", AsyncMock(return_value=process)):
             with self.assertRaises(asyncio.CancelledError):
-                await resolve_music("song")
+                await resolve_music("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
         process.kill.assert_called_once()
         process.wait.assert_awaited_once()
 

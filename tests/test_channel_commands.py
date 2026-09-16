@@ -130,7 +130,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(channel.sent, [HELP_TEXT])
         self.assertEqual(channel.send_kwargs[0].get("suppress_embeds"), True)
         self.assertNotIn("!active", channel.sent[0])
-        self.assertIn("!persona rudeish|nerdish|explicit|host default gpt/deepseek/mistral", channel.sent[0])
+        self.assertIn("!persona rudeish|nerdish|flirty|host default gpt/deepseek/mistral", channel.sent[0])
         self.assertIn("!owner's note", channel.sent[0])
         self.assertIn("!memory erase", channel.sent[0])
         self.assertIn("!music help", channel.sent[0])
@@ -142,6 +142,21 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("!nuke", channel.sent[0])
         self.assertNotIn("!gifs", channel.sent[0])
         self.assertNotIn("!full", channel.sent[0])
+
+    async def test_trusted_guild_music_bypasses_command_cooldown(self) -> None:
+        channel = FakeChannel()
+        first = make_message("!music https://example.test/one", 1, channel,
+                             guild_id=FULL_MODE_GUILD_ID)
+        second = make_message("!music https://example.test/two", 2, channel,
+                              guild_id=FULL_MODE_GUILD_ID)
+
+        with patch("bot.handle_music_command", AsyncMock(return_value="playing")) as music:
+            await self.bot.on_message(first)
+            await self.bot.on_message(second)
+
+        self.assertEqual(music.await_count, 2)
+        self.assertEqual(channel.sent, ["playing", "playing"])
+        self.assertEqual(self.bot.command_used, {})
 
     async def test_shutdown_is_owner_only_and_sends_no_acknowledgement(self) -> None:
         channel = FakeChannel()
@@ -543,29 +558,18 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(len(message.channel.sent), 1)
         self.assertEqual("".join(message.channel.sent), long)
 
-    async def test_explicit_persona_is_rejected_outside_age_restricted_channels(
-        self,
-    ) -> None:
+    async def test_flirty_persona_is_allowed_in_all_channels(self) -> None:
         channel = FakeChannel()
 
-        await self.bot.on_message(make_message("!persona explicit", 1, channel))
+        await self.bot.on_message(make_message("!persona flirty", 1, channel))
 
-        self.assertEqual(channel.sent, ["explicit only works in age-restricted channels"])
-        self.assertEqual(self.store.get_setting("persona:guild:11", "rudeish"), "rudeish")
+        self.assertEqual(self.store.get_setting("persona:guild:11", "rudeish"), "flirty")
+        self.assertEqual(channel.sent, ["persona: flirty"])
 
-    async def test_explicit_persona_is_allowed_in_age_restricted_channels(self) -> None:
+    async def test_flirty_persona_reports_a_missing_mistral_key(self) -> None:
         channel = FakeChannel(nsfw=True)
-
-        await self.bot.on_message(make_message("!persona explicit", 1, channel))
-
-        self.assertEqual(self.store.get_setting("persona:guild:11", "rudeish"), "explicit")
-        self.assertEqual(channel.sent, ["persona: explicit"])
-        self.assertEqual(self.store.get_setting("persona:guild:11"), "explicit")
-
-    async def test_explicit_persona_reports_a_missing_mistral_key(self) -> None:
-        channel = FakeChannel(nsfw=True)
-        with patch("ask.MISTRAL_API_KEY", ""):
-            await self.bot.on_message(make_message("!persona explicit", 1, channel))
+        with patch("ask.PERPLEXITY_API_KEY", ""):
+            await self.bot.on_message(make_message("!persona flirty", 1, channel))
 
         self.assertEqual(channel.sent, ["mistral is not configured"])
         self.assertEqual(self.store.get_setting("persona:guild:11", "rudeish"), "rudeish")
@@ -583,10 +587,10 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         with patch("bot.host_model_error", return_value=None):
             await self.bot.on_message(make_message("!persona host default", 1, channel))
 
-        self.assertEqual(channel.sent, ["persona: host default (deepseek)"])
-        self.assertEqual(self.store.get_setting("persona:guild:11", "rudeish"), "host-default-deepseek")
+        self.assertEqual(channel.sent, ["persona: host default (gpt)"])
+        self.assertEqual(self.store.get_setting("persona:guild:11", "rudeish"), "host-default-gpt")
         self.assertEqual(
-            self.store.get_setting("persona:guild:11"), "host-default-deepseek"
+            self.store.get_setting("persona:guild:11"), "host-default-gpt"
         )
 
     async def test_host_default_persona_selects_deepseek_and_mistral(self) -> None:
@@ -624,7 +628,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_host_default_reports_a_missing_provider_key(self) -> None:
         channel = FakeChannel()
-        with patch("ask.DEEPSEEK_API_KEY", ""):
+        with patch("ask.PERPLEXITY_API_KEY", ""):
             await self.bot.on_message(
                 make_message("!persona host default deepseek", 1, channel)
             )
@@ -788,7 +792,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(channel.sent), 1)
         self.assertIn("!music restart", channel.sent[0])
-        self.assertIn("!music <song or YouTube URL>", channel.sent[0])
+        self.assertIn("!music <YouTube video or Twitter/X post URL>", channel.sent[0])
 
     async def test_music_restart_needs_a_queued_song(self) -> None:
         channel = FakeChannel()
@@ -796,7 +800,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         await self.bot.on_message(make_message("!music restart", 1, channel))
 
         self.assertEqual(
-            channel.sent, ["choose a song first with `!music <song or URL>`"]
+            channel.sent, ["choose media first with `!music <YouTube video or Twitter/X post URL>`"]
         )
 
     async def test_music_restart_replays_the_queued_track_from_the_start(self) -> None:

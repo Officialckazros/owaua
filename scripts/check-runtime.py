@@ -19,6 +19,8 @@ if os.geteuid() == 0:
     raise RuntimeError("Run the production bot as an unprivileged user")
 if not shutil.which("ffmpeg"):
     raise RuntimeError("FFmpeg is missing")
+if not shutil.which("deno"):
+    raise RuntimeError("Deno is missing; YouTube links cannot be resolved")
 
 output = io.BytesIO()
 with wave.open(output, "wb") as wav:
@@ -37,6 +39,7 @@ print("OWAUA_RUNTIME_VERIFIED " + json.dumps({
     "python": sys.version.split()[0],
     "unprivileged": True,
     "native_decoder": "passed",
+    "deno": "available",
     "allow_dms": ALLOW_DMS,
     "max_inflight": MAX_INFLIGHT,
     "api_limits": vars(API_LIMITS),

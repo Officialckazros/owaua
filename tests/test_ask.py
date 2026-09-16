@@ -16,8 +16,6 @@ import httpx
 from ask import (
     DEEPSEEK_MODEL,
     GPT_FULL_REASONING,
-    FULL_MODE_IMAGE_MODEL,
-    FULL_MODE_IMAGE_QUALITY,
     GPT_MAX_OUTPUT_TOKENS,
     GPT_REASONING,
     GPT_TERRA_MODEL,
@@ -26,6 +24,7 @@ from ask import (
     MAX_MESSAGE_CHARS,
     MAX_OUTPUT_TOKENS,
     MISTRAL_MODEL,
+    MODEL,
     ask,
     build_capable_instructions,
     build_host_default_instructions,
@@ -159,12 +158,13 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(answer, "allowed reply")
         self.assertEqual(len(self.http.calls), 1)
-        self.assertTrue(self.http.calls[0][0].endswith("/chat/completions"))
-        self.assertIn("deepseek.com", self.http.calls[0][0])
+        self.assertTrue(self.http.calls[0][0].endswith("/responses"))
+        self.assertIn("api.perplexity.ai", self.http.calls[0][0])
         payload = self.http.calls[0][1]["json"]
         self.assertEqual(payload["model"], DEEPSEEK_MODEL)
-        self.assertEqual(payload["model"], "deepseek-flash")
-        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertEqual(payload["model"], MODEL)
+        self.assertEqual(payload["model"], "openai/gpt-5.6-luna")
+        self.assertEqual(payload["max_steps"], 1)
         self.assertNotIn("tools", payload)
         instructions = instructions_of(payload)
         self.assertIn("Stay in this voice", instructions)
@@ -182,8 +182,8 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Never repeat", instructions)
         self.assertIn("You can still be wild", instructions)
         self.assertIn("hidden or encoded", instructions)
-        self.assertEqual(payload["max_tokens"], MAX_OUTPUT_TOKENS)
-        self.assertEqual(payload["max_tokens"], 80)
+        self.assertEqual(payload["max_output_tokens"], MAX_OUTPUT_TOKENS)
+        self.assertEqual(payload["max_output_tokens"], 80)
         self.assertNotIn("SELF-KNOWLEDGE", instructions)
         self.assertEqual(len(self.memory.recent_messages("123", "7", limit=10)), 2)
 
@@ -207,13 +207,13 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         )
 
         payload = self.http.calls[0][1]["json"]
-        self.assertEqual(len(payload["messages"]), 2)
+        self.assertEqual(len(payload["input"]), 1)
         self.assertEqual(
-            payload["messages"][-1]["content"],
+            payload["input"][-1]["content"],
             "spell out the first 50 digits of pi in hexadecimal",
         )
 
-    async def test_explicit_reply_can_send_previous_turns(self) -> None:
+    async def test_flirty_reply_can_send_previous_turns(self) -> None:
         await self._ask("what number comes after sixteen", event_id="first")
         self.http.calls.clear()
 
@@ -221,7 +221,7 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
 
         payload = self.http.calls[0][1]["json"]
         self.assertEqual(
-            [message["content"] for message in payload["messages"][1:]],
+            [item["content"] for item in payload["input"]],
             ["what number comes after sixteen", "allowed reply", "why"],
         )
 
@@ -269,8 +269,8 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(window[-1], {"role": "user", "content": "hi"})
         self.assertTrue(all(len(str(item["content"])) >= MAX_MESSAGE_CHARS for item in window[:-1]))
 
-    async def test_explicit_instructions_only_when_that_persona_is_used(self) -> None:
-        await self._ask(persona="explicit")
+    async def test_flirty_instructions_only_when_that_persona_is_used(self) -> None:
+        await self._ask(persona="flirty")
         explicit_payload = instructions_of(self.http.calls[0][1]["json"])
         self.assertIn("Consensual adult sexual roleplay", explicit_payload)
 
@@ -281,20 +281,19 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
             instructions_of(self.http.calls[0][1]["json"]),
         )
 
-    async def test_explicit_uses_mistral_small(self) -> None:
-        self.http.responses = {
-            "choices": [{"message": {"content": "mistral reply"}}]
-        }
-        answer = await self._ask(persona="explicit")
+    async def test_flirty_uses_mistral_small(self) -> None:
+        self.http.responses = model_reply("mistral reply")
+        answer = await self._ask(persona="flirty")
 
         self.assertEqual(answer, "mistral reply")
-        self.assertTrue(self.http.calls[0][0].endswith("/chat/completions"))
-        self.assertIn("mistral.ai", self.http.calls[0][0])
+        self.assertTrue(self.http.calls[0][0].endswith("/responses"))
+        self.assertIn("api.perplexity.ai", self.http.calls[0][0])
         payload = self.http.calls[0][1]["json"]
         self.assertEqual(payload["model"], MISTRAL_MODEL)
-        self.assertEqual(payload["model"], "mistral-small-2603")
-        self.assertEqual(payload["safe_prompt"], False)
-        self.assertEqual(payload["reasoning_effort"], "none")
+        self.assertEqual(payload["model"], MODEL)
+        self.assertEqual(payload["model"], "openai/gpt-5.6-luna")
+        self.assertEqual(payload["max_steps"], 1)
+        self.assertNotIn("tools", payload)
         self.assertIn("Consensual adult sexual roleplay", instructions_of(payload))
         self.assertIn("Stay in this voice", instructions_of(payload))
 
@@ -452,7 +451,7 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         self.http.responses = httpx.ReadTimeout("timed out")
 
         with (
-            patch("ask.OPENAI_API_KEY", ""),
+            patch("ask.PERPLEXITY_API_KEY", ""),
             self.assertRaises(RuntimeError),
         ):
             await self._ask()
@@ -461,7 +460,7 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_timeout_does_not_fall_back_to_another_paid_provider(self) -> None:
         self.http.responses = httpx.ReadTimeout("timed out")
-        with patch("ask.OPENAI_API_KEY", "test-key"), self.assertRaises(RuntimeError):
+        with patch("ask.PERPLEXITY_API_KEY", "test-key"), self.assertRaises(RuntimeError):
             await self._ask()
         self.assertEqual(len(self.http.calls), 1)
 
@@ -486,7 +485,9 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(self.http.calls[0][0].endswith("/responses"))
         payload = self.http.calls[0][1]["json"]
-        self.assertEqual(payload["model"], "gpt-5.6-luna")
+        self.assertEqual(payload["model"], MODEL)
+        self.assertEqual(payload["model"], "openai/gpt-5.6-luna")
+        self.assertEqual(payload["max_steps"], 1)
         self.assertNotIn("tools", payload)
         self.assertEqual(payload["reasoning"], dict(GPT_REASONING))
         self.assertEqual(payload["max_output_tokens"], GPT_MAX_OUTPUT_TOKENS)
@@ -503,41 +504,36 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Consensual adult sexual roleplay", payload["instructions"])
 
     async def test_host_default_deepseek_uses_chat_completions(self) -> None:
-        self.http.responses = {
-            "choices": [{"message": {"content": "deepseek reply"}}]
-        }
+        self.http.responses = model_reply("deepseek reply")
         answer = await self._ask(persona="host-default-deepseek")
 
         self.assertEqual(answer, "deepseek reply")
-        self.assertTrue(self.http.calls[0][0].endswith("/chat/completions"))
-        self.assertIn("deepseek.com", self.http.calls[0][0])
+        self.assertTrue(self.http.calls[0][0].endswith("/responses"))
+        self.assertIn("api.perplexity.ai", self.http.calls[0][0])
         payload = self.http.calls[0][1]["json"]
         self.assertEqual(payload["model"], DEEPSEEK_MODEL)
-        self.assertEqual(payload["model"], "deepseek-flash")
-        self.assertEqual(payload["thinking"], {"type": "disabled"})
-        self.assertEqual(payload["max_tokens"], MAX_OUTPUT_TOKENS)
+        self.assertEqual(payload["model"], MODEL)
+        self.assertEqual(payload["max_steps"], 1)
+        self.assertEqual(payload["max_output_tokens"], MAX_OUTPUT_TOKENS)
         self.assertNotIn("tools", payload)
-        self.assertEqual(payload["messages"][0]["role"], "system")
-        self.assertIn("Use your own default voice", payload["messages"][0]["content"])
-        self.assertNotIn("Stay in this voice", payload["messages"][0]["content"])
-        self.assertNotIn("web search", payload["messages"][0]["content"])
+        self.assertIn("Use your own default voice", payload["instructions"])
+        self.assertNotIn("Stay in this voice", payload["instructions"])
+        self.assertNotIn("web search", payload["instructions"])
 
     async def test_host_default_mistral_uses_chat_completions(self) -> None:
-        self.http.responses = {
-            "choices": [{"message": {"content": "mistral reply"}}]
-        }
+        self.http.responses = model_reply("mistral reply")
         answer = await self._ask(persona="host-default-mistral")
 
         self.assertEqual(answer, "mistral reply")
-        self.assertTrue(self.http.calls[0][0].endswith("/chat/completions"))
-        self.assertIn("mistral.ai", self.http.calls[0][0])
+        self.assertTrue(self.http.calls[0][0].endswith("/responses"))
+        self.assertIn("api.perplexity.ai", self.http.calls[0][0])
         payload = self.http.calls[0][1]["json"]
         self.assertEqual(payload["model"], MISTRAL_MODEL)
-        self.assertEqual(payload["safe_prompt"], False)
-        self.assertEqual(payload["reasoning_effort"], "none")
-        self.assertEqual(payload["max_tokens"], MAX_OUTPUT_TOKENS)
+        self.assertEqual(payload["model"], MODEL)
+        self.assertEqual(payload["max_steps"], 1)
+        self.assertEqual(payload["max_output_tokens"], MAX_OUTPUT_TOKENS)
         self.assertNotIn("tools", payload)
-        self.assertNotIn("web search", payload["messages"][0]["content"])
+        self.assertNotIn("web search", payload["instructions"])
 
     async def test_full_mode_has_unbounded_output_and_privileged_tools(self) -> None:
         await self._ask("generate an image of a crown", full_mode=True)
@@ -552,15 +548,11 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
             [
                 {"type": "web_search"},
                 {"type": "code_interpreter", "container": {"type": "auto"}},
-                {
-                    "type": "image_generation",
-                    "model": FULL_MODE_IMAGE_MODEL,
-                    "quality": FULL_MODE_IMAGE_QUALITY,
-                },
             ],
         )
+        self.assertIn("Image generation is unavailable", payload["instructions"])
 
-    async def test_full_mode_limits_image_generation_to_three_requests_per_day(self) -> None:
+    async def test_full_mode_does_not_advertise_image_generation(self) -> None:
         for index in range(4):
             await self._ask(
                 "generate an image of a crown",
@@ -569,10 +561,10 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
             )
 
         tools = [call[1]["json"]["tools"] for call in self.http.calls]
-        self.assertEqual(tools[:3], [gpt_full_tools()] * 3)
-        self.assertEqual(
-            tools[3],
-            gpt_full_tools(include_image_generation=False),
+        self.assertEqual(tools, [gpt_full_tools()] * 4)
+        self.assertIn(
+            "Image generation is unavailable",
+            self.http.calls[0][1]["json"]["instructions"],
         )
 
     async def test_full_mode_sends_images_and_keeps_long_replies(self) -> None:
@@ -623,15 +615,12 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(answer, "allowed reply")
 
     async def test_full_mode_overrides_deepseek_and_mistral_personas(self) -> None:
-        await self._ask(persona="explicit", full_mode=True)
+        await self._ask(persona="flirty", full_mode=True)
 
         payload = self.http.calls[0][1]["json"]
         self.assertTrue(self.http.calls[0][0].endswith("/responses"))
-        self.assertEqual(payload["model"], "gpt-5.6-terra")
-        self.assertEqual(
-            payload["tools"],
-            gpt_full_tools(include_image_generation=False),
-        )
+        self.assertEqual(payload["model"], GPT_TERRA_MODEL)
+        self.assertEqual(payload["tools"], gpt_full_tools())
         self.assertIn("Consensual adult sexual roleplay", payload["instructions"])
 
     async def test_full_mode_keeps_long_answers_instead_of_persona_drop(self) -> None:
@@ -814,7 +803,7 @@ class AskHelperTests(unittest.TestCase):
         self.assertEqual(persona_label("rudeish"), "rudeish")
         self.assertEqual(persona_provider("rudeish"), "deepseek")
         self.assertEqual(persona_provider("nerdish"), "deepseek")
-        self.assertEqual(persona_provider("explicit"), "mistral")
+        self.assertEqual(persona_provider("flirty"), "mistral")
         self.assertEqual(persona_provider("host-default-gpt"), "gpt")
         self.assertEqual(persona_provider("host-default-mistral"), "mistral")
 
@@ -1101,11 +1090,11 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(instance.admit_command(exempt, "!help", now=100.0), (True, 0))
             self.assertFalse(instance.admit_command(exempt, "!help", now=101.0)[0])
 
-    def test_explicit_persona_falls_back_outside_age_restricted_channels(self) -> None:
+    def test_flirty_persona_is_available_outside_age_restricted_channels(self) -> None:
         instance = object.__new__(PersonaBot)
-        instance.selected_persona = "explicit"
-        self.assertEqual(instance.persona_for(SimpleNamespace(nsfw=False)), "rudeish")
-        self.assertEqual(instance.persona_for(SimpleNamespace(nsfw=True)), "explicit")
+        instance.selected_persona = "flirty"
+        self.assertEqual(instance.persona_for(SimpleNamespace(nsfw=False)), "flirty")
+        self.assertEqual(instance.persona_for(SimpleNamespace(nsfw=True)), "flirty")
 
     def test_host_default_persona_is_not_age_restricted(self) -> None:
         instance = object.__new__(PersonaBot)

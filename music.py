@@ -1,4 +1,4 @@
-"""Voice-channel music from YouTube and Discord file attachments."""
+"""Voice-channel music from YouTube videos and Twitter/X posts."""
 
 from __future__ import annotations
 
@@ -35,16 +35,24 @@ FFMPEG_BEFORE_OPTIONS = (
     "-protocol_whitelist pipe"
 )
 FFMPEG_OPTIONS = "-vn -threads 1 -t 900"
+UNRESTRICTED_FFMPEG_BEFORE_OPTIONS = (
+    "-nostdin -reconnect 1 -reconnect_streamed 1 "
+    "-reconnect_delay_max 5 -thread_queue_size 1024"
+)
+UNRESTRICTED_FFMPEG_OPTIONS = "-vn -threads 1"
 MAX_MEDIA_BYTES = 20 * 1024 * 1024
 MAX_MUSIC_JOBS = 2
+UNRESTRICTED_MUSIC_GUILD_IDS = frozenset({1535083112709496903})
 _ACTIVE_SOURCES: set[object] = set()
 YTDLP_FORMAT = (
     "bestaudio[acodec=opus][abr<=160]/"
     "bestaudio[acodec=opus]/"
     "bestaudio/best"
 )
-YTDLP_EXTRACTORS = ["youtube", "youtube:search"]
+YTDLP_EXTRACTORS = ["youtube", "twitter"]
 YOUTUBE_VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+TWITTER_STATUS_ID = re.compile(r"^[0-9]{1,30}$")
+TWITTER_HANDLE = re.compile(r"^[A-Za-z0-9_]{1,15}$")
 YOUTUBE_HOSTS = frozenset(
     {
         "youtube.com",
@@ -54,6 +62,15 @@ YOUTUBE_HOSTS = frozenset(
         "youtube-nocookie.com",
     }
 )
+TWITTER_HOSTS = frozenset(
+    {
+        "twitter.com",
+        "mobile.twitter.com",
+        "x.com",
+        "mobile.x.com",
+    }
+)
+TWITTER_MEDIA_HOSTS = frozenset({"video.twimg.com"})
 DISCORD_CDN_HOSTS = frozenset(
     {
         "cdn.discordapp.com",
@@ -118,18 +135,24 @@ AUDIO_EXTENSIONS = frozenset(
 )
 
 MUSIC_USAGE = (
-    "usage: !music <song or YouTube URL> or attach an audio file | !music start | "
+    "usage: !music <YouTube video or Twitter/X post URL> | !music start | "
     "!music pause | !music resume | !music restart | !music stop | "
     "!music skip | !music leave | !music now"
 )
-NON_YOUTUBE_URL_REPLY = "only YouTube links or a song name work"
+NON_YOUTUBE_URL_REPLY = "only YouTube video or Twitter/X post links work"
 PLAYLIST_URL_REPLY = (
-    "that YouTube link is a playlist or channel; send a video or search by name"
+    "that YouTube link is a playlist or channel; send a single video link"
 )
+TWITTER_STATUS_URL_REPLY = "send a single public Twitter/X post link with a video"
 UNSAFE_STREAM_REPLY = "no playable audio found"
 LIVE_STREAM_REPLY = "live streams and 24/7 radios aren't allowed"
 LONG_TRACK_REPLY = "that video is too long; send a single song under 15 minutes"
 MAX_TRACK_SECONDS = 15 * 60
+
+
+def unrestricted_music_guild(guild: object) -> bool:
+    """Whether this guild intentionally bypasses the bot's music guardrails."""
+    return getattr(guild, "id", guild) in UNRESTRICTED_MUSIC_GUILD_IDS
 
 
 def configure_music_audit_log(path: str | os.PathLike[str]) -> None:
@@ -319,9 +342,13 @@ def _safe_header_part(value: object) -> str | None:
     return text
 
 
-def ffmpeg_before_options(headers: object = None) -> str:
+def ffmpeg_before_options(headers: object = None, *, unrestricted: bool = False) -> str:
     """FFmpeg input flags that keep a remote audio stream from underrunning."""
-    before = FFMPEG_BEFORE_OPTIONS
+    before = (
+        UNRESTRICTED_FFMPEG_BEFORE_OPTIONS
+        if unrestricted
+        else FFMPEG_BEFORE_OPTIONS
+    )
     if not isinstance(headers, dict) or not headers:
         return before
     packed = "".join(
@@ -387,6 +414,34 @@ def _youtube_host(host: str) -> bool:
     return host.casefold().removeprefix("www.") in YOUTUBE_HOSTS
 
 
+def _twitter_host(host: str) -> bool:
+    return host.casefold().removeprefix("www.") in TWITTER_HOSTS
+
+
+def twitter_status_url(query: str) -> str | None:
+    """Return a canonical Twitter/X status URL, never an arbitrary page URL."""
+    parsed = urlparse(query.strip())
+    if parsed.scheme not in {"http", "https"} or not _twitter_host(parsed.hostname or ""):
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) >= 3 and TWITTER_HANDLE.fullmatch(parts[0]) and parts[1].casefold() == "status":
+        owner, status_id = parts[0], parts[2]
+    elif len(parts) >= 3 and parts[0].casefold() == "i" and parts[1].casefold() == "status":
+        owner, status_id = "i", parts[2]
+    else:
+        return None
+    if not TWITTER_STATUS_ID.fullmatch(status_id):
+        return None
+    return f"https://x.com/{owner}/status/{status_id}"
+
+
+def _twitter_media_url(url: str) -> bool:
+    if not safe_http_url(url):
+        return False
+    host = (urlparse(url).hostname or "").casefold()
+    return host in TWITTER_MEDIA_HOSTS
+
+
 def youtube_video_id(query: str) -> str | None:
     """Return the 11-character video id from a YouTube watch/share URL."""
     parsed = urlparse(query.strip())
@@ -410,8 +465,8 @@ def youtube_video_id(query: str) -> str | None:
     return None
 
 
-def accepted_youtube_track(info: object) -> None:
-    """Reject livestreams and long mixes that keep playing after the requester leaves."""
+def accepted_music_track(info: object) -> None:
+    """Reject livestreams and long media that keep playing after the requester leaves."""
     if not isinstance(info, dict):
         raise ValueError(UNSAFE_STREAM_REPLY)
     if info.get("is_live") is True:
@@ -431,28 +486,45 @@ def accepted_youtube_track(info: object) -> None:
 
 
 def music_lookup(query: str) -> str:
-    """Turn a user request into a single-video yt-dlp lookup."""
+    """Turn a user request into a canonical supported media lookup."""
     raw = query.strip()
     if len(raw) > 500:
         raise ValueError("Song query is too long")
     if not raw:
         raise ValueError(MUSIC_USAGE)
-    first = raw.split()[0]
-    looks_like_url = "://" in first or first.casefold().startswith(("http://", "https://"))
-    if looks_like_url:
-        video_id = youtube_video_id(raw) or youtube_video_id(first)
-        if video_id:
-            return f"https://www.youtube.com/watch?v={video_id}"
-        parsed = urlparse(first)
-        if parsed.scheme in {"http", "https"} and _youtube_host(parsed.hostname or ""):
-            raise ValueError(PLAYLIST_URL_REPLY)
-        raise ValueError(NON_YOUTUBE_URL_REPLY)
-    return f"ytsearch1:{raw}"
+    video_id = youtube_video_id(raw)
+    if video_id:
+        return f"https://www.youtube.com/watch?v={video_id}"
+    tweet = twitter_status_url(raw)
+    if tweet:
+        return tweet
+    parsed = urlparse(raw)
+    if parsed.scheme in {"http", "https"} and _youtube_host(parsed.hostname or ""):
+        raise ValueError(PLAYLIST_URL_REPLY)
+    if parsed.scheme in {"http", "https"} and _twitter_host(parsed.hostname or ""):
+        raise ValueError(TWITTER_STATUS_URL_REPLY)
+    raise ValueError(NON_YOUTUBE_URL_REPLY)
 
 
-def attachment_track(attachment: object) -> dict[str, object] | None:
+def attachment_track(
+    attachment: object, *, unrestricted: bool = False
+) -> dict[str, object] | None:
     """Build a direct FFmpeg track for an attached audio file."""
     url = str(getattr(attachment, "url", "") or "").strip()
+    if unrestricted:
+        if not url:
+            return None
+        filename = PurePath(
+            str(getattr(attachment, "filename", "") or "").strip()
+        ).name
+        return {
+            "title": filename if filename else "attached media",
+            "url": url,
+            "query": url,
+            "acodec": "",
+            "http_headers": {},
+            "source": "attachment",
+        }
     if not discord_cdn_url(url):
         return None
 
@@ -492,13 +564,37 @@ def attachment_track(attachment: object) -> dict[str, object] | None:
     }
 
 
-def attached_music_track(message: object) -> dict[str, object] | None:
+def attached_music_track(
+    message: object, *, unrestricted: bool = False
+) -> dict[str, object] | None:
     """Return the first playable-looking attachment on a message."""
     for attachment in getattr(message, "attachments", ()) or ():
-        track = attachment_track(attachment)
+        track = attachment_track(attachment, unrestricted=unrestricted)
         if track is not None:
             return track
     return None
+
+
+def unrestricted_mp3_track(query: str) -> dict[str, object] | None:
+    """Use a direct MP3 URL without involving an extractor in the trusted guild."""
+    raw = query.strip()
+    try:
+        parsed = urlparse(raw)
+    except ValueError:
+        return None
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    filename = PurePath(parsed.path).name
+    if PurePath(filename).suffix.casefold() != ".mp3":
+        return None
+    return {
+        "title": filename or "MP3 audio",
+        "url": raw,
+        "query": raw,
+        "acodec": "mp3",
+        "http_headers": {},
+        "source": "unrestricted",
+    }
 
 
 def media_format(data: bytes) -> str:
@@ -560,7 +656,64 @@ class BoundedAudio(discord.FFmpegOpusAudio):
                 _ACTIVE_SOURCES.discard(self)
 
 
-def play_track(voice_client: discord.VoiceClient, track: dict[str, object]) -> None:
+class UnrestrictedAudio(discord.FFmpegOpusAudio):
+    """Stream a trusted-guild extractor result without local music limits."""
+
+    def __init__(self, track: dict[str, object]) -> None:
+        self._cleanup_lock = threading.RLock()
+        url = str(track.get("url", "")).strip()
+        if not url:
+            raise ValueError(UNSAFE_STREAM_REPLY)
+        super().__init__(
+            url,
+            bitrate=96,
+            before_options=ffmpeg_before_options(
+                track.get("http_headers"), unrestricted=True
+            ),
+            options=UNRESTRICTED_FFMPEG_OPTIONS,
+        )
+        _ACTIVE_SOURCES.add(self)
+
+    def _spawn_process(self, args, **kwargs):
+        # Do not expose provider or Discord credentials to FFmpeg even though
+        # this source intentionally skips the ordinary music restrictions.
+        kwargs["env"] = {
+            key: os.environ[key]
+            for key in ("PATH", "SYSTEMROOT", "SSL_CERT_FILE")
+            if key in os.environ
+        }
+        kwargs["stderr"] = subprocess.DEVNULL
+        return super()._spawn_process(args, **kwargs)
+
+    def cleanup(self) -> None:
+        with self._cleanup_lock:
+            try:
+                process = getattr(self, "_process", None)
+                if process:
+                    super().cleanup()
+            finally:
+                if process:
+                    for stream in (process.stdout, process.stdin, process.stderr):
+                        if stream is not None:
+                            stream.close()
+                    process.wait(timeout=2)
+                _ACTIVE_SOURCES.discard(self)
+
+
+def play_track(
+    voice_client: discord.VoiceClient,
+    track: dict[str, object],
+    *,
+    unrestricted: bool = False,
+) -> None:
+    if unrestricted:
+        source = UnrestrictedAudio(track)
+        try:
+            voice_client.play(source, after=track.get("_after", _playback_finished))
+        except BaseException:
+            source.cleanup()
+            raise
+        return
     data = track.get("audio_bytes")
     if not isinstance(data, bytes) or not 0 < len(data) <= MAX_MEDIA_BYTES:
         raise ValueError("Audio must be downloaded within the size limit first")
@@ -579,6 +732,8 @@ async def download_audio(track: dict[str, object]) -> bytes:
     host = (urlparse(url).hostname or "").lower()
     if track.get("source") == "attachment":
         allowed = discord_cdn_url(url)
+    elif track.get("source") == "twitter":
+        allowed = _twitter_media_url(url)
     else:
         allowed = host.endswith(".googlevideo.com")
     if not allowed:
@@ -621,24 +776,59 @@ def _http_headers(info: object) -> dict[str, str]:
     return packed
 
 
-async def resolve_music(query: str) -> dict[str, object]:
-    lookup = music_lookup(query)
-    env = {key: os.environ[key] for key in ("PATH", "SYSTEMROOT", "SSL_CERT_FILE") if key in os.environ}
+async def resolve_music(
+    query: str, *, unrestricted: bool = False
+) -> dict[str, object]:
+    lookup = query.strip() if unrestricted else music_lookup(query)
+    if not lookup:
+        raise ValueError(MUSIC_USAGE)
+    source = "unrestricted" if unrestricted else (
+        "twitter" if twitter_status_url(lookup) else "youtube"
+    )
+    env = {
+        key: os.environ[key]
+        for key in ("PATH", "SYSTEMROOT", "SSL_CERT_FILE", "TMPDIR")
+        if key in os.environ
+    }
+    command = [
+        sys.executable,
+        "-I",
+        str(Path(__file__).with_name("music_worker.py")),
+        lookup,
+    ]
+    if unrestricted:
+        command.append("--unrestricted")
     process = await asyncio.create_subprocess_exec(
-        sys.executable, "-I", str(Path(__file__).with_name("music_worker.py")), lookup,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=env,
+        *command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
     )
     try:
-        output, _ = await asyncio.wait_for(process.communicate(), timeout=30)
+        output, error_output = await asyncio.wait_for(
+            process.communicate(), timeout=120 if unrestricted else 30
+        )
         if process.returncode != 0 or len(output) > 40000:
+            detail = error_output.decode("utf-8", "replace").strip().splitlines()
+            if detail:
+                log.warning("Music resolver worker failed: %s", detail[-1][:1000])
             raise ValueError("Could not resolve that song")
         info = json.loads(output)
-        accepted_youtube_track(info)
+        if not unrestricted:
+            accepted_music_track(info)
         stream = str(info.get("url", ""))
-        if not safe_http_url(stream) or not (urlparse(stream).hostname or "").endswith(".googlevideo.com"):
+        allowed_stream = unrestricted and bool(stream) or (
+            _twitter_media_url(stream)
+            if source == "twitter"
+            else safe_http_url(stream)
+            and (urlparse(stream).hostname or "").casefold().endswith(".googlevideo.com")
+        )
+        if not allowed_stream:
             raise ValueError(UNSAFE_STREAM_REPLY)
         return {"title": str(info.get("title", "unknown track"))[:200], "url": stream,
-                "query": query, "acodec": str(info.get("acodec", "")), "http_headers": {}}
+                "query": lookup, "acodec": str(info.get("acodec", "")),
+                "http_headers": _http_headers(info),
+                "source": source}
     finally:
         if process.returncode is None:
             process.kill()
@@ -646,7 +836,10 @@ async def resolve_music(query: str) -> dict[str, object]:
 
 
 async def _connect_to_author(
-    message: discord.Message, bot_user: object | None
+    message: discord.Message,
+    bot_user: object | None,
+    *,
+    unrestricted: bool = False,
 ) -> tuple[discord.VoiceClient | None, str | None]:
     if getattr(message.author, "voice", None) is None or message.author.voice.channel is None:
         return None, None
@@ -667,7 +860,10 @@ async def _connect_to_author(
         except TypeError:
             voice_client = await target_channel.connect()
     elif voice_client.channel.id != target_channel.id:
-        return None, "join my current voice channel to control music"
+        move_to = getattr(voice_client, "move_to", None)
+        if not unrestricted or not callable(move_to):
+            return None, "join my current voice channel to control music"
+        await move_to(target_channel)
     await _self_deafen(voice_client)
     return voice_client, None
 
@@ -723,6 +919,8 @@ async def abandon_music_if_needed(
     if getattr(member, "bot", False):
         return False
     guild = getattr(member, "guild", None)
+    if unrestricted_music_guild(guild):
+        return False
     voice_client = getattr(guild, "voice_client", None) if guild is not None else None
     channel = getattr(voice_client, "channel", None)
     if guild is None or voice_client is None or channel is None:
@@ -768,17 +966,23 @@ async def handle_music_command(bot: object, message: discord.Message, argument: 
 
     if message.guild is None:
         return audit("!music only works in a server voice channel", outcome="rejected", reason="direct_message")
+    unrestricted = unrestricted_music_guild(message.guild)
     busy = getattr(bot, "music_busy", None)
     if busy is None:
         bot.music_busy = busy = set()
     sessions = set(bot.music_tracks) | busy
-    if message.guild.id not in sessions and len(sessions) >= MAX_MUSIC_JOBS:
+    if not unrestricted and message.guild.id not in sessions and len(sessions) >= MAX_MUSIC_JOBS:
         return audit("Music session limit reached", outcome="rejected", reason="session_limit")
-    if message.guild.id in busy or len(busy) >= MAX_MUSIC_JOBS:
+    if message.guild.id in busy or (not unrestricted and len(busy) >= MAX_MUSIC_JOBS):
         return audit("Music is busy; try later", outcome="rejected", reason="busy")
     busy.add(message.guild.id)
     try:
-        response = await asyncio.wait_for(_handle_music_command(bot, message, argument), timeout=50)
+        if unrestricted:
+            response = await _handle_music_command(bot, message, argument)
+        else:
+            response = await asyncio.wait_for(
+                _handle_music_command(bot, message, argument), timeout=50
+            )
         return audit(response)
     except (asyncio.TimeoutError, httpx.HTTPError) as exc:
         return audit(
@@ -797,15 +1001,14 @@ async def _handle_music_command(
     if message.guild is None:
         return "!music only works in a server voice channel"
     guild_id = message.guild.id
+    unrestricted = unrestricted_music_guild(message.guild)
     action = argument.strip()
     action_lower = action.casefold()
     voice_client = message.guild.voice_client
     tracks: dict[int, dict[str, object]] = bot.music_tracks  # type: ignore[attr-defined]
-    attached_track = attached_music_track(message)
-
     if action_lower == "help":
         return MUSIC_USAGE
-    if action_lower != "now" and voice_client is not None:
+    if not unrestricted and action_lower != "now" and voice_client is not None:
         author_channel = getattr(getattr(message.author, "voice", None), "channel", None)
         if getattr(author_channel, "id", None) != getattr(voice_client.channel, "id", None):
             return "join my current voice channel to control music"
@@ -835,26 +1038,27 @@ async def _handle_music_command(
             voice_client.resume()
             return f"resumed: {track['title']}" if track else "music resumed"
         if track is None:
-            return "choose a song first with `!music <song or URL>`"
+            return "choose media first with `!music <YouTube video or Twitter/X post URL>`"
         return await _play_or_restart(
             bot,
             message,
             str(track["query"]),
             verb="playing",
-            direct_track=track if track.get("source") == "attachment" else None,
         )
     if action_lower == "restart":
         track = tracks.get(guild_id)
         if track is None:
-            return "choose a song first with `!music <song or URL>`"
+            return "choose media first with `!music <YouTube video or Twitter/X post URL>`"
         return await _play_or_restart(
             bot,
             message,
             str(track["query"]),
             verb="restarted",
-            direct_track=track if track.get("source") == "attachment" else None,
         )
 
+    attached_track = (
+        attached_music_track(message, unrestricted=True) if unrestricted else None
+    )
     if attached_track is not None:
         return await _play_or_restart(
             bot,
@@ -876,31 +1080,46 @@ async def _play_or_restart(
     verb: str,
     direct_track: dict[str, object] | None = None,
 ) -> str:
+    unrestricted = unrestricted_music_guild(message.guild)
     if getattr(message.author, "voice", None) is None or message.author.voice.channel is None:
         if verb == "restarted":
             hint = "`!music restart`"
         elif verb == "playing":
-            hint = "`!music <song or URL>`"
+            hint = "`!music <YouTube video or Twitter/X post URL>`"
         else:
             hint = "`!music start`"
         return f"join a voice channel first, then use {hint}"
     connected_here = False
     installed = False
     try:
-        track = dict(direct_track or await resolve_music(query))
+        if direct_track is not None:
+            track = dict(direct_track)
+        elif unrestricted:
+            track = dict(
+                unrestricted_mp3_track(query)
+                or await resolve_music(query, unrestricted=True)
+            )
+        else:
+            track = dict(await resolve_music(query))
         track["requested_by"] = getattr(message.author, "id", None)
-        audio = await download_audio(track)
+        audio = None if unrestricted else await download_audio(track)
         # Validate and download before acquiring a voice connection.
-        if len(bot.music_tracks) >= MAX_MUSIC_JOBS and message.guild.id not in bot.music_tracks:
+        if (
+            not unrestricted
+            and len(bot.music_tracks) >= MAX_MUSIC_JOBS
+            and message.guild.id not in bot.music_tracks
+        ):
             raise ValueError("Music session limit reached")
         connected_here = message.guild.voice_client is None
-        voice_client, error = await _connect_to_author(message, getattr(bot, "user", None))
+        voice_client, error = await _connect_to_author(
+            message, getattr(bot, "user", None), unrestricted=unrestricted
+        )
         if error is not None:
             return error
         if voice_client is None:
             raise ValueError("join a voice channel first")
         author_channel = getattr(getattr(message.author, "voice", None), "channel", None)
-        if getattr(author_channel, "id", None) != getattr(voice_client.channel, "id", None):
+        if not unrestricted and getattr(author_channel, "id", None) != getattr(voice_client.channel, "id", None):
             raise ValueError("join my current voice channel to control music")
         old_track = bot.music_tracks.get(message.guild.id)
         if old_track and old_track.get("_stop_timer"):
@@ -917,11 +1136,17 @@ async def _play_or_restart(
                 loop.call_soon_threadsafe(lambda: asyncio.create_task(finished()))
         bot.music_tracks[message.guild.id] = track
         try:
-            play_track(voice_client, dict(track, audio_bytes=audio, _after=after))
+            playable = dict(track, _after=after)
+            if audio is not None:
+                playable["audio_bytes"] = audio
+            play_track(voice_client, playable, unrestricted=unrestricted)
         except BaseException:
             bot.music_tracks.pop(message.guild.id, None)
             raise
-        track["_stop_timer"] = loop.call_later(MAX_TRACK_SECONDS + 15, lambda: asyncio.create_task(finished()))
+        if not unrestricted:
+            track["_stop_timer"] = loop.call_later(
+                MAX_TRACK_SECONDS + 15, lambda: asyncio.create_task(finished())
+            )
         installed = True
         log.info(
             "Music play guild=%s text=%s user=%s",

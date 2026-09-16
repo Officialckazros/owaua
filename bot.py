@@ -42,6 +42,7 @@ from music import (
     configure_music_audit_log,
     handle_music_command,
     log_music_command,
+    unrestricted_music_guild,
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -53,7 +54,7 @@ log = logging.getLogger("owaua")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip().replace("\\_", "_")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY", "").strip()
 MEMORY_DB = ROOT / "data" / "memory.sqlite3"
 RATE_LIMIT_REQUESTS = 8
 RATE_LIMIT_WINDOW = 60.0
@@ -105,7 +106,7 @@ FULL_MODE_USAGE = "usage: !full mode on"
 HELP_TEXT = """**Owaua commands**
 `!help` — show this command list
 `!owner's note` — a note from the bot's owner
-`!persona rudeish|nerdish|explicit|host default gpt/deepseek/mistral` — view or switch this server's persona (Manage Server; explicit: age-restricted channels only)
+`!persona rudeish|nerdish|flirty|host default gpt/deepseek/mistral` — view or switch this server's persona (Manage Server)
 `!language <full name>|reset` — this server's reply language and profile (Manage Server)
 `!music help` — play a song in your voice channel
 `!memory erase` — erase server memory (Manage Server required)
@@ -179,7 +180,7 @@ def full_mode_setting_key(user_id: object) -> str:
 
 
 PERSONA_USAGE = (
-    "usage: !persona rudeish, !persona nerdish, !persona explicit, "
+    "usage: !persona rudeish, !persona nerdish, !persona flirty, "
     "or !persona host default gpt/deepseek/mistral"
 )
 HOST_DEFAULT_USAGE = (
@@ -529,12 +530,15 @@ class PersonaBot(discord.Client):
 
     def persona_for(self, channel: object, message: object | None = None) -> str:
         selected = self.selected_persona
+        if selected == "explicit":
+            selected = "flirty"
         if message is not None:
             selected = self.memory.get_setting(f"persona:{language_scope_key(message)}", "rudeish")
+            # Migrate the old persona name in existing persisted settings.
+            if selected == "explicit":
+                selected = "flirty"
             if not valid_persona(selected):
                 selected = "rudeish"
-        if selected == "explicit" and not age_restricted_channel(channel):
-            return "rudeish"
         return selected
 
     @staticmethod
@@ -651,6 +655,7 @@ class PersonaBot(discord.Client):
             return
         unlimited = self.full_mode_active(message)
         music_command = matched_command(normalized) == "!music"
+        unrestricted_music = music_command and unrestricted_music_guild(message.guild)
         music_argument = normalized.split(maxsplit=1)[1].strip() if len(normalized.split(maxsplit=1)) == 2 else ""
 
         def audit_filtered(reason: str) -> None:
@@ -666,10 +671,10 @@ class PersonaBot(discord.Client):
         if message.guild is None and not ALLOW_DMS and message.author.id not in OWNER_IDS and not personal_erasure and not unlimited:
             audit_filtered("direct_messages_disabled")
             return
-        if message.guild is not None and ALLOWED_GUILDS and message.guild.id not in ALLOWED_GUILDS and not unlimited:
+        if message.guild is not None and ALLOWED_GUILDS and message.guild.id not in ALLOWED_GUILDS and not unlimited and not unrestricted_music:
             audit_filtered("guild_not_allowlisted")
             return
-        if not unlimited and len(message.content) > MAX_INPUT_CHARS:
+        if not unlimited and not unrestricted_music and len(message.content) > MAX_INPUT_CHARS:
             audit_filtered("message_too_long")
             return
         if (not unlimited and message.guild is not None and matched_command(normalized) is None
@@ -684,7 +689,7 @@ class PersonaBot(discord.Client):
             return
         # Bound complete event handlers, including outbound Discord API waits.
         count = getattr(self, "handler_count", 0)
-        if not unlimited and count >= MAX_HANDLERS:
+        if not unlimited and not unrestricted_music and count >= MAX_HANDLERS:
             audit_filtered("handler_capacity")
             return
         self.handler_count = count + 1
@@ -695,7 +700,7 @@ class PersonaBot(discord.Client):
         if current_task is not None:
             active_handlers.add(current_task)
         try:
-            if unlimited:
+            if unlimited or unrestricted_music:
                 await self._handle_message(message)
             else:
                 await asyncio.wait_for(self._handle_message(message), timeout=HANDLER_TIMEOUT)
@@ -736,8 +741,11 @@ class PersonaBot(discord.Client):
         ):
             command = "!full"
         unlimited = self.full_mode_active(message)
+        unrestricted_music = (
+            command == "!music" and unrestricted_music_guild(message.guild)
+        )
         if command is not None:
-            if not unlimited:
+            if not unlimited and not unrestricted_music:
                 admitted, retry_after = self.admit_command(message.author.id, command)
                 if not admitted:
                     await self._reply(message, f"slow down try again in {retry_after}s")
@@ -901,11 +909,6 @@ class PersonaBot(discord.Client):
     def _persona_command(self, message: discord.Message, requested: str) -> str:
         if not requested.strip():
             current = self.persona_for(message.channel, message)
-            if self.selected_persona == "explicit" and current != "explicit":
-                return (
-                    f"persona: {persona_label(current)} "
-                    "(explicit only works in age-restricted channels)"
-                )
             return f"persona: {persona_label(current)}"
         if not self.can_manage_settings(message):
             return "you need the Manage Server permission to change server settings"
@@ -913,8 +916,6 @@ class PersonaBot(discord.Client):
         if error is not None:
             return error
         assert persona is not None
-        if persona == "explicit" and not age_restricted_channel(message.channel):
-            return "explicit only works in age-restricted channels"
         problem = host_model_error(persona_provider(persona))
         if problem is not None:
             return problem
@@ -1199,9 +1200,9 @@ async def main() -> None:
         raise RuntimeError(
             "DISCORD_TOKEN is missing; copy .env.example to .env and fill it in"
         )
-    if not OPENAI_API_KEY:
+    if not PERPLEXITY_API_KEY:
         raise RuntimeError(
-            "OPENAI_API_KEY is missing; copy .env.example to .env and fill it in"
+            "PERPLEXITY_API_KEY is missing; copy .env.example to .env and fill it in"
         )
     await start_discord_with_retries(DISCORD_TOKEN)
 

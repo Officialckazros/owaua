@@ -24,17 +24,13 @@ load_dotenv(ROOT / ".env")
 log = logging.getLogger("owaua")
 
 GATEWAY_HOST = "gateway.ai.cloudflare.com"
-OPENAI_DIRECT = "https://api.openai.com/v1"
-DEEPSEEK_DIRECT = "https://api.deepseek.com"
-MISTRAL_DIRECT = "https://api.mistral.ai/v1"
+PERPLEXITY_DIRECT = "https://api.perplexity.ai/v1"
 _ACCOUNT_ID = re.compile(r"^[0-9a-f]{32}$")
 _GATEWAY_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 _UNREACHABLE_STATUS = frozenset({401, 403, 404, 521, 522, 523, 530})
 _MAX_LOG_BYTES = 32 * 1024
 _PROVIDER_SUFFIX = {
-    "openai": "openai",
-    "deepseek": "deepseek",
-    "mistral": "mistral/v1",
+    "perplexity": "compat",
 }
 
 
@@ -86,20 +82,20 @@ def request_headers(*, provider: str = "", user_id: str = "", server_id: str = "
 def provider_urls(provider: str, direct_base: str, *, full_mode: bool = False) -> tuple[str, str | None]:
     """Return (primary, fallback_or_none) for one provider.
 
-    Full mode stays on the host path: 10-minute GPT calls can outlive the free
+    Full mode stays on the host path: long Agent API calls can outlive the free
     gateway, and a Cloudflare timeout must not strand an already-paid request.
     """
-    path = "/responses" if provider == "openai" else "/chat/completions"
+    path = "/responses"
     direct = f"{direct_base.rstrip('/')}{path}"
-    if full_mode:
+    # Perplexity Agent API is not a Cloudflare AI Gateway provider. The
+    # compat path 403s (error 1010) and would only add hangout latency.
+    if full_mode or provider == "perplexity":
         return direct, None
     gateway = gateway_base(provider)
     if gateway and not is_gateway_url(direct_base):
         return f"{gateway.rstrip('/')}{path}", direct
     if is_gateway_url(direct_base):
-        fallback = {"openai": OPENAI_DIRECT, "deepseek": DEEPSEEK_DIRECT, "mistral": MISTRAL_DIRECT}[
-            provider
-        ]
+        fallback = {"perplexity": PERPLEXITY_DIRECT}[provider]
         return direct, f"{fallback.rstrip('/')}{path}"
     return direct, None
 

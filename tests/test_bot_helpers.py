@@ -52,6 +52,8 @@ from music import (
     MUSIC_USAGE,
     NON_YOUTUBE_URL_REPLY,
     PLAYLIST_URL_REPLY,
+    TWITTER_STATUS_URL_REPLY,
+    UNRESTRICTED_MUSIC_GUILD_IDS,
     YTDLP_EXTRACTORS,
     _connect_to_author,
     abandon_music_if_needed,
@@ -179,7 +181,7 @@ class BotHelperTests(unittest.TestCase):
     def test_parse_persona_argument_accepts_host_default_models(self) -> None:
         self.assertEqual(parse_persona_argument("rudeish"), ("rudeish", None))
         self.assertEqual(
-            parse_persona_argument("host default"), ("host-default-deepseek", None)
+            parse_persona_argument("host default"), ("host-default-gpt", None)
         )
         self.assertEqual(
             parse_persona_argument("host default GPT"), ("host-default-gpt", None)
@@ -335,11 +337,12 @@ class BotHelperTests(unittest.TestCase):
         self.assertNotIn("evil.test", sneaky)
         self.assertNotIn("-i http", sneaky)
 
-    def test_music_lookup_keeps_a_single_youtube_video(self) -> None:
-        self.assertEqual(
-            music_lookup("radiohead creep"),
-            "ytsearch1:radiohead creep",
-        )
+        unrestricted = ffmpeg_before_options(unrestricted=True)
+        self.assertNotIn("-protocol_whitelist", unrestricted)
+
+    def test_music_lookup_requires_a_youtube_video_link(self) -> None:
+        with self.assertRaisesRegex(ValueError, re.escape(NON_YOUTUBE_URL_REPLY)):
+            music_lookup("radiohead creep")
         self.assertEqual(
             music_lookup(
                 "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDdQw4w9WgXcQ&start_radio=1"
@@ -358,6 +361,18 @@ class BotHelperTests(unittest.TestCase):
             music_lookup("https://www.youtube.com/shorts/dQw4w9WgXcQ"),
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
         )
+
+    def test_music_lookup_accepts_only_canonical_twitter_status_links(self) -> None:
+        self.assertEqual(
+            music_lookup("https://twitter.com/example/status/123456789?s=20"),
+            "https://x.com/example/status/123456789",
+        )
+        self.assertEqual(
+            music_lookup("https://x.com/i/status/987654321/photo/1"),
+            "https://x.com/i/status/987654321",
+        )
+        with self.assertRaisesRegex(ValueError, re.escape(TWITTER_STATUS_URL_REPLY)):
+            music_lookup("https://x.com/example")
 
     def test_music_lookup_rejects_playlists_and_non_youtube_urls(self) -> None:
         with self.assertRaisesRegex(ValueError, re.escape(NON_YOUTUBE_URL_REPLY)):
@@ -407,6 +422,15 @@ class BotHelperTests(unittest.TestCase):
             )
         voice.play.assert_not_called()
 
+    def test_unrestricted_play_uses_remote_stream_directly(self) -> None:
+        voice = SimpleNamespace(play=Mock())
+        source = Mock()
+        track = {"url": "http://media.example.test/live.m3u8"}
+        with patch("music.UnrestrictedAudio", return_value=source) as audio:
+            play_track(voice, track, unrestricted=True)
+        audio.assert_called_once_with(track)
+        voice.play.assert_called_once()
+
     def test_split_reply_keeps_short_text_and_breaks_long_text(self) -> None:
         self.assertEqual(split_reply("hello"), ["hello"])
         self.assertEqual(split_reply("   "), [])
@@ -427,9 +451,10 @@ class MusicAsyncTests(unittest.IsolatedAsyncioTestCase):
         info = {"title": "Creep", "url": "https://r1.googlevideo.com/audio", "duration": 200, "acodec": "opus"}
         process = SimpleNamespace(returncode=0, communicate=AsyncMock(return_value=(json.dumps(info).encode(), b"")), wait=AsyncMock())
         with patch("music.asyncio.create_subprocess_exec", AsyncMock(return_value=process)) as spawn:
-            track = await resolve_music("radiohead creep")
-        self.assertEqual(spawn.call_args.args[-1], "ytsearch1:radiohead creep")
+            track = await resolve_music("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        self.assertEqual(spawn.call_args.args[-1], "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
         self.assertNotIn("OPENAI_API_KEY", spawn.call_args.kwargs["env"])
+        self.assertNotIn("PERPLEXITY_API_KEY", spawn.call_args.kwargs["env"])
         self.assertEqual(track["title"], "Creep")
         self.assertEqual(track["http_headers"], {})
 
@@ -439,6 +464,45 @@ class MusicAsyncTests(unittest.IsolatedAsyncioTestCase):
         with patch("music.asyncio.create_subprocess_exec", AsyncMock(return_value=process)) as spawn:
             await resolve_music("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDdQw4w9WgXcQ")
         self.assertEqual(spawn.call_args.args[-1], "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+
+    async def test_resolve_music_allows_twitter_media_from_its_cdn(self) -> None:
+        info = {
+            "title": "Tweet video",
+            "url": "https://video.twimg.com/ext_tw_video/123/pu/vid/1280x720/video.mp4",
+            "duration": 12,
+            "acodec": "aac",
+        }
+        process = SimpleNamespace(returncode=0, communicate=AsyncMock(return_value=(json.dumps(info).encode(), b"")), wait=AsyncMock())
+        with patch("music.asyncio.create_subprocess_exec", AsyncMock(return_value=process)) as spawn:
+            track = await resolve_music("https://twitter.com/example/status/123456789?s=20")
+        self.assertEqual(spawn.call_args.args[-1], "https://x.com/example/status/123456789")
+        self.assertEqual(track["source"], "twitter")
+        self.assertEqual(track["query"], "https://x.com/example/status/123456789")
+
+    async def test_unrestricted_resolver_passes_any_link_to_worker(self) -> None:
+        info = {
+            "title": "Live radio",
+            "url": "http://media.example.test/live.m3u8",
+            "is_live": True,
+            "duration": None,
+            "http_headers": {"User-Agent": "yt-dlp"},
+        }
+        process = SimpleNamespace(
+            returncode=0,
+            communicate=AsyncMock(return_value=(json.dumps(info).encode(), b"")),
+            wait=AsyncMock(),
+        )
+        with patch(
+            "music.asyncio.create_subprocess_exec",
+            AsyncMock(return_value=process),
+        ) as spawn:
+            track = await resolve_music(
+                "http://media.example.test/watch", unrestricted=True
+            )
+        self.assertEqual(spawn.call_args.args[-1], "--unrestricted")
+        self.assertIn("http://media.example.test/watch", spawn.call_args.args)
+        self.assertEqual(track["url"], "http://media.example.test/live.m3u8")
+        self.assertEqual(track["http_headers"], {"User-Agent": "yt-dlp"})
 
     async def test_resolve_music_does_not_fetch_non_youtube_urls(self) -> None:
         class FakeYoutubeDL:
@@ -471,14 +535,14 @@ class MusicAsyncTests(unittest.IsolatedAsyncioTestCase):
         process = SimpleNamespace(returncode=0, communicate=AsyncMock(return_value=(json.dumps(info).encode(), b"")), wait=AsyncMock())
         with patch("music.asyncio.create_subprocess_exec", AsyncMock(return_value=process)):
             with self.assertRaisesRegex(ValueError, re.escape(LIVE_STREAM_REPLY)):
-                await resolve_music("song")
+                await resolve_music("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
 
     async def test_resolve_music_rejects_long_mixes(self) -> None:
         info = {"url": "https://r1.googlevideo.com/audio", "duration": 10800}
         process = SimpleNamespace(returncode=0, communicate=AsyncMock(return_value=(json.dumps(info).encode(), b"")), wait=AsyncMock())
         with patch("music.asyncio.create_subprocess_exec", AsyncMock(return_value=process)):
             with self.assertRaisesRegex(ValueError, re.escape(LONG_TRACK_REPLY)):
-                await resolve_music("song")
+                await resolve_music("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
 
     async def test_music_stops_when_the_requester_leaves(self) -> None:
         voice = SimpleNamespace(
@@ -525,6 +589,30 @@ class MusicAsyncTests(unittest.IsolatedAsyncioTestCase):
         voice.stop.assert_not_called()
         voice.disconnect.assert_not_awaited()
         self.assertIn(11, bot.music_tracks)
+
+    async def test_trusted_guild_does_not_auto_disconnect(self) -> None:
+        guild_id = next(iter(UNRESTRICTED_MUSIC_GUILD_IDS))
+        voice = SimpleNamespace(
+            channel=SimpleNamespace(id=7, members=[]),
+            stop=Mock(),
+            disconnect=AsyncMock(),
+        )
+        guild = SimpleNamespace(id=guild_id, voice_client=voice)
+        bot = SimpleNamespace(
+            music_tracks={guild_id: {"title": "x", "requested_by": 33}},
+        )
+        member = SimpleNamespace(id=33, bot=False, guild=guild)
+
+        stopped = await abandon_music_if_needed(
+            bot,
+            member,
+            SimpleNamespace(channel=voice.channel),
+            SimpleNamespace(channel=None),
+        )
+
+        self.assertFalse(stopped)
+        voice.stop.assert_not_called()
+        voice.disconnect.assert_not_awaited()
 
     async def test_connect_rejects_a_voice_channel_from_another_server(self) -> None:
         other = SimpleNamespace(id=99)

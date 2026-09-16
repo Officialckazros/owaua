@@ -5,7 +5,7 @@ davey==0.1.6
 httpx==0.28.1
 pillow==12.3.0
 python-dotenv==1.2.3
-yt-dlp==2026.8.19
+yt-dlp[default,deno]==2026.8.19
 
 # Transitive runtime pins from the verified Python 3.12 resolution.
 aiohttp==3.14.3
