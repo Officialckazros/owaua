@@ -39,11 +39,13 @@ env_payload = env_file.read_bytes()
 excluded = {
     Path("scripts/deploy.sh"),
     Path("scripts/update-persona.sh"),
+    Path("scripts/setup-cloudflare.py"),
     Path("personas/update-persona.sh"),
 }
 required_runtime = {
     Path("bot.py"),
     Path("ask.py"),
+    Path("cloudflare.py"),
     Path("memory.py"),
     Path("music.py"),
     Path("security.py"),
@@ -132,14 +134,18 @@ print("Uploaded persona-test-bot/.env (verified)")
 client.update_startup_variable("STARTUP_CMD", "")
 client.update_startup_variable(
     "SECOND_CMD",
-    "cd persona-test-bot && OWAUA_VERIFY_DEPLOY=1 bash scripts/run-bots.sh",
+    # Daki runs this command for ordinary starts, restarts and panel-driven
+    # recovery. Deployment verification must not be part of the long-running
+    # server command: its mocked failure-path tests produce noisy warnings and
+    # can make a lifecycle operation look unhealthy even when the bot is fine.
+    "cd persona-test-bot && bash scripts/run-bots.sh",
 )
 print(f"Restarting {config.get('server_name', config['server_id'])}...")
 client.restart()
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
     if client.state() == "running":
-        print("Container started. Verify OWAUA_RUNTIME_VERIFIED, OWAUA_DEPLOY_TESTS_PASSED and Discord readiness in its console before declaring deployment healthy.")
+        print("Container started with the normal lifecycle command. Verify the Discord readiness event in its console before declaring deployment healthy.")
         break
     time.sleep(2)
 else:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import base64
 import os
 import tempfile
 import time
@@ -15,6 +16,8 @@ import httpx
 from ask import (
     DEEPSEEK_MODEL,
     GPT_FULL_REASONING,
+    FULL_MODE_IMAGE_MODEL,
+    FULL_MODE_IMAGE_QUALITY,
     GPT_MAX_OUTPUT_TOKENS,
     GPT_REASONING,
     GPT_TERRA_MODEL,
@@ -43,6 +46,7 @@ from ask import (
     persona_provider,
     read_persona,
     response_text,
+    response_reply,
     sanitize_user_text,
     truncate,
 )
@@ -120,8 +124,20 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
             Path(self.temporary_directory.name) / "memory.sqlite3"
         )
         self.http = FakeHTTP()
+        self._cloudflare = patch.dict(
+            os.environ,
+            {
+                "CLOUDFLARE_ACCOUNT_ID": "",
+                "CLOUDFLARE_AI_GATEWAY": "",
+                "CLOUDFLARE_AI_GATEWAY_ID": "",
+                "CLOUDFLARE_AI_GATEWAY_TOKEN": "",
+            },
+            clear=False,
+        )
+        self._cloudflare.start()
 
     def tearDown(self) -> None:
+        self._cloudflare.stop()
         self.temporary_directory.cleanup()
 
     async def _ask(self, prompt: str = "hello", **kwargs: object) -> str | None:
@@ -523,15 +539,41 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("tools", payload)
         self.assertNotIn("web search", payload["messages"][0]["content"])
 
-    async def test_full_mode_has_unbounded_output_and_no_tools(self) -> None:
-        await self._ask(full_mode=True)
+    async def test_full_mode_has_unbounded_output_and_privileged_tools(self) -> None:
+        await self._ask("generate an image of a crown", full_mode=True)
         payload = self.http.calls[0][1]["json"]
         self.assertEqual(payload["model"], GPT_TERRA_MODEL)
         self.assertNotIn("max_output_tokens", payload)
         self.assertNotIn("max_tokens", payload)
         self.assertEqual(payload["reasoning"], dict(GPT_FULL_REASONING))
-        self.assertNotIn("tools", payload)
-        self.assertEqual(gpt_full_tools(), [])
+        self.assertEqual(payload["tools"], gpt_full_tools())
+        self.assertEqual(
+            payload["tools"],
+            [
+                {"type": "web_search"},
+                {"type": "code_interpreter", "container": {"type": "auto"}},
+                {
+                    "type": "image_generation",
+                    "model": FULL_MODE_IMAGE_MODEL,
+                    "quality": FULL_MODE_IMAGE_QUALITY,
+                },
+            ],
+        )
+
+    async def test_full_mode_limits_image_generation_to_three_requests_per_day(self) -> None:
+        for index in range(4):
+            await self._ask(
+                "generate an image of a crown",
+                event_id=f"image-{index}",
+                full_mode=True,
+            )
+
+        tools = [call[1]["json"]["tools"] for call in self.http.calls]
+        self.assertEqual(tools[:3], [gpt_full_tools()] * 3)
+        self.assertEqual(
+            tools[3],
+            gpt_full_tools(include_image_generation=False),
+        )
 
     async def test_full_mode_sends_images_and_keeps_long_replies(self) -> None:
         urls = [
@@ -573,13 +615,23 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         await self._ask(event_id="100")
         self.assertNotEqual(self.memory.api_status(), before)
 
+    async def test_full_mode_ignores_an_emergency_api_pause(self) -> None:
+        self.memory.set_setting("api_paused", "1")
+
+        answer = await self._ask(full_mode=True)
+
+        self.assertEqual(answer, "allowed reply")
+
     async def test_full_mode_overrides_deepseek_and_mistral_personas(self) -> None:
         await self._ask(persona="explicit", full_mode=True)
 
         payload = self.http.calls[0][1]["json"]
         self.assertTrue(self.http.calls[0][0].endswith("/responses"))
         self.assertEqual(payload["model"], "gpt-5.6-terra")
-        self.assertNotIn("tools", payload)
+        self.assertEqual(
+            payload["tools"],
+            gpt_full_tools(include_image_generation=False),
+        )
         self.assertIn("Consensual adult sexual roleplay", payload["instructions"])
 
     async def test_full_mode_keeps_long_answers_instead_of_persona_drop(self) -> None:
@@ -615,6 +667,25 @@ class AskHelperTests(unittest.TestCase):
             ]
         }
         self.assertEqual(response_text(data), "first\nsecond")
+
+    def test_response_reply_extracts_a_generated_image(self) -> None:
+        data = {
+            "output": [
+                {
+                    "type": "image_generation_call",
+                    "result": base64.b64encode(b"image-bytes").decode(),
+                },
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "done"}],
+                },
+            ]
+        }
+
+        reply = response_reply(data)
+
+        self.assertEqual(reply, "done")
+        self.assertEqual(reply.image_bytes, (b"image-bytes",))
 
     def test_response_text_appends_web_search_citations(self) -> None:
         data = {

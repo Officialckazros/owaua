@@ -21,7 +21,7 @@ import httpx
 
 from ask import ask
 from bot import MessageEventGuard
-from memory import MemoryStore
+from memory import CONVERSATION_MESSAGES, MAX_STORED_CHARS, MemoryStore
 from music import download_audio, handle_music_command, media_format, resolve_music
 from security import ApiLimits, BudgetExceeded, DuplicateRequest
 import test_channel_commands as fixtures
@@ -75,15 +75,14 @@ class BudgetTests(unittest.TestCase):
             self.store.reserve_api_request("2", "v", "h", limits=limits, now=1)
         self.store.reserve_api_request("3", "v", "h", limits=limits, now=161)
 
-    def test_duplicates_and_pause_are_fail_closed(self):
+    def test_duplicates_and_pause_apply_only_to_standard_requests(self):
         self.store.reserve_api_request("1", "u", "g")
         with self.assertRaises(DuplicateRequest):
             self.store.reserve_api_request("1", "u", "g")
         self.store.set_setting("api_paused", "1")
         with self.assertRaises(BudgetExceeded):
             self.store.reserve_api_request("2", "u", "g")
-        with self.assertRaises(BudgetExceeded):
-            self.store.reserve_api_request("3", "u", "g", exempt=True)
+        self.store.reserve_api_request("3", "u", "g", exempt=True)
 
     def test_exempt_full_mode_does_not_consume_shared_budget(self):
         limits = ApiLimits(100, 100, 100, 100, 1)
@@ -92,6 +91,20 @@ class BudgetTests(unittest.TestCase):
         with self.assertRaises(BudgetExceeded):
             self.store.reserve_api_request("next", "v", "h", limits=limits)
         self.store.reserve_api_request("still-full", "allow", "g", limits=limits, exempt=True)
+
+    def test_unbounded_memory_keeps_full_mode_history_verbatim(self):
+        content = "x" * (MAX_STORED_CHARS + 1)
+        for index in range(CONVERSATION_MESSAGES + 1):
+            self.store.append_message(
+                event_id=f"full-{index}",
+                scope_id="full", user_id="allow", role="user", content=content,
+                unbounded=True,
+            )
+
+        rows = self.store.recent_messages("full", "allow", limit=None)
+
+        self.assertEqual(len(rows), CONVERSATION_MESSAGES + 1)
+        self.assertTrue(all(row["content"] == content for row in rows))
 
     def test_retention_and_user_erasure(self):
         for i in range(25):

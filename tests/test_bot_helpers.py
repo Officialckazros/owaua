@@ -18,6 +18,7 @@ from bot import (
     BANNER_SIZE,
     DISCORD_MESSAGE_LIMIT,
     FULL_MODE_ALLOWED_USER_IDS,
+    FULL_MODE_CHANNEL_IDS,
     FULL_MODE_CHANNEL_ID,
     FULL_MODE_GUILD_ID,
     HOST_DEFAULT_USAGE,
@@ -25,6 +26,7 @@ from bot import (
     MessageEventGuard,
     age_restricted_channel,
     command_text,
+    discord_retry_delay,
     full_mode_allowed,
     full_mode_blocked,
     full_mode_can_enable,
@@ -42,6 +44,7 @@ from bot import (
     prepare_avatar_bytes,
     prepare_banner_bytes,
     split_reply,
+    start_discord_with_retries,
 )
 from music import (
     LIVE_STREAM_REPLY,
@@ -63,12 +66,19 @@ from music import (
 
 
 class BotHelperTests(unittest.TestCase):
+    def test_discord_retry_delay_is_exponential_and_capped(self) -> None:
+        self.assertEqual(discord_retry_delay(0), 0.0)
+        self.assertEqual(discord_retry_delay(1), 5.0)
+        self.assertEqual(discord_retry_delay(2), 10.0)
+        self.assertEqual(discord_retry_delay(99), 300.0)
+
     def test_message_event_guard_claims_each_event_once(self) -> None:
         guard = MessageEventGuard(ttl=10)
 
         self.assertTrue(guard.claim(42, now=100))
         self.assertFalse(guard.claim(42, now=101))
         self.assertTrue(guard.claim(42, now=111))
+
 
     def test_owner_note_command_matches_straight_and_curly_apostrophes(self) -> None:
         self.assertTrue(is_owner_note_command("!owner's note"))
@@ -83,6 +93,7 @@ class BotHelperTests(unittest.TestCase):
         self.assertIsNone(matched_command("!active on"))
         self.assertIsNone(matched_command("!debate pineapple on pizza"))
         self.assertEqual(matched_command("!music skip"), "!music")
+        self.assertEqual(matched_command("!shutdown"), "!shutdown")
         self.assertEqual(matched_command("!owner's note"), "!owner's note")
         self.assertEqual(matched_command("!OWNER’S NOTE"), "!owner's note")
         self.assertEqual(matched_command("!persona host default gpt"), "!persona")
@@ -113,16 +124,24 @@ class BotHelperTests(unittest.TestCase):
         )
         dm = SimpleNamespace(guild=None, channel=SimpleNamespace(id=FULL_MODE_CHANNEL_ID))
         self.assertTrue(full_mode_location(allowed))
+
+        second_allowed = SimpleNamespace(
+            guild=SimpleNamespace(id=FULL_MODE_GUILD_ID),
+            channel=SimpleNamespace(id=1549566630726602772),
+        )
+        self.assertIn(1549566630726602772, FULL_MODE_CHANNEL_IDS)
+        self.assertTrue(full_mode_location(second_allowed))
         self.assertFalse(full_mode_location(other_channel))
         self.assertFalse(full_mode_location(other_guild))
         self.assertFalse(full_mode_location(dm))
         self.assertTrue(full_mode_blocked(470617205667790868))
+        self.assertTrue(full_mode_blocked(836988339491962881))
         self.assertFalse(full_mode_blocked(33))
         self.assertTrue(full_mode_can_enable(1172433512364769342))
-        self.assertTrue(full_mode_can_enable(836988339491962881))
+        self.assertFalse(full_mode_can_enable(836988339491962881))
         self.assertFalse(full_mode_can_enable(33))
         self.assertFalse(full_mode_can_enable(470617205667790868))
-        self.assertTrue(full_mode_allowed(836988339491962881))
+        self.assertFalse(full_mode_allowed(836988339491962881))
         self.assertTrue(full_mode_allowed(1391094791210536970))
         self.assertTrue(full_mode_allowed(next(iter(FULL_MODE_ALLOWED_USER_IDS))))
         self.assertTrue(full_mode_allowed(1172433512364769342))
@@ -540,6 +559,40 @@ class MusicAsyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(client, voice)
         self.assertIsNone(error)
         channel.connect.assert_awaited_once_with(self_deaf=True)
+
+
+class DiscordRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_recreates_the_client_after_a_recoverable_start_failure(self) -> None:
+        failed = SimpleNamespace(
+            start=AsyncMock(side_effect=OSError("network unavailable")),
+            close=AsyncMock(),
+        )
+        recovered = SimpleNamespace(start=AsyncMock(), close=AsyncMock())
+        factory = Mock(side_effect=[failed, recovered])
+        sleep = AsyncMock()
+
+        await start_discord_with_retries("token", bot_factory=factory, sleep=sleep)
+
+        self.assertEqual(factory.call_count, 2)
+        failed.start.assert_awaited_once_with("token", reconnect=True)
+        recovered.start.assert_awaited_once_with("token", reconnect=True)
+        failed.close.assert_awaited_once()
+        recovered.close.assert_awaited_once()
+        sleep.assert_awaited_once_with(5.0)
+
+    async def test_shutdown_requested_client_is_not_recreated(self) -> None:
+        stopped = SimpleNamespace(
+            start=AsyncMock(side_effect=OSError("shutdown")),
+            close=AsyncMock(),
+            shutdown_requested=True,
+        )
+        factory = Mock(return_value=stopped)
+        sleep = AsyncMock()
+
+        await start_discord_with_retries("token", bot_factory=factory, sleep=sleep)
+
+        factory.assert_called_once_with()
+        sleep.assert_not_awaited()
 
 
 if __name__ == "__main__":

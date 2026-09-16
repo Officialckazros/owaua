@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import hashlib
 import os
 import sys
 import threading
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -22,7 +25,10 @@ from urllib.parse import parse_qs, urlparse
 
 import discord
 
+from cloudflare import ship_audit_record
+
 log = logging.getLogger("owaua")
+music_audit_log = logging.getLogger("owaua.music.audit")
 FFMPEG_BEFORE_OPTIONS = (
     "-nostdin -reconnect 1 -reconnect_streamed 1 "
     "-reconnect_delay_max 5 -thread_queue_size 1024 "
@@ -124,6 +130,118 @@ UNSAFE_STREAM_REPLY = "no playable audio found"
 LIVE_STREAM_REPLY = "live streams and 24/7 radios aren't allowed"
 LONG_TRACK_REPLY = "that video is too long; send a single song under 15 minutes"
 MAX_TRACK_SECONDS = 15 * 60
+
+
+def configure_music_audit_log(path: str | os.PathLike[str]) -> None:
+    """Write one machine-readable audit record per handled ``!music`` command."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    for handler in music_audit_log.handlers:
+        if isinstance(handler, logging.FileHandler) and Path(handler.baseFilename) == target.resolve():
+            return
+    handler = logging.FileHandler(target, encoding="utf-8")
+    try:
+        target.chmod(0o600)
+    except OSError:
+        log.warning("Could not restrict music audit log permissions: %s", target)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    music_audit_log.addHandler(handler)
+    music_audit_log.setLevel(logging.INFO)
+    music_audit_log.propagate = True
+
+
+def _audit_value(value: object) -> object:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _safe_attachment_info(message: object) -> list[dict[str, object]]:
+    result = []
+    for attachment in getattr(message, "attachments", []) or []:
+        url = str(getattr(attachment, "url", ""))
+        parsed = urlparse(url)
+        result.append(
+            {
+                "filename": str(getattr(attachment, "filename", ""))[:255],
+                "size": _audit_value(getattr(attachment, "size", None)),
+                "content_type": _audit_value(getattr(attachment, "content_type", None)),
+                "url_host": parsed.hostname,
+                "url_path": parsed.path[:500],
+            }
+        )
+    return result
+
+
+def log_music_command(
+    message: object,
+    argument: str,
+    *,
+    outcome: str,
+    reason: str | None = None,
+    response: str | None = None,
+    duration_ms: float | None = None,
+    error: BaseException | None = None,
+) -> None:
+    """Emit a complete audit record without ever exposing signed media URLs."""
+    author = getattr(message, "author", None)
+    guild = getattr(message, "guild", None)
+    channel = getattr(message, "channel", None)
+    author_voice = getattr(author, "voice", None)
+    voice_channel = getattr(author_voice, "channel", None)
+    created_at = getattr(message, "created_at", None)
+    if isinstance(created_at, datetime):
+        message_timestamp = created_at.astimezone(timezone.utc).isoformat()
+    else:
+        message_timestamp = _audit_value(created_at)
+    raw_argument = str(argument)[:2000]
+    requested_action = raw_argument.split(maxsplit=1)[0].casefold() if raw_argument else "play"
+    if requested_action not in {"help", "now", "pause", "leave", "disconnect", "stop", "skip", "start", "resume", "restart"}:
+        requested_action = "play"
+    record: dict[str, object] = {
+        "event": "music_command",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "message_timestamp": message_timestamp,
+        "message_id": _audit_value(getattr(message, "id", None)),
+        "message_url": _audit_value(getattr(message, "jump_url", None)),
+        "command": "!music",
+        "action": requested_action,
+        "argument": raw_argument,
+        "argument_sha256": hashlib.sha256(raw_argument.encode("utf-8")).hexdigest(),
+        "outcome": outcome,
+        "reason": reason,
+        "response": response[:2000] if response is not None else None,
+        "duration_ms": round(duration_ms, 2) if duration_ms is not None else None,
+        "error_type": type(error).__name__ if error is not None else None,
+        "user": {
+            "id": _audit_value(getattr(author, "id", None)),
+            "name": _audit_value(getattr(author, "name", None)),
+            "display_name": _audit_value(getattr(author, "display_name", None)),
+            "global_name": _audit_value(getattr(author, "global_name", None)),
+            "discriminator": _audit_value(getattr(author, "discriminator", None)),
+            "bot": bool(getattr(author, "bot", False)),
+        },
+        "guild": {
+            "id": _audit_value(getattr(guild, "id", None)),
+            "name": _audit_value(getattr(guild, "name", None)),
+        },
+        "channel": {
+            "id": _audit_value(getattr(channel, "id", None)),
+            "name": _audit_value(getattr(channel, "name", None)),
+            "type": _audit_value(type(channel).__name__) if channel is not None else None,
+        },
+        "requester_voice_channel": {
+            "id": _audit_value(getattr(voice_channel, "id", None)),
+            "name": _audit_value(getattr(voice_channel, "name", None)),
+        },
+        "attachments": _safe_attachment_info(message),
+    }
+    try:
+        encoded = json.dumps(record, ensure_ascii=False, default=str)
+        music_audit_log.info("%s", encoded)
+        ship_audit_record(encoded)
+    except Exception:
+        log.exception("Could not write music audit record")
 
 GENERIC_ATTACHMENT_TYPES = {
     "application/octet-stream",
@@ -634,21 +752,41 @@ async def abandon_music_if_needed(
 
 
 async def handle_music_command(bot: object, message: discord.Message, argument: str) -> str:
+    started = time.monotonic()
+
+    def audit(response: str, *, outcome: str = "completed", reason: str | None = None, error: BaseException | None = None) -> str:
+        log_music_command(
+            message,
+            argument,
+            outcome=outcome,
+            reason=reason,
+            response=response,
+            duration_ms=(time.monotonic() - started) * 1000,
+            error=error,
+        )
+        return response
+
     if message.guild is None:
-        return "!music only works in a server voice channel"
+        return audit("!music only works in a server voice channel", outcome="rejected", reason="direct_message")
     busy = getattr(bot, "music_busy", None)
     if busy is None:
         bot.music_busy = busy = set()
     sessions = set(bot.music_tracks) | busy
     if message.guild.id not in sessions and len(sessions) >= MAX_MUSIC_JOBS:
-        return "Music session limit reached"
+        return audit("Music session limit reached", outcome="rejected", reason="session_limit")
     if message.guild.id in busy or len(busy) >= MAX_MUSIC_JOBS:
-        return "Music is busy; try later"
+        return audit("Music is busy; try later", outcome="rejected", reason="busy")
     busy.add(message.guild.id)
     try:
-        return await asyncio.wait_for(_handle_music_command(bot, message, argument), timeout=50)
-    except (asyncio.TimeoutError, httpx.HTTPError):
-        return "Music timed out or could not be downloaded"
+        response = await asyncio.wait_for(_handle_music_command(bot, message, argument), timeout=50)
+        return audit(response)
+    except (asyncio.TimeoutError, httpx.HTTPError) as exc:
+        return audit(
+            "Music timed out or could not be downloaded",
+            outcome="failed",
+            reason="timeout" if isinstance(exc, asyncio.TimeoutError) else "http_error",
+            error=exc,
+        )
     finally:
         busy.discard(message.guild.id)
 

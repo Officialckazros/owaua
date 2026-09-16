@@ -10,14 +10,15 @@ import re
 import time
 from collections import defaultdict, deque
 from pathlib import Path
+from typing import Awaitable, Callable
 
+import aiohttp
 import discord
 import httpx
 from dotenv import load_dotenv
 from PIL import Image
 
 from ask import (
-    FULL_MODE_MAX_ATTACHMENTS,
     HOST_DEFAULT_MODELS,
     MAX_ATTACHMENTS,
     PERSONAS,
@@ -32,10 +33,16 @@ from ask import (
     truncate,
     valid_persona,
 )
+from cloudflare import describe_protection
 from memory import MemoryStore
 from security import (OWNER_IDS, BLOCKED_USERS, ALLOWED_GUILDS, ALLOW_DMS,
                       MAX_INFLIGHT, MAX_INPUT_CHARS, MAX_REPLY_CHARS, MAX_TRACKED_USERS)
-from music import abandon_music_if_needed, handle_music_command
+from music import (
+    abandon_music_if_needed,
+    configure_music_audit_log,
+    handle_music_command,
+    log_music_command,
+)
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -60,22 +67,31 @@ COMMANDS = frozenset(
         "!music",
         "!memory",
         "!security",
+        "!shutdown",
     }
 )
 DISCORD_MESSAGE_LIMIT = 1900
 ASK_TIMEOUT = 40.0
-FULL_MODE_ASK_TIMEOUT = 600.0
 HANDLER_TIMEOUT = 140.0
-FULL_MODE_HANDLER_TIMEOUT = 620.0
 MAX_HANDLERS = 16
 FULL_MODE_GUILD_ID = 1535083112709496903
 FULL_MODE_CHANNEL_ID = 1535083114219700227
-FULL_MODE_BLOCKED_USER_IDS = frozenset({470617205667790868})
+FULL_MODE_CHANNEL_IDS = frozenset(
+    {
+        FULL_MODE_CHANNEL_ID,
+        1549566630726602772,
+    }
+)
+FULL_MODE_BLOCKED_USER_IDS = frozenset(
+    {
+        470617205667790868,
+        836988339491962881,
+    }
+)
 FULL_MODE_ENABLE_USER_IDS = frozenset({1172433512364769342})
 FULL_MODE_ALLOWED_USER_IDS = frozenset(
     {
         1172433512364769342,
-        836988339491962881,
         1121021729649737813,
         1124004905292664985,
         1511064708764139536,
@@ -95,6 +111,7 @@ HELP_TEXT = """**Owaua commands**
 `!memory erase` — erase server memory (Manage Server required)
 `!memory erase mine` — erase your own conversation history
 `!security status|pause|resume` — API usage and emergency pause (bot owner only)
+`!shutdown` — fully stop the bot (bot owner only)
 
 Each command has a 25s cooldown."""
 
@@ -141,7 +158,7 @@ def full_mode_location(message: object) -> bool:
     channel = getattr(message, "channel", None)
     return (
         getattr(guild, "id", None) == FULL_MODE_GUILD_ID
-        and getattr(channel, "id", None) == FULL_MODE_CHANNEL_ID
+        and getattr(channel, "id", None) in FULL_MODE_CHANNEL_IDS
     )
 
 
@@ -218,6 +235,9 @@ MAX_PROFILE_IMAGE_BYTES = 8 * 1024 * 1024
 AVATAR_SIZE = 1024
 BANNER_SIZE = (680, 240)
 PROFILE_UPDATE_TIMEOUT = 20.0
+DISCORD_RETRY_INITIAL_DELAY = 5.0
+DISCORD_RETRY_MAX_DELAY = 300.0
+PING_RESPONSE = "yeah?"
 
 
 def language_asset_key(value: str) -> str:
@@ -484,6 +504,8 @@ class PersonaBot(discord.Client):
         self.inflight_users: set[int] = set()
         self.handler_count = 0
         self.full_mode_users: set[int] = set()
+        self.shutdown_requested = False
+        self.active_handlers: set[asyncio.Task[object]] = set()
 
     def response_language(self, message: object) -> str:
         scope_key = language_scope_key(message)
@@ -585,6 +607,16 @@ class PersonaBot(discord.Client):
     async def on_ready(self) -> None:
         log.info("Logged in as %s; persona=%s", self.user, self.selected_persona)
 
+    async def on_disconnect(self) -> None:
+        # discord.py keeps retrying gateway connections by itself.  This event
+        # is still useful when Discord has a partial outage, because it makes
+        # the connection state visible without stopping message handling.
+        if not self.is_closed():
+            log.warning("Disconnected from Discord; waiting for gateway recovery")
+
+    async def on_resumed(self) -> None:
+        log.info("Discord gateway session resumed")
+
     async def setup_hook(self) -> None:
         self.maintenance_task = asyncio.create_task(self._maintain_memory())
 
@@ -607,35 +639,84 @@ class PersonaBot(discord.Client):
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot or getattr(message, "webhook_id", None):
             return
-        personal_erasure = command_text(message.content, None if self.user is None else self.user.id).casefold() == "!memory erase mine"
-        if message.author.id in BLOCKED_USERS and not personal_erasure:
+        normalized = command_text(message.content, None if self.user is None else self.user.id)
+        if self.shutdown_requested:
             return
-        if message.guild is None and not ALLOW_DMS and message.author.id not in OWNER_IDS and not personal_erasure:
-            return
-        if message.guild is not None and ALLOWED_GUILDS and message.guild.id not in ALLOWED_GUILDS:
+        # This emergency command must be reachable even from a DM, blocked
+        # guild, or a guild where ordinary commands are filtered. It never
+        # sends an acknowledgement: once accepted, all outbound work stops.
+        if normalized.casefold() == "!shutdown":
+            if message.author.id in OWNER_IDS and self.message_events.claim(message.id):
+                await self._shutdown()
             return
         unlimited = self.full_mode_active(message)
-        if not unlimited and len(message.content) > MAX_INPUT_CHARS:
+        music_command = matched_command(normalized) == "!music"
+        music_argument = normalized.split(maxsplit=1)[1].strip() if len(normalized.split(maxsplit=1)) == 2 else ""
+
+        def audit_filtered(reason: str) -> None:
+            if music_command:
+                log_music_command(
+                    message, music_argument, outcome="rejected", reason=reason
+                )
+
+        personal_erasure = command_text(message.content, None if self.user is None else self.user.id).casefold() == "!memory erase mine"
+        if message.author.id in BLOCKED_USERS and not personal_erasure and not unlimited:
+            audit_filtered("blocked_user")
             return
-        normalized = command_text(message.content, None if self.user is None else self.user.id)
-        if (message.guild is not None and matched_command(normalized) is None
+        if message.guild is None and not ALLOW_DMS and message.author.id not in OWNER_IDS and not personal_erasure and not unlimited:
+            audit_filtered("direct_messages_disabled")
+            return
+        if message.guild is not None and ALLOWED_GUILDS and message.guild.id not in ALLOWED_GUILDS and not unlimited:
+            audit_filtered("guild_not_allowlisted")
+            return
+        if not unlimited and len(message.content) > MAX_INPUT_CHARS:
+            audit_filtered("message_too_long")
+            return
+        if (not unlimited and message.guild is not None and matched_command(normalized) is None
                 and not (full_mode_location(message) and is_full_mode_command(normalized))
                 and not (self.user is not None and self.user in message.mentions)):
+            return
+        # Claim the event before any cooldown, quota, or reply work. Discord can
+        # redeliver an event while the first handler is still running; doing
+        # this later allows both deliveries to pass the side-effect checks.
+        if not self.message_events.claim(message.id):
+            audit_filtered("duplicate_message")
             return
         # Bound complete event handlers, including outbound Discord API waits.
         count = getattr(self, "handler_count", 0)
         if not unlimited and count >= MAX_HANDLERS:
+            audit_filtered("handler_capacity")
             return
         self.handler_count = count + 1
+        current_task = asyncio.current_task()
+        active_handlers = getattr(self, "active_handlers", None)
+        if active_handlers is None:
+            self.active_handlers = active_handlers = set()
+        if current_task is not None:
+            active_handlers.add(current_task)
         try:
-            await asyncio.wait_for(
-                self._handle_message(message),
-                timeout=FULL_MODE_HANDLER_TIMEOUT if unlimited else HANDLER_TIMEOUT,
-            )
+            if unlimited:
+                await self._handle_message(message)
+            else:
+                await asyncio.wait_for(self._handle_message(message), timeout=HANDLER_TIMEOUT)
         except asyncio.TimeoutError:
             log.warning("Message handler exceeded deadline")
+            audit_filtered("handler_timeout")
         finally:
+            if current_task is not None:
+                active_handlers.discard(current_task)
             self.handler_count -= 1
+
+    async def _shutdown(self) -> None:
+        """Stop processing and close every resource without sending a reply."""
+        if self.shutdown_requested:
+            return
+        self.shutdown_requested = True
+        current_task = asyncio.current_task()
+        for task in tuple(getattr(self, "active_handlers", ())):
+            if task is not current_task and not task.done():
+                task.cancel()
+        await self.close()
 
     async def _handle_message(self, message: discord.Message) -> None:
         if message.author.bot:
@@ -660,10 +741,16 @@ class PersonaBot(discord.Client):
                 admitted, retry_after = self.admit_command(message.author.id, command)
                 if not admitted:
                     await self._reply(message, f"slow down try again in {retry_after}s")
+                    if command == "!music":
+                        parts_for_audit = text.split(maxsplit=1)
+                        log_music_command(
+                            message,
+                            parts_for_audit[1].strip() if len(parts_for_audit) == 2 else "",
+                            outcome="rejected",
+                            reason="command_cooldown",
+                            response=f"slow down try again in {retry_after}s",
+                        )
                     return
-            if not self.message_events.claim(message.id):
-                return
-
         if name == "!security":
             if message.author.id not in OWNER_IDS:
                 return
@@ -699,7 +786,7 @@ class PersonaBot(discord.Client):
 
         is_dm = message.guild is None
         mentioned = self.user is not None and self.user in message.mentions
-        if not (is_dm or mentioned):
+        if not (is_dm or mentioned or unlimited):
             return
 
         prompt = message.content
@@ -709,9 +796,9 @@ class PersonaBot(discord.Client):
                 .replace(f"<@!{self.user.id}>", "")
                 .strip()
             )
-        prompt = sanitize_user_text(prompt).strip()
+        prompt = (prompt if unlimited else sanitize_user_text(prompt)).strip()
         full_mode = unlimited
-        attachment_limit = FULL_MODE_MAX_ATTACHMENTS if full_mode else MAX_ATTACHMENTS
+        attachment_limit = None if full_mode else MAX_ATTACHMENTS
         image_urls = [
             url
             for attachment in message.attachments[:attachment_limit]
@@ -733,6 +820,10 @@ class PersonaBot(discord.Client):
                 prompt = f"{quoted}\n{prompt}".strip()
                 use_history = True
         if not prompt and not image_urls:
+            # A plain mention should be cheap and reliable: it must not wait
+            # for an AI provider while Discord is recovering from an outage.
+            if mentioned:
+                await self._reply(message, PING_RESPONSE)
             return
 
         if not full_mode:
@@ -740,9 +831,6 @@ class PersonaBot(discord.Client):
             if not admitted:
                 await self._reply(message, f"slow down try again in {retry_after}s")
                 return
-        if not self.message_events.claim(message.id):
-            return
-
         scope_id = str(message.channel.id)
         user_id = str(message.author.id)
         inflight = getattr(self, "inflight_users", None)
@@ -755,8 +843,7 @@ class PersonaBot(discord.Client):
             inflight.add(message.author.id)
         try:
             async with message.channel.typing():
-                answer = await asyncio.wait_for(
-                    ask(
+                request = ask(
                         self.provider_http,
                         self.memory,
                         event_id=str(message.id),
@@ -775,9 +862,8 @@ class PersonaBot(discord.Client):
                         full_mode=full_mode,
                         use_history=use_history,
                         relaxed_guardrails=relaxed_guardrails,
-                    ),
-                    timeout=FULL_MODE_ASK_TIMEOUT if full_mode else ASK_TIMEOUT,
-                )
+                    )
+                answer = await request if full_mode else await asyncio.wait_for(request, timeout=ASK_TIMEOUT)
             if not answer:
                 return
             await self._reply(message, answer, unlimited=full_mode)
@@ -990,9 +1076,13 @@ class PersonaBot(discord.Client):
     async def _reply(
         self, message: discord.Message, content: str, *, unlimited: bool = False
     ) -> None:
+        if self.shutdown_requested:
+            return
         text = content if unlimited else content[:MAX_REPLY_CHARS]
         chunks = split_reply(text)
         for index, chunk in enumerate(chunks):
+            if self.shutdown_requested:
+                return
             try:
                 await message.channel.send(
                     chunk,
@@ -1003,8 +1093,25 @@ class PersonaBot(discord.Client):
             except (discord.HTTPException, discord.Forbidden):
                 log.exception("Could not send a Discord reply")
                 return
+        for index, image in enumerate(getattr(content, "image_bytes", ())):
+            if self.shutdown_requested:
+                return
+            try:
+                await message.channel.send(
+                    "",
+                    reference=message if not chunks and index == 0 else None,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                    file=discord.File(io.BytesIO(image), filename=f"owaua-{index + 1}.png"),
+                )
+            except (discord.HTTPException, discord.Forbidden):
+                log.exception("Could not send a generated image")
+                return
 
     async def close(self) -> None:
+        current_task = asyncio.current_task()
+        for task in tuple(getattr(self, "active_handlers", ())):
+            if task is not current_task and not task.done():
+                task.cancel()
         task = getattr(self, "maintenance_task", None)
         if task is not None:
             task.cancel()
@@ -1016,7 +1123,78 @@ class PersonaBot(discord.Client):
         await super().close()
 
 
+def discord_retry_delay(failures: int) -> float:
+    """Return a capped exponential delay for recreating a failed client."""
+    if failures < 1:
+        return 0.0
+    exponent = min(failures - 1, 6)
+    return min(
+        DISCORD_RETRY_INITIAL_DELAY * (2 ** exponent), DISCORD_RETRY_MAX_DELAY
+    )
+
+
+async def start_discord_with_retries(
+    token: str,
+    *,
+    bot_factory: Callable[[], PersonaBot] = PersonaBot,
+    sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
+) -> None:
+    """Run Discord's built-in reconnect loop and recreate it if it exits.
+
+    discord.py handles ordinary websocket reconnects when ``reconnect=True``.
+    This outer loop covers failures that escape that loop, such as a temporary
+    gateway or network failure while starting.  Login failures are permanent
+    configuration errors and intentionally fail fast instead of retrying.
+    """
+    failures = 0
+    recoverable = (
+        aiohttp.ClientError,
+        asyncio.TimeoutError,
+        discord.ConnectionClosed,
+        discord.GatewayNotFound,
+        discord.HTTPException,
+        OSError,
+    )
+    while True:
+        bot = bot_factory()
+        retry_delay: float | None = None
+        try:
+            await bot.start(token, reconnect=True)
+            return
+        except asyncio.CancelledError:
+            raise
+        except discord.LoginFailure:
+            raise
+        except recoverable as exc:
+            failures += 1
+            retry_delay = discord_retry_delay(failures)
+            log.warning(
+                "Discord client stopped (%s); recreating it in %.0fs (attempt %s)",
+                type(exc).__name__,
+                retry_delay,
+                failures,
+            )
+        finally:
+            try:
+                await bot.close()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("Failed while closing the Discord client")
+        if getattr(bot, "shutdown_requested", False):
+            return
+        if retry_delay is not None:
+            await sleep(retry_delay)
+
+
 async def main() -> None:
+    audit_path = Path(os.getenv("MUSIC_AUDIT_LOG", "data/music-audit.jsonl"))
+    if not audit_path.is_absolute():
+        audit_path = ROOT / audit_path
+    # Initialize the audit destination before credential checks, so operators
+    # can verify its location even when startup fails configuration validation.
+    configure_music_audit_log(audit_path)
+    log.info("Cloudflare protection: %s", describe_protection())
     if not DISCORD_TOKEN:
         raise RuntimeError(
             "DISCORD_TOKEN is missing; copy .env.example to .env and fill it in"
@@ -1025,11 +1203,7 @@ async def main() -> None:
         raise RuntimeError(
             "OPENAI_API_KEY is missing; copy .env.example to .env and fill it in"
         )
-    bot = PersonaBot()
-    try:
-        await bot.start(DISCORD_TOKEN)
-    finally:
-        await bot.close()
+    await start_discord_with_retries(DISCORD_TOKEN)
 
 
 if __name__ == "__main__":

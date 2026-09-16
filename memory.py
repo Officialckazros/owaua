@@ -63,6 +63,7 @@ class MemoryStore:
                     server_id TEXT NOT NULL DEFAULT '',
                     role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
                     content TEXT NOT NULL,
+                    unbounded INTEGER NOT NULL DEFAULT 0 CHECK (unbounded IN (0, 1)),
                     created_at REAL NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS active_channels (
@@ -90,20 +91,35 @@ class MemoryStore:
                     last_time REAL NOT NULL DEFAULT 0
                 );
                 INSERT OR IGNORE INTO api_totals(id) VALUES (1);
+                CREATE TABLE IF NOT EXISTS full_image_generation_usage (
+                    event_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS full_image_generation_usage_user_time_idx
+                    ON full_image_generation_usage(user_id, created_at);
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in db.execute("PRAGMA table_info(messages)").fetchall()
+            }
+            if "unbounded" not in columns:
+                db.execute(
+                    "ALTER TABLE messages ADD COLUMN unbounded INTEGER NOT NULL DEFAULT 0"
+                )
         os.chmod(self.path, 0o600)
         with self._lock, self._managed_connection() as db:
             self._prune(db)
 
     @staticmethod
     def _prune(db: sqlite3.Connection) -> None:
-        db.execute("DELETE FROM messages WHERE created_at<?", (time.time()-RETENTION_SECONDS,))
-        db.execute("DELETE FROM messages WHERE id IN (SELECT id FROM messages ORDER BY id DESC LIMIT -1 OFFSET ?)", (MAX_STORED_MESSAGES,))
-        db.execute("UPDATE messages SET content=substr(content,1,?) WHERE length(content)>?", (MAX_STORED_CHARS, MAX_STORED_CHARS))
+        db.execute("DELETE FROM messages WHERE unbounded=0 AND created_at<?", (time.time()-RETENTION_SECONDS,))
+        db.execute("DELETE FROM messages WHERE id IN (SELECT id FROM messages WHERE unbounded=0 ORDER BY id DESC LIMIT -1 OFFSET ?)", (MAX_STORED_MESSAGES,))
+        db.execute("UPDATE messages SET content=substr(content,1,?) WHERE unbounded=0 AND length(content)>?", (MAX_STORED_CHARS, MAX_STORED_CHARS))
         db.execute(
             "DELETE FROM messages WHERE id IN (SELECT id FROM "
-            "(SELECT id, row_number() OVER (PARTITION BY scope_id,user_id ORDER BY id DESC) AS n FROM messages) WHERE n>?)",
+            "(SELECT id, row_number() OVER (PARTITION BY scope_id,user_id ORDER BY id DESC) AS n FROM messages WHERE unbounded=0) WHERE n>?)",
             (CONVERSATION_MESSAGES,),
         )
 
@@ -134,15 +150,15 @@ class MemoryStore:
 
         The lifetime counter survives rolling retention and memory erasure.
         Time is monotonic in the ledger even after a system-clock rollback.
-        Allowlisted full mode is exempt from attempt ceilings so it cannot
-        exhaust the shared budget; pause and erasure fences still apply.
+        Allowlisted full mode is exempt from the bot's attempt ceilings and
+        emergency pause; the erasure fence still protects deleted data.
         """
         with self._lock, self._managed_connection() as db:
             db.execute("BEGIN IMMEDIATE")
             if expected_generation is not None and self._generation(db, user_id, server_id) != expected_generation:
                 raise BudgetExceeded("This request was cancelled by memory erasure")
             row = db.execute("SELECT value FROM app_settings WHERE key='api_paused'").fetchone()
-            if row is not None and row[0] == "1":
+            if not exempt and row is not None and row[0] == "1":
                 raise BudgetExceeded("AI requests are paused by the owner")
             if db.execute("SELECT 1 FROM api_usage WHERE event_id=?", (event_id,)).fetchone():
                 raise DuplicateRequest("Already charged this event")
@@ -173,6 +189,36 @@ class MemoryStore:
             total = db.execute("SELECT requests FROM api_totals WHERE id=1").fetchone()[0]
             daily = db.execute("SELECT count(*) FROM api_usage WHERE created_at>?", (time.time()-86400,)).fetchone()[0]
         return f"API attempts: {daily}/{API_LIMITS.per_day} in 24h; {total}/{API_LIMITS.lifetime} lifetime"
+
+    def reserve_full_image_generation(
+        self, event_id: str, user_id: str, *, limit: int, now: float | None = None
+    ) -> bool:
+        """Reserve one of a full-mode user's daily image-generation slots."""
+        if limit < 1:
+            return False
+        current = time.time() if now is None else now
+        with self._lock, self._managed_connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            existing = db.execute(
+                "SELECT 1 FROM full_image_generation_usage WHERE event_id=?", (event_id,)
+            ).fetchone()
+            if existing is not None:
+                return True
+            db.execute(
+                "DELETE FROM full_image_generation_usage WHERE created_at<?",
+                (current - 86400,),
+            )
+            used = db.execute(
+                "SELECT count(*) FROM full_image_generation_usage WHERE user_id=?",
+                (user_id,),
+            ).fetchone()[0]
+            if used >= limit:
+                return False
+            db.execute(
+                "INSERT INTO full_image_generation_usage(event_id,user_id,created_at) VALUES (?, ?, ?)",
+                (event_id, user_id, current),
+            )
+            return True
 
     def prune(self) -> None:
         with self._lock, self._managed_connection() as db:
@@ -206,6 +252,7 @@ class MemoryStore:
         server_id: str = "",
         created_at: float | None = None,
         expected_generation: tuple[str, str] | None = None,
+        unbounded: bool = False,
     ) -> bool:
         with self._lock, self._managed_connection() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -214,8 +261,8 @@ class MemoryStore:
             cursor = db.execute(
                 """
                 INSERT OR IGNORE INTO messages
-                    (event_id, scope_id, user_id, server_id, role, content, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (event_id, scope_id, user_id, server_id, role, content, unbounded, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event_id,
@@ -223,18 +270,19 @@ class MemoryStore:
                     user_id,
                     server_id,
                     role,
-                    content[:MAX_STORED_CHARS],
+                    content if unbounded else content[:MAX_STORED_CHARS],
+                    int(unbounded),
                     time.time() if created_at is None else created_at,
                 ),
             )
             inserted = cursor.rowcount == 1
             db.execute(
-                "DELETE FROM messages WHERE scope_id=? AND user_id=? AND id NOT IN "
-                "(SELECT id FROM messages WHERE scope_id=? AND user_id=? ORDER BY id DESC LIMIT ?)",
+                "DELETE FROM messages WHERE unbounded=0 AND scope_id=? AND user_id=? AND id NOT IN "
+                "(SELECT id FROM messages WHERE unbounded=0 AND scope_id=? AND user_id=? ORDER BY id DESC LIMIT ?)",
                 (scope_id, user_id, scope_id, user_id, CONVERSATION_MESSAGES),
             )
-            db.execute("DELETE FROM messages WHERE created_at<?", (time.time()-RETENTION_SECONDS,))
-            db.execute("DELETE FROM messages WHERE id IN (SELECT id FROM messages ORDER BY id DESC LIMIT -1 OFFSET ?)", (MAX_STORED_MESSAGES,))
+            db.execute("DELETE FROM messages WHERE unbounded=0 AND created_at<?", (time.time()-RETENTION_SECONDS,))
+            db.execute("DELETE FROM messages WHERE id IN (SELECT id FROM messages WHERE unbounded=0 ORDER BY id DESC LIMIT -1 OFFSET ?)", (MAX_STORED_MESSAGES,))
             return inserted
 
     def erase_user_memory(self, user_id: str) -> int:
@@ -244,20 +292,21 @@ class MemoryStore:
             return db.execute("DELETE FROM messages WHERE user_id=?", (user_id,)).rowcount
 
     def recent_messages(
-        self, scope_id: str, user_id: str, *, limit: int
+        self, scope_id: str, user_id: str, *, limit: int | None
     ) -> list[dict[str, object]]:
         with self._lock, self._managed_connection() as db:
-            db.execute("DELETE FROM messages WHERE created_at<?", (time.time()-RETENTION_SECONDS,))
-            rows = db.execute(
-                """
+            db.execute("DELETE FROM messages WHERE unbounded=0 AND created_at<?", (time.time()-RETENTION_SECONDS,))
+            query = """
                 SELECT id, role, content, created_at
                 FROM messages
                 WHERE scope_id = ? AND user_id = ?
                 ORDER BY id DESC
-                LIMIT ?
-                """,
-                (scope_id, user_id, limit),
-            ).fetchall()
+            """
+            parameters: tuple[object, ...] = (scope_id, user_id)
+            if limit is not None:
+                query += " LIMIT ?"
+                parameters += (limit,)
+            rows = db.execute(query, parameters).fetchall()
         return [
             {
                 "id": int(row["id"]),

@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+from ask import AssistantReply
 from bot import (
     DISCORD_MESSAGE_LIMIT,
     FULL_MODE_ALLOWED_USER_IDS,
@@ -19,6 +20,8 @@ from bot import (
     FULL_MODE_USAGE,
     HELP_TEXT,
     OWNER_NOTE_TEXT,
+    OWNER_IDS,
+    PING_RESPONSE,
     MessageEventGuard,
     PersonaBot,
 )
@@ -113,6 +116,8 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         self.bot.conversation_locks = defaultdict(asyncio.Lock)
         self.bot.music_tracks = {}
         self.bot.response_languages = {}
+        self.bot.shutdown_requested = False
+        self.bot.active_handlers = set()
 
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
@@ -138,6 +143,30 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("!gifs", channel.sent[0])
         self.assertNotIn("!full", channel.sent[0])
 
+    async def test_shutdown_is_owner_only_and_sends_no_acknowledgement(self) -> None:
+        channel = FakeChannel()
+        with patch.object(self.bot, "close", new=AsyncMock()) as close:
+            await self.bot.on_message(make_message("!shutdown", 1, channel))
+            self.assertFalse(self.bot.shutdown_requested)
+            close.assert_not_awaited()
+
+            owner = next(iter(OWNER_IDS))
+            await self.bot.on_message(
+                make_message("!shutdown", 2, channel, author_id=owner, guild_id=None)
+            )
+
+        self.assertTrue(self.bot.shutdown_requested)
+        self.assertEqual(channel.sent, [])
+        close.assert_awaited_once()
+
+    async def test_shutdown_suppresses_late_replies(self) -> None:
+        channel = FakeChannel()
+        self.bot.shutdown_requested = True
+
+        await self.bot._reply(make_message("!help", 1, channel), "should not send")
+
+        self.assertEqual(channel.sent, [])
+
     async def test_owners_note_command_sends_the_owner_message(self) -> None:
         channel = FakeChannel()
 
@@ -153,6 +182,17 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(channel.sent), 1)
         self.assertIn("ckazros@owaua.com", channel.sent[0])
 
+    async def test_concurrent_duplicate_command_event_replies_once(self) -> None:
+        channel = FakeChannel()
+        message = make_message("!help", 1, channel)
+
+        await asyncio.gather(
+            self.bot.on_message(message),
+            self.bot.on_message(message),
+        )
+
+        self.assertEqual(channel.sent, [HELP_TEXT])
+
     def _full_mode_message(
         self,
         content: str,
@@ -162,6 +202,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         guild_id: int | None = FULL_MODE_GUILD_ID,
         channel_id: int = FULL_MODE_CHANNEL_ID,
         mentions: list[object] | None = None,
+        attachments: list[object] | None = None,
     ) -> SimpleNamespace:
         return make_message(
             content,
@@ -170,6 +211,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
             author_id=author_id,
             guild_id=guild_id,
             mentions=mentions,
+            attachments=attachments,
         )
 
     async def test_full_mode_on_only_works_in_the_allowed_channel(self) -> None:
@@ -409,6 +451,54 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first.channel.sent, ["hey"])
         self.assertEqual(second.channel.sent, ["hey"])
 
+    async def test_full_mode_does_not_require_a_bot_mention(self) -> None:
+        allowed_user = next(iter(FULL_MODE_ALLOWED_USER_IDS))
+        self.bot.set_full_mode_for(allowed_user, True)
+        message = self._full_mode_message("princess treatment", 1, author_id=allowed_user)
+
+        with patch("bot.ask", AsyncMock(return_value="as you wish")) as mocked_ask:
+            await self.bot.on_message(message)
+
+        mocked_ask.assert_awaited_once()
+        self.assertEqual(message.channel.sent, ["as you wish"])
+
+    async def test_full_mode_has_no_bot_attachment_cap(self) -> None:
+        allowed_user = next(iter(FULL_MODE_ALLOWED_USER_IDS))
+        self.bot.set_full_mode_for(allowed_user, True)
+        attachments = [
+            SimpleNamespace(content_type="image/png", url=f"https://cdn.discordapp.com/{index}.png")
+            for index in range(32)
+        ]
+        message = self._full_mode_message(
+            "<@99> inspect these",
+            1,
+            author_id=allowed_user,
+            mentions=[self.bot.user],
+            attachments=attachments,
+        )
+
+        with patch("bot.ask", AsyncMock(return_value="done")) as mocked_ask:
+            await self.bot.on_message(message)
+
+        self.assertEqual(
+            mocked_ask.await_args.kwargs["image_urls"],
+            [attachment.url for attachment in attachments],
+        )
+
+    async def test_reply_attaches_a_generated_image(self) -> None:
+        channel = FakeChannel()
+        message = make_message("<@99> image", 1, channel, mentions=[self.bot.user])
+
+        await self.bot._reply(
+            message,
+            AssistantReply("done", image_bytes=(b"image-bytes",)),
+            unlimited=True,
+        )
+
+        self.assertEqual(channel.sent, ["done", ""])
+        image_file = channel.send_kwargs[1]["file"]
+        self.assertEqual(image_file.filename, "owaua-1.png")
+
     async def test_full_mode_skips_command_cooldown(self) -> None:
         allowed_user = next(iter(FULL_MODE_ALLOWED_USER_IDS))
         self.bot.set_full_mode_for(allowed_user, True)
@@ -618,7 +708,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
             [False, False],
         )
 
-    async def test_empty_ping_does_not_call_the_provider(self) -> None:
+    async def test_empty_ping_replies_without_calling_the_provider(self) -> None:
         channel = FakeChannel()
         with patch("bot.ask", AsyncMock(return_value="hey")) as mocked_ask:
             await self.bot.on_message(
@@ -626,7 +716,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
             )
 
         mocked_ask.assert_not_awaited()
-        self.assertEqual(channel.sent, [])
+        self.assertEqual(channel.sent, [PING_RESPONSE])
 
     async def test_image_only_ping_still_calls_the_provider(self) -> None:
         channel = FakeChannel()

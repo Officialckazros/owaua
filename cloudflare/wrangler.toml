@@ -1,0 +1,10 @@
+name = "owaua-audit"
+main = "audit-worker.js"
+compatibility_date = "2026-09-15"
+account_id = "114651c9288b7d9012b396fe66737d16"
+workers_dev = true
+
+# KV namespace id is filled by scripts/setup-cloudflare.py on the free plan.
+# [[kv_namespaces]]
+# binding = "LOGS"
+# id = ""
