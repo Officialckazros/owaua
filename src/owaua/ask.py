@@ -21,7 +21,7 @@ from cloudflare import cloudflare_unreachable, provider_urls, request_headers
 from memory import CONVERSATION_MESSAGES, MemoryStore
 from security import BudgetExceeded, DuplicateRequest, MAX_INPUT_CHARS, MAX_REPLY_CHARS
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(os.getenv("OWAUA_ENV_FILE") or ROOT / ".env")
 log = logging.getLogger("owaua")
 

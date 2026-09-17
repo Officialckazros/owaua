@@ -19,7 +19,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from dotenv import load_dotenv
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(os.getenv("OWAUA_ENV_FILE") or ROOT / ".env")
 log = logging.getLogger("owaua")
 

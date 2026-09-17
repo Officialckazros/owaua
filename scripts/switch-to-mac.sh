@@ -69,9 +69,11 @@ import shutil
 import time
 
 env_file = Path(".env")
-bak_file = Path(f".env.cloud.bak.{int(time.time())}")
+backup_dir = Path("data/env-backups")
+backup_dir.mkdir(parents=True, exist_ok=True)
+bak_file = backup_dir / f".env.cloud.bak.{int(time.time())}"
 shutil.copy2(env_file, bak_file)
-print(f"  -> Backed up .env to {bak_file.name}")
+print(f"  -> Backed up .env to {bak_file}")
 
 disabled_keys = {
     "PERPLEXITY_API_KEY",
@@ -234,7 +236,7 @@ echo "[5/5] Verifying local test suite..."
 if OWAUA_LOCAL_ONLY=0 \
   OPENAI_API_KEY=test DEEPSEEK_API_KEY=test PERPLEXITY_API_KEY=test \
   GROQ_API_KEY=test MISTRAL_API_KEY=test \
-  PYTHONPATH="$ROOT_DIR/tests" .venv/bin/python -m unittest -q \
+  PYTHONPATH="$ROOT_DIR/src/owaua:$ROOT_DIR/tests" .venv/bin/python -m unittest -q \
   test_ask test_bot_helpers test_cloudflare test_memory 2>/dev/null; then
   echo "  -> Core local test suite passed!"
 else
@@ -254,8 +256,8 @@ echo ""
 read -r -p "Do you want to start the bot locally now? [Y/n] " confirm || confirm="Y"
 if [[ "$confirm" =~ ^[Yy]?$ ]]; then
   echo "Starting owaua bot locally..."
-  exec .venv/bin/python bot.py
+  exec .venv/bin/python src/owaua/bot.py
 else
   echo "To start the bot anytime, run:"
-  echo "  .venv/bin/python bot.py"
+  echo "  .venv/bin/python src/owaua/bot.py"
 fi

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(os.getenv("OWAUA_ENV_FILE") or Path(__file__).resolve().parent / ".env")
+load_dotenv(os.getenv("OWAUA_ENV_FILE") or Path(__file__).resolve().parents[2] / ".env")
 
 
 def limit(name: str, default: int, maximum: int) -> int:

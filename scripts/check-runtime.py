@@ -8,7 +8,7 @@ import shutil
 import sys
 import wave
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "owaua"))
 
 from music import BoundedAudio
 from security import ALLOW_DMS, API_LIMITS, MAX_INFLIGHT

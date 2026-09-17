@@ -36,23 +36,23 @@ if not env_file.is_file():
     raise RuntimeError(f"Daki env file is missing: {env_file}")
 env_payload = env_file.read_bytes()
 
-excluded = {
-    Path("scripts/deploy.sh"),
-    Path("scripts/deploy-daki.sh"),
-    Path("scripts/deploy-local.sh"),
-    Path("scripts/update-persona.sh"),
-    Path("scripts/setup-cloudflare.py"),
-    Path("personas/update-persona.sh"),
+# Keep Daki focused on the bot runtime. Tests, the static website, docs, and
+# setup utilities stay local; data/ remains persistent on the server.
+runtime_root_files = {
+    Path("requirements.txt"),
 }
+runtime_package_files = {
+    Path("src/owaua") / name
+    for name in (
+        "__init__.py", "ask.py", "bot.py", "cloudflare.py", "media_exec.py",
+        "memory.py", "music.py", "music_worker.py", "security.py",
+    )
+}
+runtime_script_files = {Path("scripts/check-runtime.py"), Path("scripts/run-bots.sh")}
 required_runtime = {
-    Path("bot.py"),
-    Path("ask.py"),
-    Path("cloudflare.py"),
-    Path("memory.py"),
-    Path("music.py"),
-    Path("security.py"),
-    Path("music_worker.py"),
-    Path("media_exec.py"),
+    *runtime_root_files,
+    *runtime_package_files,
+    *runtime_script_files,
     Path("personas/rudeish.txt"),
     Path("personas/nerdish.txt"),
     Path("personas/flirty.txt"),
@@ -66,10 +66,11 @@ files = sorted(
     for path in root.rglob("*")
     if path.is_file()
     and not any(part.startswith(".") for part in path.relative_to(root).parts)
-    and path.relative_to(root) not in excluded
     and (
-        path.suffix == ".py"
-        or path.suffix in {".sh", ".txt", ".png", ".jpg", ".jpeg", ".webp", ".gif"}
+        path.relative_to(root) in runtime_root_files
+        or path.relative_to(root) in runtime_package_files
+        or path.relative_to(root) in runtime_script_files
+        or path.relative_to(root).parts[0] in {"personas", "pfps", "banners"}
     )
 )
 if not files:
@@ -81,6 +82,12 @@ if missing_runtime:
         "Deployment is incomplete; missing required runtime file(s): "
         + ", ".join(sorted(map(str, missing_runtime)))
     )
+
+print(f"Daki runtime manifest: {len(files)} files")
+if os.getenv("OWAUA_DAKI_DRY_RUN", "0").strip().lower() in {"1", "true", "yes", "on"}:
+    for path in files:
+        print(f"  {path.relative_to(root)}")
+    raise SystemExit(0)
 
 loader = importlib.machinery.SourceFileLoader("daki_deploy", str(deploy_path))
 spec = importlib.util.spec_from_loader(loader.name, loader)

@@ -1,7 +1,7 @@
 # Owaua's fully customizable local GPT-OSS 20B model.
 #
 # Build it with:
-#   ollama create owaua-gpt-oss-20b -f Modelfile.owaua
+#   ollama create owaua-gpt-oss-20b -f models/Modelfile.owaua
 #
 # Then select it in .env:
 #   OWAUA_LOCAL_ONLY=1

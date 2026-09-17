@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en" id="top">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="description" content="Privacy policy for the owaua Discord bot. What it stores, who sees it, and how to wipe it.">
+<meta name="theme-color" content="#1e1f22">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
+<link rel="canonical" href="https://owaua.com/privacy">
+<meta property="og:url" content="https://owaua.com/privacy">
+<meta property="og:image" content="https://owaua.com/image.png">
+<meta property="og:title" content="privacy · owaua">
+<meta property="og:description" content="what owaua remembers, who sees it, and how to wipe it">
+<title>privacy · owaua</title>
+<link rel="icon" href="/assets/pfp.png?v=20260915b" type="image/png">
+<link rel="stylesheet" href="/assets/owaua.css?v=20260915b">
+<script src="/assets/owaua.js?v=20260915b" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<nav class="site-nav" aria-label="Main">
+<a class="brand" href="/" aria-label="owaua home">
+<img src="/assets/pfp.png?v=20260915b" width="28" height="28" alt="">
+owaua
+</a>
+<div class="nav-links">
+<a href="/#what">what it does</a>
+<a href="/#commands">commands</a>
+<a href="/#limits">limits</a>
+<a href="/privacy">privacy</a>
+<a class="cta" href="https://discord.com/oauth2/authorize?client_id=1442127404607737999&amp;permissions=4503599630609408&amp;integration_type=0&amp;scope=bot">invite it</a>
+</div>
+<details class="menu">
+<summary>menu</summary>
+<div class="menu-panel">
+<a href="/#what">what it does</a>
+<a href="/#commands">commands</a>
+<a href="/#limits">limits</a>
+<a href="/privacy">privacy</a>
+<a href="https://discord.com/oauth2/authorize?client_id=1442127404607737999&amp;permissions=4503599630609408&amp;integration_type=0&amp;scope=bot">invite it</a>
+</div>
+</details>
+</nav>
+<main id="main" class="wrap">
+<header class="page-head">
+<p>privacy</p>
+<h1>what it remembers</h1>
+<p>Last updated September 15, 2026. owaua keeps a short, scoped conversation history so it can talk back. This page is the honest version of what that means.</p>
+</header>
+
+<section class="section" id="covers">
+<h2>what this is for</h2>
+<div class="body">
+<p>This is for the official owaua Discord bot — the app you invite from this site, client id 1442127404607737999. The website and the owaua Discord server sit with the same person.</p>
+<p>Discord has its own privacy policy, and that still applies. If you run a copy of the code yourself, that copy is yours, and you are the one responsible for it. This page is only for the official bot.</p>
+<p>Using the bot also means you agree to the <a href="/terms">terms</a>.</p>
+</div>
+</section>
+
+<section class="section" id="who">
+<h2>who to write to</h2>
+<div class="body">
+<p>owaua is a privately run Discord app. Questions, deletion requests, and anything else about this page can go to <a href="mailto:ckazros@owaua.com">ckazros@owaua.com</a>, Discord <code>gays._</code>, or the <a href="https://discord.gg/CNbpwtE9HS">Discord server</a>.</p>
+<p>Include your Discord user id if you want a specific account looked up. Please don’t paste private chats into a public channel.</p>
+</div>
+</section>
+
+<section class="section" id="collect">
+<h2>what it collects</h2>
+<p>Only what it needs to answer you, and to remember a little of the conversation so the next reply is not from nowhere.</p>
+<ul class="list">
+<li><strong>Discord ids</strong><span>Your user id, and the server and channel ids when you talk in a server. Display names come along with the message Discord already sent. Server id is stored so one guild can be wiped without touching others. DMs have an empty server id.</span></li>
+<li><strong>messages</strong><span>Pings and replies, plus DMs only when the operator enables them. Ordinary unmentioned messages are not conversation. Prefix commands are handled as commands, not as conversation.</span></li>
+<li><strong>attachments</strong><span>Normal hangout mode is text-only and does not look at images. Audio attachments can be used by <code>!music</code> within its safety limits.</span></li>
+<li><strong>channel and server settings</strong><span>The selected persona, reply language, and provider choice. Those live in the same SQLite file so they survive a restart. Public DMs are off by default.</span></li>
+<li><strong>usage limits</strong><span>Persistent request ceilings cover 12 global attempts per minute, 30 per user per day, 100 per server per day, 200 total per day, and 1,000 lifetime attempts. Three AI requests can run at once.</span></li>
+<li><strong>voice and music</strong><span><code>!music</code> sees the author’s voice channel and the song name or url, then streams YouTube audio through yt-dlp. The current track is not saved across restarts. It does not download playlists.</span></li>
+<li><strong>mail you send us</strong><span>If you email or DM the operator, that message is just a message. We keep what we need to answer it.</span></li>
+</ul>
+<p class="note">It does not scrape every channel it can see. No ping, no DM, and no active-mode hit means it stays out. Other bots are ignored.</p>
+</section>
+
+<section class="section" id="why">
+<h2>why it keeps any of this</h2>
+<div class="body">
+<p>To reply. To remember the last few turns so the next message is not starting from zero. To keep the persona, language, and active-mode settings you asked for. To slow down people who would otherwise melt it. To play a track you asked for.</p>
+<p>We do not sell this. We do not run ads against it. We do not build a marketing list out of your DMs.</p>
+</div>
+</section>
+
+<section class="section" id="memory">
+<h2>how memory works</h2>
+<div class="body">
+<p>Data lives in a local SQLite file on the host (<code>data/memory.sqlite3</code>, WAL mode). Each conversation is keyed by channel + user. Two people in the same channel have separate histories. The same person in two channels has two histories. Up to 20 records (you + the bot) are sent back to the model, with inputs capped at 2,000 characters.</p>
+<p>There is no privacy opt-in gate and no 30-day auto-expiry of that recent chat. It is stored because the bot needs it to talk. Duplicate Discord events for the same message id are not stored twice.</p>
+<p>Please don’t send passwords, tokens, private keys, or anything you would not want saved. If you already did, have someone with Manage Server run <code>!memory erase</code> in that server, or write us.</p>
+</div>
+</section>
+
+<section class="section" id="providers">
+<h2>who else sees it</h2>
+<div class="body">
+<p>Discord already has the message. That is their platform, their rules.</p>
+<p>To generate a reply, the bot sends the current prompt, the last 12 stored turns for that channel + user, and any image it is looking at to an OpenAI-compatible model provider (default base url <code>https://api.openai.com/v1</code>, overridable). Those calls use storage-off. A local self-harm check can answer without calling the model at all.</p>
+<p>Other services only see what that feature needs:</p>
+</div>
+<ul class="list">
+<li><strong>music</strong><span>The song name or url you typed, so yt-dlp can find an audio stream. It plays that audio in the voice channel. It does not download playlists.</span></li>
+</ul>
+<p class="note">We are not Discord, and we are not those vendors. Their policies apply to what passes through them. There is no TTS provider, no speech-to-text, and no third-party antivirus scan.</p>
+</section>
+
+<section class="section" id="keep">
+<h2>how long it stays</h2>
+<div class="body">
+<p>Recent conversation stays until it falls off the 20-record-per-conversation window, expires after seven days, until an erase command wipes it, or until we delete it for you. Persona, language, and provider settings stay until they are changed.</p>
+<p>Rate-limit counts and the duplicate-message guard live in memory and disappear when the process restarts. The current music track is not kept as conversation history.</p>
+<p>Backups of the host can hold a copy of the SQLite file for as long as those backups exist. Treat that file like private chat, because it is.</p>
+</div>
+</section>
+
+<section class="section" id="choices">
+<h2>your choices</h2>
+<div class="body">
+<p>If you don’t want a record, don’t talk to it. Leaving a server stops new server memory for you there. It does not, by itself, wipe what is already stored.</p>
+<p>There is no per-user export command. You can run <code>!memory erase mine</code> to delete your own history. Someone with Manage Server can run <code>!memory erase</code> to delete every stored conversation message for that server. That does not erase other servers, DMs, or settings such as persona, language, or provider choice.</p>
+<p>If that is not enough, email <a href="mailto:ckazros@owaua.com">ckazros@owaua.com</a> with the Discord user id. Say whether you mean DMs, a server, or both. Discord messages in the channel itself are Discord’s, not ours.</p>
+<p>You can also stop using the bot, kick it from a server, or close your Discord account. Kicking it stops new collection in that server. It does not automatically purge the SQLite file.</p>
+</div>
+</section>
+
+<section class="section" id="site">
+<h2>this website</h2>
+<div class="body">
+<p>The site is static pages. The JavaScript here is for the menu. It does not set cookies, and it does not phone home with analytics.</p>
+<p>The host and the browser still do normal web things: a request log on their side, a cached file on yours. We do not use that to profile you. Contact is just email.</p>
+</div>
+</section>
+
+<section class="section" id="kids">
+<h2>age</h2>
+<div class="body">
+<p>You need a Discord account, and you need to be old enough for Discord. That means 13 or older. Please don’t use the bot if you are under 13.</p>
+<p>The explicit persona can only be selected and only used in Discord age-restricted (NSFW) channels. That flag is not proof of anyone’s age. If you are 17 or under, stay out of those channels. The model is told that anyone 17 or under must never be involved in that voice.</p>
+</div>
+</section>
+
+<section class="section" id="hosting">
+<h2>the official bot vs running it yourself</h2>
+<div class="body">
+<p>Self-hosting means your SQLite file, your keys, your users, and your own privacy policy. The official bot is the one invited from this site.</p>
+<p>We can change models, limits, and where the file lives. If that changes what we collect in a way that matters, this page will say so.</p>
+</div>
+</section>
+
+<section class="section" id="changes">
+<h2>if this page changes</h2>
+<div class="body">
+<p>If this page changes, the new text applies once it is up. The date at the top is when that happened. Keeping the bot after that is agreement to the new policy.</p>
+<p>Questions go to <a href="mailto:ckazros@owaua.com">ckazros@owaua.com</a>, Discord <code>gays._</code>, or the <a href="https://discord.gg/CNbpwtE9HS">Discord server</a>.</p>
+</div>
+</section>
+</main>
+<footer class="site-footer">
+<div class="wrap">
+<span>© 2026 owaua</span>
+<nav aria-label="Footer">
+<a href="/#what">what it does</a>
+<a href="/#commands">commands</a>
+<a href="/privacy">privacy</a>
+<a href="/terms">terms</a>
+<a href="/partnerships">partners</a>
+<a href="https://discord.gg/CNbpwtE9HS">discord</a>
+<a href="https://github.com/Officialckazros/owaua">github</a>
+<a href="mailto:ckazros@owaua.com">contact</a>
+</nav>
+</div>
+</footer>
+</body>
+</html>

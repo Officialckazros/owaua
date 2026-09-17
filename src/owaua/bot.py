@@ -55,7 +55,7 @@ from music import (
     unrestricted_music_guild,
 )
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(os.getenv("OWAUA_ENV_FILE") or ROOT / ".env")
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))

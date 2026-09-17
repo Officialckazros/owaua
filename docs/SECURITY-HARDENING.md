@@ -21,13 +21,13 @@ The initial independent source audit recorded eight findings. Existing uncommitt
 
 Hangout modes are text-only. Hosted tools stay disabled in hangout. Normal responses have an 80-token cap and no image analysis. The designated full-mode channel omits the output-token cap, shared API attempt ceilings, chat rate limits, admission caps, handler/input/reply truncations, and the image-analysis block for every user, and enables native OpenAI web search plus the hosted code interpreter. Image generation is not available. Full-mode attempts are not charged against the shared ledger, so they cannot exhaust everyone else's budget. Provider errors and signed CDN request URLs are not logged. Native media subprocesses do not inherit bot/provider credentials.
 
-See [README](README.md#abuse-controls) and [.env.example](.env.example) for configuration. Defaults are 12 global API attempts/minute, 30/user/day, 100/server/day, 200 globally/day, 1,000 lifetime and three concurrent AI requests. Those ceilings still apply to ordinary chat. `!security pause` stops future reservations, including full mode; it cannot cancel work already sent to a provider. `resume` does not reset quotas.
+See [README](../README.md#abuse-controls) and [.env.example](../.env.example) for configuration. Defaults are 12 global API attempts/minute, 30/user/day, 100/server/day, 200 globally/day, 1,000 lifetime and three concurrent AI requests. Those ceilings still apply to ordinary chat. `!security pause` stops future reservations, including full mode; it cannot cancel work already sent to a provider. `resume` does not reset quotas.
 
 ## Verification performed
 
 - Current source including full-mode exemptions, Python 3.12.14: `python -m unittest discover -s tests -q` — 193 tests: **192 passed, one skipped**.
 - The local skipped case is `NativeAudioTests.test_valid_wave_decodes_with_pipe_only_protocols`, requiring Linux RLIMIT support. It **passed on the production Linux server during deployment**. The production suite also ran 185 tests: 184 passed, with only the non-Linux refusal test skipped. Ubuntu CI now installs FFmpeg; CI itself has not been run from this session.
-- `python -m py_compile ask.py bot.py memory.py music.py security.py music_worker.py media_exec.py` — passed.
+- `python -m py_compile src/owaua/*.py` — passed.
 - `bash -n scripts/run-bots.sh scripts/deploy.sh scripts/update-persona.sh` — passed.
 - `git diff --check` — passed.
 - `python -m pip check` — passed in the isolated verification environment.
@@ -48,7 +48,7 @@ The deployment script's container-state check is only an intermediate result. A 
 
 ## Deployment and remaining limits
 
-1. Future deployments must include the complete runtime, including `security.py`, `music_worker.py`, `media_exec.py` and `scripts/check-runtime.py`. Preserve the pinned requirements and maintain system FFmpeg updates. Native music requires Linux; production decoder functionality was verified, but the host FFmpeg vulnerability status was not independently audited.
+1. Future deployments must include the complete runtime under `src/owaua/`, including `security.py`, `music_worker.py`, `media_exec.py` and `scripts/check-runtime.py`. Preserve the pinned requirements and maintain system FFmpeg updates. Native music requires Linux; production decoder functionality was verified, but the host FFmpeg vulnerability status was not independently audited.
 2. Keep `data/memory.sqlite3` persistent. Deleting it, restoring an older copy or giving each replica a different database defeats shared usage accounting. Historical spending before this change cannot be reconstructed by the new ledger.
 3. These are request caps, not currency caps. Actual pricing, other applications using the same keys, compromised credentials and provider-side accounting are outside the bot's ledger. Configure appropriate provider account controls separately.
 4. Run the bot under a dedicated unprivileged account/container with host CPU, memory and disk limits and restricted network egress. FFmpeg protocol restrictions and process rlimits are not a complete operating-system sandbox; an unknown native parser exploit remains a host risk. Do not give the bot Administrator permission or mount unrelated sensitive host files.

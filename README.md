@@ -32,6 +32,9 @@ Music needs Linux and a current FFmpeg. Chat works without that.
 
 Python 3.11+, Message Content Intent, then `DISCORD_TOKEN`, `PERPLEXITY_API_KEY`, and `OPENAI_API_KEY` in `.env`.
 
+The bot runtime lives in `src/owaua/`; use the scripts below rather than
+launching an individual module directly.
+
 ```sh
 pip install -r requirements.txt
 cp .env.example .env
@@ -48,6 +51,12 @@ restarts Daki. Run only one profile at a time when both profiles contain the
 same Discord token; Discord permits only one active gateway session per token.
 
 Invite with View Channels, Send Messages, Read Message History, Connect, and Speak.
+
+Project structure and Daki deployment details are in
+[docs/OPERATIONS.md](docs/OPERATIONS.md). Use
+`OWAUA_DAKI_DRY_RUN=1 ./scripts/deploy-daki.sh` to preview the remote upload.
+
+Contributing and security notes are kept in the [docs](docs/) folder.
 
 Limits and other knobs are in `.env.example`.
 

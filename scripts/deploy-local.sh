@@ -27,13 +27,15 @@ fi
 
 echo "Verifying local runtime with $(basename "$ENV_FILE")..."
 OWAUA_ENV_FILE="$ENV_FILE" "$PYTHON" -m py_compile \
-  ask.py bot.py cloudflare.py memory.py music.py security.py music_worker.py media_exec.py
+  src/owaua/ask.py src/owaua/bot.py src/owaua/cloudflare.py \
+  src/owaua/memory.py src/owaua/music.py src/owaua/security.py \
+  src/owaua/music_worker.py src/owaua/media_exec.py
 
 if [[ "${OWAUA_RUN_LOCAL_TESTS:-0}" == "1" ]]; then
   OWAUA_ENV_FILE="$ENV_FILE" OWAUA_LOCAL_ONLY=0 \
     OPENAI_API_KEY=test DEEPSEEK_API_KEY=test PERPLEXITY_API_KEY=test \
     GROQ_API_KEY=test MISTRAL_API_KEY=test \
-    PYTHONPATH="$ROOT_DIR/tests" "$PYTHON" -m unittest -q \
+    PYTHONPATH="$ROOT_DIR/src/owaua:$ROOT_DIR/tests" "$PYTHON" -m unittest -q \
     test_ask test_bot_helpers test_cloudflare test_memory
 fi
 

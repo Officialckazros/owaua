@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="hu" id="top">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="description" content="Az owaua egy kicsi Discord bot, akit akkor említesz, ha társaságra vágysz. Egy kicsit emlékszik, van néhány hangja, és tud egy számot lejátszani voice-on.">
+<meta name="theme-color" content="#ce2939">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
+<link rel="canonical" href="https://owaua.com/hungarian">
+<link rel="alternate" hreflang="en" href="https://owaua.com/">
+<link rel="alternate" hreflang="fr" href="https://owaua.com/french">
+<link rel="alternate" hreflang="de" href="https://owaua.com/german">
+<link rel="alternate" hreflang="el" href="https://owaua.com/greek">
+<link rel="alternate" hreflang="hu" href="https://owaua.com/hungarian">
+<link rel="alternate" hreflang="it" href="https://owaua.com/italian">
+<link rel="alternate" hreflang="pl" href="https://owaua.com/polish">
+<link rel="alternate" hreflang="ro" href="https://owaua.com/romanian">
+<link rel="alternate" hreflang="uk" href="https://owaua.com/ukrainian">
+<link rel="alternate" hreflang="x-default" href="https://owaua.com/">
+<meta property="og:url" content="https://owaua.com/hungarian">
+<meta property="og:image" content="https://owaua.com/assets/pfp-hungarian.png">
+<meta property="og:title" content="owaua">
+<meta property="og:description" content="egy kicsi Discord bot, akivel tényleg lehet beszélgetni">
+<title>owaua · egy kicsi Discord hangout bot</title>
+<link rel="icon" href="/assets/pfp-hungarian.png?v=20260915b" type="image/png">
+<link rel="stylesheet" href="/assets/owaua.css?v=20260915b">
+<script src="/assets/owaua.js?v=20260915b" defer></script>
+</head>
+<body class="theme theme-hungarian">
+<div class="flag-bar" aria-hidden="true"></div>
+<div class="flag-rail" aria-hidden="true"></div>
+<a class="skip" href="#main">Ugrás a tartalomra</a>
+<nav class="site-nav" aria-label="Fő">
+<a class="brand" href="/hungarian" aria-label="owaua főoldal">
+<img src="/assets/pfp-hungarian.png?v=20260915b" width="28" height="28" alt="">
+owaua
+</a>
+<div class="nav-links">
+<a href="#what">mit csinál</a>
+<a href="#commands">parancsok</a>
+<a href="#limits">korlátok</a>
+<a href="/privacy">adatvédelem</a>
+<a class="cta" href="https://discord.com/oauth2/authorize?client_id=1442127404607737999&amp;permissions=4503599630609408&amp;integration_type=0&amp;scope=bot">hívd meg</a>
+</div>
+<details class="menu">
+<summary>menü</summary>
+<div class="menu-panel">
+<a href="#what">mit csinál</a>
+<a href="#commands">parancsok</a>
+<a href="#limits">korlátok</a>
+<a href="/privacy">adatvédelem</a>
+<a href="https://discord.com/oauth2/authorize?client_id=1442127404607737999&amp;permissions=4503599630609408&amp;integration_type=0&amp;scope=bot">hívd meg</a>
+</div>
+</details>
+</nav>
+<aside class="corner-note">A bot köré szándékosan nem raktam sok weboldalt. A bot a lényeg. Remélem, így is elég.</aside>
+<main id="main" class="wrap">
+<header class="hero">
+<div class="hero-id">
+<img src="/assets/pfp-hungarian.png?v=20260915b" width="52" height="52" alt="">
+<div>
+<strong>owaua</strong>
+<span><span class="dot" aria-hidden="true"></span>online · Discord bot</span>
+</div>
+</div>
+<h1>a bot, aki a szerveren lóg veled</h1>
+<p class="lede">Említsd, ha választ szeretnél. Egy kicsit emlékszik arra, amit ti ketten most mondtatok — nem az egész szobára — és tud hangot váltani, vagy egy számot elindítani voice-on. Kicsi, szándékosan.</p>
+<div class="actions">
+<a class="button" href="https://discord.gg/CNbpwtE9HS">gyere a Discordra</a>
+<a class="button ghost" href="https://discord.com/oauth2/authorize?client_id=1442127404607737999&amp;permissions=4503599630609408&amp;integration_type=0&amp;scope=bot">owaua meghívása</a>
+</div>
+<p class="note">A parancsok <code>!</code>-lel kezdődnek. Nincsenek slash parancsok. A DM-ektől távol marad, hacsak aki futtatja, be nem kapcsolja.</p>
+<nav class="langs" aria-label="Nyelvek">
+<a href="/">english</a>
+<a href="/french">français</a>
+<a href="/german">deutsch</a>
+<a href="/greek">ελληνικά</a>
+<a href="/hungarian" aria-current="page">magyar</a>
+<a href="/italian">italiano</a>
+<a href="/polish">polski</a>
+<a href="/romanian">română</a>
+<a href="/ukrainian">українська</a>
+</nav>
+</header>
+
+<figure class="shot">
+<img src="/image.png?v=20260915b" width="1204" height="772" alt="owaua válaszol egy Discord csatornán" loading="lazy">
+<figcaption>Adj neki egy említést, egy gondolatot, vagy egy számot. Beszélgetni van itt, nem szervert vezetni.</figcaption>
+</figure>
+
+<section class="section" id="what">
+<h2>mit csinál valójában</h2>
+<p>Az owaua valaki, akivel Discordon lehet beszélgetni, nem stáb. Pingeld, ha bent akarod a beszélgetésben. Abban a hangban és nyelven válaszol, amit a szerver már választott.</p>
+<ul class="list">
+<li><strong>megvárja, amíg kéred</strong><span>Pingeld a szerveren, és válaszol. Egy magányos <code>@owaua</code> semmi mással egy kis helyi „yeah?”-t kap — modellhívás nélkül. A többi botot ignorálja. A DM csak akkor megy, ha az üzemeltető bekapcsolja a <code>BOT_ALLOW_DMS=1</code>-et.</span></li>
+<li><strong>a ti szálatokra emlékszik, nem a szobára</strong><span>A vele való előzményed csak te vagy, azon a csatornán. Legfeljebb 20 kört tart, egy hét után elhalványulnak, és az egész fájl 10 000 rekordnál megáll. A melletted lévőnek külön memóriája van.</span></li>
+<li><strong>pár hang, és pár agy</strong><span>Válassz <code>rudeish</code>, <code>nerdish</code>, vagy korhatáros <code>explicit</code> hangot. A szerver adminjai azt is választhatják, ki beszél alatta: a host alap, DeepSeek, Mistral, vagy GPT.</span></li>
+<li><strong>tud a te nyelveden válaszolni</strong><span>Az adminok teljes nyelvnevet állítanak, például <code>!language hungarian</code>. Ha van hozzá illő kép, az owaua a bot avatarját és bannerjét is átállíthatja azon a szerveren, hogy odaillőnek tűnjön.</span></li>
+<li><strong>egy szám voice-on, ha kéred</strong><span>A <code>!music</code> lejátszik egy dalt, egy YouTube-linket, vagy egy csatolt hangfájlt. Szünet, folytatás, restart, skip, leave. Egyszerre egy track. Nincs lejátszási lista-ömlesztés.</span></li>
+<li><strong>rövid válaszok, szándékosan</strong><span>A sima hangout mód szöveges marad, kis 80 tokenes plafonnal, és nem néz képeket. Aki futtatja, egy privát csatornán megnyithatja a <code>!full mode on</code>-t azoknak, akikben bízik.</span></li>
+</ul>
+</section>
+
+<section class="section" id="commands">
+<h2>hogyan beszélj vele</h2>
+<p>Minden parancs 25 másodpercet vár a következő előtt. A szerverbeállításokhoz kell a szerver kezelése. A zenevezérlés csak akkor megy, ha ugyanabban a voice csatornában vagy, mint a bot.</p>
+<div class="commands">
+<div class="command"><code>!help</code><p>A lista, ha elfelejtetted.</p></div>
+<div class="command"><code>!persona rudeish|nerdish|explicit</code><p>Meghallgatni vagy váltani a hangot. Az <code>explicit</code> csak korhatáros csatornákon. A <code>!persona host default gpt|deepseek|mistral</code> azt választja, ki válaszol alatta.</p></div>
+<div class="command"><code>!language &lt;teljes név&gt;|reset</code><p>Beállítani vagy törölni a szerver válasznyelvét, és a hozzáillő profilképet, ha van.</p></div>
+<div class="command"><code>!music &lt;dal, YouTube URL, vagy hang&gt;</code><p>Elindítani valamit. Vagy <code>pause</code>, <code>resume</code>, <code>restart</code>, <code>skip</code>, és <code>leave</code>.</p></div>
+<div class="command"><code>!memory erase</code> / <code>!memory erase mine</code><p>Az adminok törölhetik a szerver tárolt chatjeit. Bárki törölheti a sajátját, a DM-eket is, ha azok be vannak kapcsolva.</p></div>
+<div class="command"><code>!security status|pause|resume</code><p>Csak a tulaj. Mennyire elfoglalt, és vészleállítás, ha valami félremegy.</p></div>
+<div class="command"><code>!owner's note</code><p>Rövid üzenet attól, aki csinálta.</p></div>
+</div>
+</section>
+
+<section class="section" id="limits">
+<h2>a korlátok, simán elmondva</h2>
+<p>Azért vannak, hogy egy ember ne tudja megolvasztani, és hogy elég olcsó maradjon ahhoz, hogy fent tartsuk. Ezek kérésplafonok, nem ingyenes használat ígérete.</p>
+<ul class="list">
+<li><strong>12 próbálkozás percenként, mindenkinek együtt</strong><span>Emellett: 30 emberenként naponta, 100 szerverenként naponta, 200 összesen naponta, és 1 000 a jelenlegi nyilvántartás életében.</span></li>
+<li><strong>három AI-válasz egyszerre</strong><span>Ha egy próbálkozás elhasal vagy leállítod, akkor is számít. Nincs automatikus fizetős újrapróbálás, és nem ugrik helyetted másik szolgáltatóra.</span></li>
+<li><strong>a zene kicsi marad</strong><span>Csak YouTube, videók 15 percig, letöltés 20 MiB-ig, legfeljebb két session, és a lejátszás 15 perc után megáll. A natív lejátszáshoz Linux és FFmpeg kell.</span></li>
+</ul>
+<p class="note">Nem moderátor, nem házifeladat-gép, nem tanácsadó vonal, és nem képbot. Tévedhet magabiztosan. Ellenőrizd, ami számít.</p>
+</section>
+
+<section class="section" id="data">
+<h2>amit megtart</h2>
+<div class="body">
+<p>Annyi friss chatet tart, hogy a következő válasz ne a semmiből jöjjön. Helyi SQLite fájlban él, kulcsa a csatorna és a személy. A régi körök maguktól leesnek. A <code>!memory erase</code> törli egy szerver tárolt beszélgetéseit. A <code>!memory erase mine</code> a tieidet.</p>
+<p>A hangout kérések a beállított modellhez mennek, tárolás nélkül. A zenei kérések egy kis audit naplóba kerülnek az üzemeltetőnek. Jelszavakat, aláírt média-linkeiket és a szolgáltató hibaszövegét nem írjuk le.</p>
+<p>A hosszabb, óvatos verzió az <a href="/privacy">adatvédelmi irányelv</a>. A meghívás a <a href="/terms">feltételeket</a> is jelenti.</p>
+</div>
+</section>
+
+<section class="section" id="faq">
+<h2>amit tényleg megkérdeznek</h2>
+<div class="faq">
+<details>
+<summary>Minden üzenetre válaszol?</summary>
+<p>Nem. Említsd, ha akarod. A sima chatet békén hagyja. DM csak akkor, ha az üzemeltető bekapcsolta. Más bot soha nem kap választ.</p>
+</details>
+<details>
+<summary>Miért nem válaszolt?</summary>
+<p>Nézd meg, hogy tényleg pingelted-e. Adj neki egy pillanatot — írás közben typinget mutat. A parancsok között 25 másodperc van, fent pedig a napi plafonok. A többi botot szándékosan ignorálja.</p>
+</details>
+<details>
+<summary>Megváltoztathatom, hogyan hangzik?</summary>
+<p>Igen. <code>!persona rudeish</code>, <code>!persona nerdish</code>, vagy <code>!persona explicit</code>. Az explicit csak korhatáros csatornákon. Ha az explicit már ki van választva, a sima csatornák csendben rudeish-t használnak.</p>
+</details>
+<details>
+<summary>A zene tényleg szól?</summary>
+<p>Igen. Belép a voice csatornádra, és streameli a számot. Nincs lejátszási lista, nincs a következő tíz száma. Voice-ban kell lenned, és ott kell neki Connect és Speak.</p>
+</details>
+<details>
+<summary>Minden válasznak hihetek?</summary>
+<p>Nem. Lehet magabiztos, és akkor is téved. Azt kapja, hogy lógjon, ne vigyázzon rád. Ha számít, ellenőrizd magad, vagy kérdezz meg egy embert.</p>
+</details>
+<details>
+<summary>Hol mondjam, ha valami elromlott?</summary>
+<p>A <a href="https://discord.gg/CNbpwtE9HS">Discord szerver</a>, vagy aki csinálta: Discord <code>gays._</code> · <a href="mailto:ckazros@owaua.com">ckazros@owaua.com</a>. Mondd el, mit próbáltál és mi történt. Kérlek, ne dobj tokeneket vagy privát chateket nyilvános csatornába.</p>
+</details>
+</div>
+</section>
+
+<section class="section" id="setup">
+<h2>vagy futtasd magad</h2>
+<p>Az owaua nyílt forráskódú. Python 3.11+ kell, Discord Message Content Intent, a szolgáltató kulcsai, és Linux plusz FFmpeg, ha zenét is akarsz. Utána már csak beszélgetés.</p>
+<div class="actions">
+<a class="button" href="https://github.com/Officialckazros/owaua">nézd meg a forrást</a>
+<a class="button ghost" href="mailto:ckazros@owaua.com">írj annak, aki csinálta</a>
+</div>
+</section>
+</main>
+<footer class="site-footer">
+<div class="wrap">
+<span>© 2026 owaua</span>
+<nav aria-label="Lábléc">
+<a href="#what">mit csinál</a>
+<a href="#commands">parancsok</a>
+<a href="/privacy">adatvédelem</a>
+<a href="/terms">feltételek</a>
+<a href="/partnerships">partnerek</a>
+<a href="https://discord.gg/CNbpwtE9HS">Discord</a>
+<a href="https://github.com/Officialckazros/owaua">GitHub</a>
+<a href="mailto:ckazros@owaua.com">kapcsolat</a>
+</nav>
+<nav class="langs" aria-label="Nyelvek">
+<a href="/">english</a>
+<a href="/french">français</a>
+<a href="/german">deutsch</a>
+<a href="/greek">ελληνικά</a>
+<a href="/hungarian" aria-current="page">magyar</a>
+<a href="/italian">italiano</a>
+<a href="/polish">polski</a>
+<a href="/romanian">română</a>
+<a href="/ukrainian">українська</a>
+</nav>
+</div>
+</footer>
+</body>
+</html>
