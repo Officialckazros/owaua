@@ -20,7 +20,7 @@ import httpx
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent
-load_dotenv(ROOT / ".env")
+load_dotenv(os.getenv("OWAUA_ENV_FILE") or ROOT / ".env")
 log = logging.getLogger("owaua")
 
 GATEWAY_HOST = "gateway.ai.cloudflare.com"

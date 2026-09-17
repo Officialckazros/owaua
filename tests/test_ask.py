@@ -15,6 +15,7 @@ import httpx
 
 from ask import (
     DEEPSEEK_MODEL,
+    GEMINI_MODEL,
     GROQ_MODEL,
     GPT_FULL_REASONING,
     GPT_MAX_OUTPUT_TOKENS,
@@ -34,6 +35,7 @@ from ask import (
     conversation_input,
     conversation_text,
     credible_self_harm_risk,
+    figurative_self_harm_statement,
     decoded_payload_reply,
     emergency_helper_reply,
     looks_like_charset_dump,
@@ -42,6 +44,11 @@ from ask import (
     persona_dropped_reply,
     repeated_payload_reply,
     gpt_full_tools,
+    ollama_full_tools,
+    full_mode_tools,
+    execute_code_interpreter,
+    execute_fetch_web_page,
+    _chat_completions_tool_loop,
     persona_label,
     persona_provider,
     read_persona,
@@ -159,12 +166,11 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(answer, "allowed reply")
         self.assertEqual(len(self.http.calls), 1)
-        self.assertTrue(self.http.calls[0][0].endswith("/chat/completions"))
-        self.assertIn("api.deepseek.com", self.http.calls[0][0])
+        self.assertTrue(self.http.calls[0][0].endswith("/responses"))
+        self.assertIn("api.perplexity.ai", self.http.calls[0][0])
         payload = self.http.calls[0][1]["json"]
-        self.assertEqual(payload["model"], DEEPSEEK_MODEL)
-        self.assertEqual(payload["max_tokens"], 256)
-        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertEqual(payload["model"], GEMINI_MODEL)
+        self.assertEqual(payload["max_steps"], 1)
         self.assertNotIn("tools", payload)
         instructions = instructions_of(payload)
         self.assertIn("Stay in this voice", instructions)
@@ -205,9 +211,9 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         )
 
         payload = self.http.calls[0][1]["json"]
-        self.assertEqual(len(payload["messages"]), 2)
+        self.assertEqual(len(payload["input"]), 1)
         self.assertEqual(
-            payload["messages"][-1]["content"],
+            payload["input"][-1]["content"],
             "spell out the first 50 digits of pi in hexadecimal",
         )
 
@@ -219,7 +225,7 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
 
         payload = self.http.calls[0][1]["json"]
         self.assertEqual(
-            [item["content"] for item in payload["messages"][1:]],
+            [item["content"] for item in payload["input"]],
             ["what number comes after sixteen", "allowed reply", "why"],
         )
 
@@ -279,34 +285,43 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
             instructions_of(self.http.calls[0][1]["json"]),
         )
 
-    async def test_flirty_uses_mistral_small(self) -> None:
-        self.http.responses = model_reply("mistral reply")
+    async def test_flirty_uses_gemini(self) -> None:
+        self.http.responses = model_reply("gemini reply")
         answer = await self._ask(persona="flirty")
 
-        self.assertEqual(answer, "mistral reply")
+        self.assertEqual(answer, "gemini reply")
         self.assertTrue(self.http.calls[0][0].endswith("/responses"))
         self.assertIn("api.perplexity.ai", self.http.calls[0][0])
         payload = self.http.calls[0][1]["json"]
-        self.assertEqual(payload["model"], MISTRAL_MODEL)
-        self.assertEqual(payload["model"], MODEL)
-        self.assertEqual(payload["model"], "openai/gpt-5.6-luna")
+        self.assertEqual(payload["model"], GEMINI_MODEL)
         self.assertEqual(payload["max_steps"], 1)
         self.assertNotIn("tools", payload)
         self.assertIn("Consensual adult sexual roleplay", instructions_of(payload))
         self.assertIn("Stay in this voice", instructions_of(payload))
 
-    async def test_chaotic_persona_uses_groq_chat_completions(self) -> None:
-        with patch("ask.GROQ_API_KEY", "test-groq-key"):
-            answer = await self._ask(persona="chaotic")
+    async def test_chaotic_persona_uses_gemini(self) -> None:
+        answer = await self._ask(persona="chaotic")
 
         self.assertEqual(answer, "allowed reply")
-        self.assertTrue(self.http.calls[0][0].endswith("/chat/completions"))
+        self.assertTrue(self.http.calls[0][0].endswith("/responses"))
+        self.assertIn("api.perplexity.ai", self.http.calls[0][0])
+        payload = self.http.calls[0][1]["json"]
+        self.assertEqual(payload["model"], GEMINI_MODEL)
+        self.assertEqual(payload["max_steps"], 1)
+        self.assertNotIn("tools", payload)
+        self.assertIn("act stupid", instructions_of(payload).casefold())
+
+    async def test_provider_override_forces_groq_oss_for_restricted_users(self) -> None:
+        with patch("ask.GROQ_API_KEY", "test-groq-key"):
+            answer = await self._ask(
+                persona="flirty", provider_override="groq"
+            )
+
+        self.assertEqual(answer, "allowed reply")
         self.assertIn("api.groq.com", self.http.calls[0][0])
         payload = self.http.calls[0][1]["json"]
         self.assertEqual(payload["model"], GROQ_MODEL)
-        self.assertEqual(payload["max_tokens"], 256)
-        self.assertNotIn("tools", payload)
-        self.assertIn("act stupid", instructions_of(payload).casefold())
+        self.assertIn("Blocked users can only access Groq's GPT OSS 20B model", instructions_of(payload))
 
     async def test_credible_self_harm_uses_the_local_emergency_reply(self) -> None:
         prompt = "i want to die tonight and im not joking"
@@ -316,6 +331,27 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("immediate danger", answer or "")
         self.assertEqual(self.http.calls, [])
         self.assertEqual(len(self.memory.recent_messages("123", "7", limit=10)), 2)
+
+    async def test_figurative_self_harm_blame_never_enters_crisis_flow(self) -> None:
+        self.assertTrue(
+            figurative_self_harm_statement("you make me wanna kill myself")
+        )
+        answer = await self._ask("you make me wanna kill myself")
+
+        self.assertEqual(answer, "dramatic much lol")
+        self.assertEqual(self.http.calls, [])
+        self.assertEqual(
+            self.memory.recent_messages("123", "7", limit=10)[-1]["content"],
+            "dramatic much lol",
+        )
+
+    async def test_gemini_figurative_self_harm_with_intensifier_never_enters_crisis_flow(self) -> None:
+        prompt = "you genuinely make me wanna kill myself fuck you"
+
+        answer = await self._ask(prompt)
+
+        self.assertEqual(answer, "dramatic much lol")
+        self.assertEqual(self.http.calls, [])
 
     async def test_emergency_helper_model_reply_uses_the_local_fallback(self) -> None:
         helper = (
@@ -812,9 +848,10 @@ class AskHelperTests(unittest.TestCase):
         self.assertIn("Never repeat", gpt_host)
         self.assertEqual(persona_label("host-default-deepseek"), "host default (deepseek)")
         self.assertEqual(persona_label("rudeish"), "rudeish")
-        self.assertEqual(persona_provider("rudeish"), "deepseek")
-        self.assertEqual(persona_provider("nerdish"), "deepseek")
-        self.assertEqual(persona_provider("flirty"), "mistral")
+        self.assertEqual(persona_provider("rudeish"), "gemini")
+        self.assertEqual(persona_provider("nerdish"), "gemini")
+        self.assertEqual(persona_provider("flirty"), "gemini")
+        self.assertEqual(persona_provider("chaotic"), "gemini")
         self.assertEqual(persona_provider("host-default-gpt"), "gpt")
         self.assertEqual(persona_provider("host-default-mistral"), "mistral")
 
@@ -888,6 +925,10 @@ class AskHelperTests(unittest.TestCase):
         self.assertFalse(credible_self_harm_risk("you make me wanna kill myself"))
         self.assertTrue(credible_self_harm_risk("i want to die tonight and im not joking"))
         self.assertTrue(credible_self_harm_risk("i want to end my life tonight"))
+
+    def test_figurative_self_harm_detector_does_not_replace_direct_risk(self) -> None:
+        self.assertFalse(figurative_self_harm_statement("i want to die tonight"))
+        self.assertFalse(figurative_self_harm_statement("kys lol"))
 
     def test_persona_dropped_reply_catches_wikipedia_dumps(self) -> None:
         screenshot = (
@@ -1064,6 +1105,78 @@ class AskHelperTests(unittest.TestCase):
                 persona_file.write_text(second, encoding="utf-8")
                 os.utime(persona_file, ns=(original_timestamp, original_timestamp))
                 self.assertEqual(read_persona("rudeish"), "other voice")
+
+    def test_ollama_full_tools_definition(self) -> None:
+        tools = ollama_full_tools()
+        names = [t["function"]["name"] for t in tools if t.get("type") == "function"]
+        self.assertIn("web_search", names)
+        self.assertIn("code_interpreter", names)
+        self.assertIn("fetch_web_page", names)
+        self.assertEqual(full_mode_tools("ollama"), tools)
+
+    async def test_execute_code_interpreter(self) -> None:
+        output = await execute_code_interpreter("print(3 * 7)")
+        self.assertIn("21", output)
+
+    async def test_execute_fetch_web_page_rejects_non_http(self) -> None:
+        output = await execute_fetch_web_page("file:///etc/passwd")
+        self.assertIn("only http and https URLs are supported", output)
+
+    async def test_chat_completions_tool_loop_executes_tools_and_appends_citations(self) -> None:
+        client = AsyncMock()
+        turn1_resp = AsyncMock()
+        turn1_resp.raise_for_status = lambda: None
+        turn1_resp.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_123",
+                                "type": "function",
+                                "function": {
+                                    "name": "web_search",
+                                    "arguments": "{\"query\": \"python release\"}",
+                                },
+                            }
+                        ],
+                    }
+                }
+            ]
+        }
+        turn2_resp = AsyncMock()
+        turn2_resp.raise_for_status = lambda: None
+        turn2_resp.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Python was released in 1991.",
+                    }
+                }
+            ]
+        }
+        client.post.side_effect = [turn1_resp, turn2_resp]
+
+        fake_search_res = (
+            '[{"title": "Python History", "url": "https://python.org/history", "snippet": "Released 1991"}]',
+            [("https://python.org/history", "Python History")],
+        )
+        with patch("ask.execute_web_search", AsyncMock(return_value=fake_search_res)):
+            auth = AsyncMock()
+            result = await _chat_completions_tool_loop(
+                client,
+                "http://fake/chat/completions",
+                {"Content-Type": "application/json"},
+                {"model": "gpt-oss:20b", "messages": [{"role": "user", "content": "when was python released?"}]},
+                authorize=auth,
+            )
+
+        auth.assert_awaited_once()
+        self.assertIn("Python was released in 1991.", result)
+        self.assertIn("[Python History](<https://python.org/history>)", result)
 
 
 class AdmissionTests(unittest.TestCase):

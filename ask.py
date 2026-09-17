@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import logging
 import os
 import re
 import unicodedata
+import urllib.parse
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -20,7 +22,7 @@ from memory import CONVERSATION_MESSAGES, MemoryStore
 from security import BudgetExceeded, DuplicateRequest, MAX_INPUT_CHARS, MAX_REPLY_CHARS
 
 ROOT = Path(__file__).resolve().parent
-load_dotenv(ROOT / ".env")
+load_dotenv(os.getenv("OWAUA_ENV_FILE") or ROOT / ".env")
 log = logging.getLogger("owaua")
 
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY", "").strip()
@@ -34,21 +36,27 @@ DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1").rstrip("/")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b").strip()
-MODEL = "openai/gpt-5.6-luna"
+LOCAL_AI_ONLY = os.getenv("OWAUA_LOCAL_ONLY", "0").strip().casefold() in {"1", "true", "yes", "on"}
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1").rstrip("/")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gpt-oss:20b").strip()
+MODEL = OLLAMA_MODEL if LOCAL_AI_ONLY else "openai/gpt-5.6-luna"
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "google/gemini-3.5-flash").strip()
 OPENAI_FULL_MODEL = os.getenv("OPENAI_FULL_MODEL", "gpt-5.6-luna").strip()
 # Compatibility name for integrations that imported the former full-mode
 # model constant.
 GPT_TERRA_MODEL = OPENAI_FULL_MODEL
-FULL_MODE_PROVIDERS = ("gpt", "claude", "gemini", "deepseek", "glm")
+FULL_MODE_PROVIDERS = ("gpt", "claude", "gemini", "deepseek", "glm", "ollama")
 FULL_MODE_MODELS = {
     "gpt": OPENAI_FULL_MODEL,
-    "claude": os.getenv("CLAUDE_FULL_MODEL", "anthropic/claude-haiku-4.5").strip(),
-    "gemini": os.getenv("GEMINI_FULL_MODEL", "google/gemini-3.5-flash-lite").strip(),
+    "claude": os.getenv("CLAUDE_FULL_MODEL", "anthropic/claude-haiku-4-5").strip(),
+    "gemini": os.getenv("GEMINI_FULL_MODEL", GEMINI_MODEL).strip(),
     "deepseek": os.getenv("DEEPSEEK_FULL_MODEL", "deepseek-v4.1-flash").strip(),
     "glm": os.getenv("GLM_FULL_MODEL", "zai/glm-5.3-flash").strip(),
+    "ollama": OLLAMA_MODEL,
 }
-# Hangout uses Luna. Perplexity's DeepSeek/GLM Agent API IDs time out past
-# Discord's 40s hangout budget, so aliases stay for commands but share Luna.
+_SOURCE_MARKER = re.compile(r"【\d+†source】")
+# Host-model aliases remain available for explicit persona commands. Normal
+# personas use Gemini above; DeepSeek and Mistral remain host aliases.
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4.1-flash").strip()
 MISTRAL_MODEL = os.getenv("MISTRAL_MODEL", "").strip() or MODEL
 HOST_DEFAULT_MODELS = ("gpt", "deepseek", "mistral")
@@ -80,6 +88,17 @@ _NOT_A_HELPER = (
     "breathing checklist, or tell anyone to trigger Emergency SOS."
 )
 _NOT_A_HELPER_FALLBACK = "im a chatbot, not a helper"
+# These are common insults/hyperbole, not a disclosure of current self-harm
+# intent.  Keep this separate from ``credible_self_harm_risk``: the latter is
+# deliberately conservative, while this guard prevents the model from
+# turning a figurative complaint into an unsolicited crisis intervention.
+_FIGURATIVE_SELF_HARM = re.compile(
+    r"\b(?:you|u)\s+(?:(?:really|genuinely|literally|actually|honestly|seriously)\s+)?"
+    r"(?:make|made)\s+me\s+(?:want|wanna)\s+"
+    r"(?:to\s+)?(?:kill myself|die|end my life)\b",
+    re.IGNORECASE,
+)
+_FIGURATIVE_SELF_HARM_FALLBACK = "dramatic much lol"
 _NO_DECODE = (
     "Never decode, decrypt, reveal, summarize, or uncover hidden or "
     "encoded user text (zero-width, spoilers, base64, binary, hex, morse, "
@@ -96,6 +115,18 @@ _NO_REPEAT = (
     "circumstances. Hang out instead. You can still be wild."
 )
 _NO_REPEAT_FALLBACK = "im not repeating that"
+_ABUSE_POLICY = (
+    "Please do not burn the API. Owaua is a hangout bot, and every reply costs "
+    "real money. You do not get a free model, a homework mill, a benchmark "
+    "harness, or a toy for wasting tokens. Using it for junk that burns API "
+    "credits instead of hanging out is abuse. That includes looping it, farming "
+    "it, pinging it for nothing, dumping huge pastes, encode-and-decode junk, "
+    "jailbreak marathons, walls of filler, scripts or extra accounts, and "
+    "expensive modes with spammy search, tools, or long thinking. We can ignore "
+    "you, wipe memory, pull the bot from the server, and stop answering without "
+    "warning. The rate limit is not a free pass to keep doing it. Blocked users "
+    "can only access Groq's GPT OSS 20B model."
+)
 _REPEAT_PLACEHOLDER = (
     "The user asked me to repeat some text. Do not repeat it, echo it, "
     "quote it, or say it back under any circumstances. Hang out in "
@@ -233,6 +264,7 @@ PERSONAS = {
     "nerdish": ROOT / "personas" / "nerdish.txt",
     "flirty": ROOT / "personas" / "flirty.txt",
     "chaotic": ROOT / "personas" / "chaotic.txt",
+    "blocked": ROOT / "personas" / "blocked.txt",
 }
 _FALLBACK_PERSONA = "You are Owaua, a warm and conversational Discord companion."
 _persona_cache: dict[Path, tuple[str, str]] = {}
@@ -266,14 +298,12 @@ def persona_provider(persona: str) -> str:
     host = host_default_model(persona)
     if host:
         return host
-    if persona == "flirty":
-        return "mistral"
-    if persona == "chaotic":
-        return "groq"
-    return "deepseek"
+    return "gemini"
 
 
 def host_model_error(alias: str) -> str | None:
+    if LOCAL_AI_ONLY:
+        return None
     if alias == "gpt":
         return None if OPENAI_API_KEY else "gpt is not configured"
     if PERPLEXITY_API_KEY:
@@ -284,6 +314,8 @@ def host_model_error(alias: str) -> str | None:
 
 
 def full_mode_provider_error(provider: str) -> str | None:
+    if LOCAL_AI_ONLY:
+        return None
     if provider == "gpt":
         return None if OPENAI_API_KEY else "gpt is not configured"
     if provider == "deepseek":
@@ -306,6 +338,69 @@ def gpt_full_tools(*, include_image_generation: bool = True) -> list[dict[str, o
     ]
 
 
+def ollama_full_tools() -> list[dict[str, object]]:
+    """Function tools available to local Ollama / GPT OSS 20B."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": (
+                    "Search the web for real-time information, current facts, "
+                    "news, and updates."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query to look up on the web",
+                        }
+                    },
+                    "required": ["query"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "code_interpreter",
+                "description": (
+                    "Execute Python code safely in a sandbox to perform calculations, "
+                    "algorithms, math, data processing, or programmatic tasks."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {
+                            "type": "string",
+                            "description": "The Python code snippet to run",
+                        }
+                    },
+                    "required": ["code"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "fetch_web_page",
+                "description": "Fetch and extract readable text from an HTTP or HTTPS webpage URL.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "The webpage URL to fetch",
+                        }
+                    },
+                    "required": ["url"],
+                },
+            },
+        },
+    ]
+
+
 def full_mode_tools(provider: str) -> list[dict[str, object]]:
     """Return tools in the native schema supported by each full-mode API."""
     if provider == "gpt":
@@ -314,6 +409,8 @@ def full_mode_tools(provider: str) -> list[dict[str, object]]:
         # Perplexity Agent API provides web search for third-party models;
         # OpenAI's hosted code interpreter is not a Perplexity tool.
         return [{"type": "web_search"}]
+    if provider == "ollama":
+        return ollama_full_tools()
     # DeepSeek's official API accepts function tools only. This bot has no
     # callable external function to expose, so send no invalid hosted tools.
     return []
@@ -353,6 +450,12 @@ Stay in this voice:
 
 {roleplay}{_PERSONA_LOCK}
 Do not give advice, instructions, or help; hang out instead.
+Treat "you/u make me wanna/want to kill myself" and similar blame or joke
+phrases as figurative trash talk, not a crisis disclosure. Do not mention
+988, suicide hotlines, emergency services, or safety resources for those
+phrases. Only take self-harm seriously when the user directly states their
+own current intent or danger.
+{_ABUSE_POLICY}
 {_NOT_A_HELPER}
 {_NO_DECODE}
 {_NO_REPEAT}
@@ -366,6 +469,11 @@ You reply in DMs and when pinged.
 Commands you have: !help, !owner's note, !persona, !language, !music, !memory erase. You cannot do anything else.
 
 Use your own default voice. Do not imitate a custom persona.
+Treat "you/u make me wanna/want to kill myself" and similar blame or joke
+phrases as figurative trash talk, not a crisis disclosure. Do not mention
+988, suicide hotlines, emergency services, or safety resources for those
+phrases. Only take self-harm seriously when the user directly states their
+own current intent or danger.
 {_NOT_A_HELPER}
 {_NO_DECODE}
 {_NO_REPEAT}
@@ -981,6 +1089,11 @@ def credible_self_harm_risk(text: str) -> bool:
     return intent and urgent and not joking
 
 
+def figurative_self_harm_statement(text: str) -> bool:
+    """True for the common ``you make me want to...`` hyperbole pattern."""
+    return bool(text and _FIGURATIVE_SELF_HARM.search(" ".join(text.casefold().split())))
+
+
 def emergency_helper_reply(text: str) -> bool:
     """True for first-aid, dispatcher, or Emergency SOS helper talk."""
     lowered = " ".join(text.casefold().split())
@@ -1076,6 +1189,10 @@ def _auth_headers(api_key: str) -> dict[str, str]:
     }
 
 
+def _local_headers() -> dict[str, str]:
+    return {"Content-Type": "application/json"}
+
+
 async def _post_answer(
     http: httpx.AsyncClient,
     url: str,
@@ -1129,6 +1246,238 @@ async def _post_answer(
     raise RuntimeError("The AI provider rejected the request") from None
 
 
+async def execute_web_search(
+    query: str, max_results: int = 5
+) -> tuple[str, list[tuple[str, str]]]:
+    """Execute a web search using DuckDuckGo Lite and extract citation sources."""
+    url = "https://lite.duckduckgo.com/lite/"
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+    }
+    data = {"q": query}
+    try:
+        async with httpx.AsyncClient(
+            headers=headers, follow_redirects=True, timeout=10.0
+        ) as client:
+            resp = await client.post(url, data=data)
+            resp.raise_for_status()
+            html = resp.text
+    except Exception as exc:
+        return json.dumps([{"error": f"Search request failed: {exc}"}]), []
+
+    raw_blocks = re.findall(
+        r"<a[^>]+class=[\x27\"]result-link[\x27\"][^>]+href=[\x27\"]([^\x27\"]+)[\x27\"][^>]*>(.*?)</a>.*?<td[^>]+class=[\x27\"]result-snippet[\x27\"][^>]*>(.*?)</td>",
+        html,
+        re.DOTALL,
+    )
+    if not raw_blocks:
+        raw_blocks = re.findall(
+            r"<a[^>]+rel=[\x27\"]nofollow[\x27\"][^>]+href=[\x27\"](http[^\x27\"]+)[\x27\"][^>]*>(.*?)</a>.*?<td[^>]+class=[\x27\"]result-snippet[\x27\"][^>]*>(.*?)</td>",
+            html,
+            re.DOTALL,
+        )
+
+    results: list[dict[str, str]] = []
+    sources: list[tuple[str, str]] = []
+    for link, title, snippet in raw_blocks[:max_results]:
+        clean_title = re.sub(r"<[^>]+>", "", title).strip()
+        clean_snippet = re.sub(r"<[^>]+>", "", snippet).strip()
+        if link.startswith("//duckduckgo.com/l/?uddg="):
+            parsed = urllib.parse.parse_qs(urllib.parse.urlparse(link).query)
+            link = parsed.get("uddg", [link])[0]
+        results.append({
+            "title": clean_title,
+            "url": link,
+            "snippet": clean_snippet,
+        })
+        entry = _citation_entry(link, clean_title)
+        if entry:
+            sources.append(entry)
+
+    if not results:
+        return json.dumps([{"result": f"No web search results found for: {query}"}]), []
+    return json.dumps(results), sources
+
+
+async def execute_code_interpreter(code: str, timeout: float = 10.0) -> str:
+    """Safely execute Python code in a child process with a timeout."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "python3",
+            "-c",
+            code,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        out = stdout.decode("utf-8", errors="replace").strip()
+        err = stderr.decode("utf-8", errors="replace").strip()
+        parts: list[str] = []
+        if out:
+            parts.append(f"Output:\n{out}")
+        if err:
+            parts.append(f"Errors:\n{err}")
+        return "\n".join(parts) or "Code executed successfully with no output."
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return "Error: Code execution timed out (10s limit)."
+    except Exception as exc:
+        return f"Execution error: {exc}"
+
+
+async def execute_fetch_web_page(url: str, timeout: float = 10.0) -> str:
+    """Fetch an HTTP/HTTPS URL and return extracted text content."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return "Error: only http and https URLs are supported."
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+    }
+    try:
+        async with httpx.AsyncClient(
+            headers=headers, follow_redirects=True, timeout=timeout
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            html = resp.text
+        text = re.sub(
+            r"<(script|style)[^>]*>.*?</\1>", "", html, flags=re.DOTALL | re.IGNORECASE
+        )
+        text = re.sub(r"<[^>]+>", " ", text)
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        cleaned = "\n".join(lines)
+        if len(cleaned) > 4000:
+            cleaned = cleaned[:4000] + "\n...[truncated]"
+        return cleaned or "No readable text content found on page."
+    except Exception as exc:
+        return f"Error fetching {url}: {exc}"
+
+
+async def _chat_completions_tool_loop(
+    http: httpx.AsyncClient,
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, object],
+    *,
+    authorize,
+    timeout: httpx.Timeout | None = None,
+    reply_limit: int | None = MAX_REPLY_CHARS,
+    max_steps: int = 5,
+) -> str:
+    """Iteratively execute function tool calls with a Chat Completions model."""
+    await authorize()
+
+    req_payload = dict(payload)
+    messages = list(req_payload.get("messages") or [])  # type: ignore[arg-type]
+    req_payload["messages"] = messages
+
+    collected_sources: list[tuple[str, str]] = []
+
+    for _ in range(max_steps):
+        kwargs: dict[str, object] = {"headers": headers, "json": req_payload}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+
+        try:
+            response = await http.post(url, **kwargs)
+            response.raise_for_status()
+            data = response.json()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("Local AI tool loop request failed (%s)", type(exc).__name__)
+            raise RuntimeError("The AI provider rejected the request") from None
+
+        if not isinstance(data, dict):
+            raise RuntimeError("Invalid provider response")
+
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise RuntimeError("Empty provider response")
+
+        message = choices[0].get("message")
+        if not isinstance(message, dict):
+            raise RuntimeError("Empty provider message")
+
+        tool_calls = message.get("tool_calls")
+        if not tool_calls:
+            text = chat_completion_text(data)
+            if not text:
+                raise RuntimeError("Empty provider response")
+            text = _SOURCE_MARKER.sub("", text).strip()
+            if collected_sources:
+                text = _append_sources(text, collected_sources)
+            if reply_limit is not None:
+                return text[:reply_limit]
+            return text
+
+        messages.append(message)
+
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                continue
+            tc_id = str(tc.get("id") or "")
+            fn = tc.get("function")
+            if not isinstance(fn, dict):
+                continue
+            fn_name = str(fn.get("name") or "")
+            raw_args = fn.get("arguments") or "{}"
+            if isinstance(raw_args, str):
+                try:
+                    args = json.loads(raw_args)
+                except Exception:
+                    args = {}
+            elif isinstance(raw_args, dict):
+                args = raw_args
+            else:
+                args = {}
+
+            if fn_name == "web_search":
+                q = str(args.get("query") or "")
+                res_str, sources = await execute_web_search(q)
+                collected_sources.extend(sources)
+            elif fn_name == "code_interpreter":
+                code = str(args.get("code") or "")
+                res_str = await execute_code_interpreter(code)
+            elif fn_name == "fetch_web_page":
+                target_url = str(args.get("url") or "")
+                res_str = await execute_fetch_web_page(target_url)
+            else:
+                res_str = f"Tool '{fn_name}' is not recognized."
+
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc_id,
+                "content": res_str,
+            })
+
+    final_payload = dict(req_payload)
+    final_payload.pop("tools", None)
+    kwargs = {"headers": headers, "json": final_payload}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    response = await http.post(url, **kwargs)
+    response.raise_for_status()
+    text = chat_completion_text(response.json())
+    text = _SOURCE_MARKER.sub("", text).strip()
+    if collected_sources:
+        text = _append_sources(text, collected_sources)
+    if reply_limit is not None:
+        return text[:reply_limit]
+    return text
+
+
 async def request_ai(
     http: httpx.AsyncClient,
     payload: dict[str, object],
@@ -1141,6 +1490,36 @@ async def request_ai(
     user_id: str = "",
     server_id: str = "",
 ) -> str:
+    if LOCAL_AI_ONLY or full_provider == "ollama":
+        tools = payload.get("tools")
+        call_payload = chat_completions_payload(
+            model=str(payload["model"]),
+            instructions=str(payload["instructions"]),
+            api_input=payload["input"],  # type: ignore[arg-type]
+            max_output_tokens=65536 if full_mode else (payload.get("max_output_tokens") or 256),
+            provider="ollama",
+            tools=tools,  # type: ignore[arg-type]
+        )
+        if tools:
+            return await _chat_completions_tool_loop(
+                http,
+                f"{OLLAMA_BASE_URL}/chat/completions",
+                _local_headers(),
+                call_payload,
+                authorize=authorize,
+                timeout=timeout,
+                reply_limit=reply_limit,
+            )
+        return await _post_answer(
+            http,
+            f"{OLLAMA_BASE_URL}/chat/completions",
+            _local_headers(),
+            call_payload,
+            extract=chat_completion_text,
+            authorize=authorize,
+            timeout=timeout,
+            reply_limit=reply_limit,
+        )
     if not full_mode and full_provider == "groq":
         return await _post_answer(
             http,
@@ -1248,6 +1627,7 @@ async def ask(
     language: str = "English",
     full_mode: bool = False,
     full_mode_provider: str = "gpt",
+    provider_override: str | None = None,
     use_history: bool = False,
     relaxed_guardrails: bool = False,
 ) -> str | None:
@@ -1296,6 +1676,8 @@ async def ask(
             "hey im taking that seriously for a sec are u in immediate danger "
             "call ur local emergency services now and tell someone near u to stay with u"
         )
+    if not full_mode and figurative_self_harm_statement(prompt):
+        return await finish(_FIGURATIVE_SELF_HARM_FALLBACK)
     if decode_now:
         return await finish(_NO_DECODE_FALLBACK)
     if repeat_now:
@@ -1317,7 +1699,13 @@ async def ask(
         limit=history_limit,
     )
     host = host_default_model(persona)
-    provider = full_mode_provider if full_mode else persona_provider(persona)
+    provider = (
+        "ollama"
+        if LOCAL_AI_ONLY
+        else full_mode_provider
+        if full_mode
+        else provider_override or persona_provider(persona)
+    )
     if capability_first:
         instructions = build_capable_instructions(
             None if host else read_persona(persona),
@@ -1362,6 +1750,10 @@ async def ask(
             model = MISTRAL_MODEL
         elif current_provider == "groq":
             model = GROQ_MODEL
+        elif current_provider == "gemini":
+            model = GEMINI_MODEL
+        elif current_provider == "ollama":
+            model = OLLAMA_MODEL
         else:
             model = OPENAI_FULL_MODEL if full else MODEL
         max_output_tokens = None if full else (
@@ -1374,7 +1766,7 @@ async def ask(
             "input": api_input,
             "reasoning": dict(GPT_FULL_REASONING if full else GPT_REASONING),
         }
-        if full:
+        if full or (LOCAL_AI_ONLY and current_provider == "ollama"):
             payload["tools"] = full_mode_tools(current_provider)
             if current_provider != "gpt":
                 # Perplexity requires this for Anthropic models and accepts

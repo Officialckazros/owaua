@@ -200,7 +200,10 @@ class BotSecurityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.store.recent_messages("22", "33", limit=10), [])
         with patch("bot.BLOCKED_USERS", {33}), patch("bot.ask", AsyncMock()) as provider:
             await self.bot.on_message(make_message("hi", 101, FakeChannel(), mentions=[self.bot.user]))
-            provider.assert_not_awaited()
+            provider.assert_awaited_once()
+            self.assertEqual(provider.await_args.kwargs["persona"], "blocked")
+            self.assertEqual(provider.await_args.kwargs["provider_override"], "groq")
+            self.assertFalse(provider.await_args.kwargs["full_mode"])
 
     async def test_busy_user_cannot_queue_across_channels_and_cancellation_releases(self):
         started, finish = asyncio.Event(), asyncio.Event()

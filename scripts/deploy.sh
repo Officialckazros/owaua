@@ -31,13 +31,15 @@ from pathlib import Path
 root = Path(os.environ["ROOT_DIR"])
 deploy_path = Path(os.environ["OWAUA_DEPLOY_SCRIPT"])
 
-env_file = root / ".env"
+env_file = Path(os.environ.get("OWAUA_DAKI_ENV_FILE", root / ".env.cloud"))
 if not env_file.is_file():
-    raise RuntimeError(".env is missing; deployment was not uploaded")
+    raise RuntimeError(f"Daki env file is missing: {env_file}")
 env_payload = env_file.read_bytes()
 
 excluded = {
     Path("scripts/deploy.sh"),
+    Path("scripts/deploy-daki.sh"),
+    Path("scripts/deploy-local.sh"),
     Path("scripts/update-persona.sh"),
     Path("scripts/setup-cloudflare.py"),
     Path("personas/update-persona.sh"),
@@ -119,7 +121,7 @@ for local_path in files:
     print(f"Uploaded {remote_path} (sha256={hashlib.sha256(payload).hexdigest()[:12]})")
 
 # Keep runtime credentials out of panel startup variables. The bot loads this
-# verified local file through python-dotenv when it starts.
+# verified Daki profile through python-dotenv when it starts.
 remote_env_path = "persona-test-bot/.env"
 client.write_file(remote_env_path, env_payload)
 encoded_env_path = remote_env_path.replace("/", "%2F")
@@ -130,7 +132,7 @@ env_readback = client.request(
 )
 if env_readback != env_payload:
     raise RuntimeError("Daki verification failed for persona-test-bot/.env")
-print("Uploaded persona-test-bot/.env (verified)")
+print("Uploaded persona-test-bot/.env from .env.cloud (verified)")
 
 client.update_startup_variable("STARTUP_CMD", "")
 client.update_startup_variable(
@@ -146,7 +148,7 @@ client.restart()
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
     if client.state() == "running":
-        print("Container started with the normal lifecycle command. Verify the Discord readiness event in its console before declaring deployment healthy.")
+        print("Container started with the Daki profile. Verify the Discord readiness event in its console before declaring deployment healthy.")
         break
     time.sleep(2)
 else:

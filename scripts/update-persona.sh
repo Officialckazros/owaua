@@ -2,6 +2,65 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd -P)
+
+# Local-only mode deliberately keeps the Daki container offline. Personas are
+# loaded from the local files for every reply, so updating the files is the
+# complete operation; there is no remote upload to perform in this mode.
+local_only=0
+if [[ "${OWAUA_LOCAL_ONLY:-}" =~ ^(1|true|yes|on)$ ]]; then
+  local_only=1
+elif [[ -f "$ROOT_DIR/.env" ]] && awk '
+  /^[[:space:]]*#/ { next }
+  /^[[:space:]]*OWAUA_LOCAL_ONLY[[:space:]]*=/ {
+    value = $0
+    sub(/^[^=]*=/, "", value)
+    gsub(/[[:space:]]/, "", value)
+    sub(/^\"/, "", value); sub(/\"$/, "", value)
+    sub(/^\047/, "", value); sub(/\047$/, "", value)
+    if (tolower(value) ~ /^(1|true|yes|on)$/) { found = 1 }
+  }
+  END { exit(found ? 0 : 1) }
+' "$ROOT_DIR/.env"; then
+  local_only=1
+fi
+
+if [[ "$local_only" -eq 1 ]]; then
+  PERSONA_MODELS="${*:-rudeish nerdish flirty chaotic}"
+  ROOT_DIR="$ROOT_DIR" PERSONA_MODELS="$PERSONA_MODELS" python3 - <<'PY'
+import os
+from pathlib import Path
+
+root = Path(os.environ["ROOT_DIR"])
+model_files = {
+    "rudeish": "personas/rudeish.txt",
+    "nerdish": "personas/nerdish.txt",
+    "flirty": "personas/flirty.txt",
+    "chaotic": "personas/chaotic.txt",
+}
+requested = os.environ["PERSONA_MODELS"].replace(",", " ").replace("/", " ").split()
+models = []
+for model in requested:
+    model = model.lower()
+    if model == "and":
+        continue
+    if model not in model_files:
+        valid = ", ".join(model_files)
+        raise RuntimeError(f"Unknown persona '{model}'. Choose: {valid}")
+    if model not in models:
+        models.append(model)
+if not models:
+    models = list(model_files)
+
+for model in models:
+    path = root / model_files[model]
+    if not path.is_file():
+        raise RuntimeError(f"Missing persona file: {path}")
+    print(f"Updated local persona {model} (sha256 not uploaded; local file is live)")
+print("Local-only mode: personas are live immediately; Daki upload skipped.")
+PY
+  exit 0
+fi
+
 if [[ -z "${OWAUA_DEPLOY_SCRIPT:-}" ]]; then
   for candidate in \
     "$HOME/.config/owaua-deploy/daki_client.py" \

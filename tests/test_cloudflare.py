@@ -146,14 +146,14 @@ class CloudflareAskTests(unittest.IsolatedAsyncioTestCase):
         defaults.update(kwargs)
         return await ask(self.http, self.memory, **defaults)  # type: ignore[arg-type]
 
-    async def test_hangout_deepseek_stays_on_native_api(self) -> None:
+    async def test_hangout_gemini_uses_perplexity_api(self) -> None:
         with patch.dict(os.environ, GATEWAY_ENV, clear=False):
             answer = await self._ask()
         self.assertEqual(answer, "allowed reply")
         self.assertEqual(len(self.http.calls), 1)
         url, recorded = self.http.calls[0]
-        self.assertIn("api.deepseek.com", url)
-        self.assertTrue(url.endswith("/chat/completions"))
+        self.assertIn("api.perplexity.ai", url)
+        self.assertTrue(url.endswith("/responses"))
         self.assertNotIn("gateway.ai.cloudflare.com", url)
         self.assertNotIn("cf-aig-skip-cache", recorded["headers"])
 
@@ -175,12 +175,12 @@ class CloudflareAskTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("gateway.ai.cloudflare.com", url)
         self.assertNotIn("cf-aig-skip-cache", recorded["headers"])
 
-    async def test_hangout_deepseek_ignores_gateway_configuration(self) -> None:
+    async def test_hangout_gemini_ignores_gateway_configuration(self) -> None:
         with patch.dict(os.environ, GATEWAY_ENV, clear=False):
             answer = await self._ask()
         self.assertEqual(answer, "allowed reply")
         self.assertEqual(len(self.http.calls), 1)
-        self.assertIn("api.deepseek.com", self.http.calls[0][0])
+        self.assertIn("api.perplexity.ai", self.http.calls[0][0])
         self.assertNotIn("cf-aig-skip-cache", self.http.calls[0][1]["headers"])
 
     async def test_provider_errors_through_the_gateway_are_not_retried(self) -> None:
@@ -199,14 +199,14 @@ class CloudflareAskTests(unittest.IsolatedAsyncioTestCase):
             await self._ask()
         self.assertEqual(len(self.http.calls), 1)
 
-    async def test_unconfigured_cloudflare_keeps_direct_deepseek(self) -> None:
+    async def test_unconfigured_cloudflare_keeps_direct_gemini(self) -> None:
         with patch.dict(
             os.environ,
             {"CLOUDFLARE_ACCOUNT_ID": "", "CLOUDFLARE_AI_GATEWAY": ""},
             clear=False,
         ):
             await self._ask()
-        self.assertIn("api.deepseek.com", self.http.calls[0][0])
+        self.assertIn("api.perplexity.ai", self.http.calls[0][0])
 
 
 class CloudflareLogTests(unittest.IsolatedAsyncioTestCase):

@@ -183,7 +183,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(channel.sent, [pricing_text()])
         self.assertIn("openai/gpt-5.6-luna", channel.sent[0])
-        self.assertIn("anthropic/claude-haiku-4.5", channel.sent[0])
+        self.assertIn("anthropic/claude-haiku-4-5", channel.sent[0])
 
     async def test_trusted_guild_music_bypasses_command_cooldown(self) -> None:
         channel = FakeChannel()
@@ -395,6 +395,18 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
             [call.kwargs["relaxed_guardrails"] for call in mocked_ask.await_args_list],
             [True, False, True],
         )
+
+    async def test_blocked_user_is_forced_to_groq_blocked_persona(self) -> None:
+        message = make_message("hello", 100, FakeChannel(), mentions=[self.bot.user])
+        with patch("bot.BLOCKED_USERS", {33}), patch(
+            "bot.ask", AsyncMock(return_value="nope")
+        ) as provider:
+            await self.bot.on_message(message)
+
+        self.assertEqual(message.channel.sent, ["nope"])
+        self.assertEqual(provider.await_args.kwargs["persona"], "blocked")
+        self.assertEqual(provider.await_args.kwargs["provider_override"], "groq")
+        self.assertFalse(provider.await_args.kwargs["full_mode"])
 
     async def test_unlimited_channel_does_not_require_allowlisted_users(self) -> None:
         allowed_user = next(iter(FULL_MODE_ALLOWED_USER_IDS))
@@ -634,12 +646,12 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.store.get_setting("persona:user:33", "rudeish"), "flirty")
         self.assertEqual(channel.sent, ["persona: flirty"])
 
-    async def test_flirty_persona_reports_a_missing_mistral_key(self) -> None:
+    async def test_flirty_persona_reports_a_missing_gemini_key(self) -> None:
         channel = FakeChannel(nsfw=True)
         with patch("ask.PERPLEXITY_API_KEY", ""):
             await self.bot.on_message(make_message("!persona flirty", 1, channel))
 
-        self.assertEqual(channel.sent, ["mistral is not configured"])
+        self.assertEqual(channel.sent, ["perplexity is not configured"])
         self.assertEqual(self.store.get_setting("persona:user:33", "rudeish"), "rudeish")
 
     async def test_persona_command_still_matches_when_the_bot_is_pinged(self) -> None:
@@ -840,6 +852,61 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
             channel.sent[-1], "server memory fully erased for every user and channel"
         )
         self.assertEqual(self.store.recent_messages("22", "33", limit=10), [])
+
+    async def test_reset_all_requires_manage_server_and_resets_server_state(self) -> None:
+        channel = FakeChannel()
+        self.store.append_message(
+            event_id="discord:reset-old",
+            scope_id="22",
+            user_id="33",
+            server_id="11",
+            role="user",
+            content="secret",
+        )
+        self.store.set_setting("response_language:guild:11", "Hungarian")
+        self.bot.response_languages["guild:11"] = "Hungarian"
+        self.bot.music_tracks[11] = {"title": "song"}
+
+        await self.bot.on_message(
+            make_message("!reset all", 1, channel, manage_guild=False)
+        )
+        self.assertEqual(
+            channel.sent,
+            ["you need the Manage Server permission to reset this server"],
+        )
+        self.assertEqual(
+            [item["content"] for item in self.store.recent_messages("22", "33", limit=10)],
+            ["secret"],
+        )
+
+        self.bot.command_used.clear()
+        with patch("bot.stop_music", AsyncMock()) as stop:
+            await self.bot.on_message(make_message("!reset all", 2, channel))
+
+        self.assertEqual(
+            channel.sent[-1], "everything for this bot has been reset in this server"
+        )
+        self.assertEqual(self.store.recent_messages("22", "33", limit=10), [])
+        self.assertEqual(self.store.get_setting("response_language:guild:11", ""), "")
+        self.assertEqual(self.bot.response_languages, {})
+        self.assertNotIn(11, self.bot.music_tracks)
+        stop.assert_awaited_once()
+
+    async def test_reset_all_does_not_erase_another_server(self) -> None:
+        channel = FakeChannel()
+        self.store.append_message(
+            event_id="discord:reset-other",
+            scope_id="99",
+            user_id="33",
+            server_id="99",
+            role="user",
+            content="keep me",
+        )
+        await self.bot.on_message(make_message("!reset all", 1, channel))
+        self.assertEqual(
+            [item["content"] for item in self.store.recent_messages("99", "33", limit=10)],
+            ["keep me"],
+        )
 
     async def test_music_command_is_server_only(self) -> None:
         channel = FakeChannel()

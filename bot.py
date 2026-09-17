@@ -22,8 +22,10 @@ from ask import (
     FULL_MODE_PROVIDERS,
     FULL_MODE_MODELS,
     HOST_DEFAULT_MODELS,
+    LOCAL_AI_ONLY,
     MAX_ATTACHMENTS,
     MODEL,
+    GEMINI_MODEL,
     GROQ_MODEL,
     DEEPSEEK_MODEL,
     MISTRAL_MODEL,
@@ -49,11 +51,12 @@ from music import (
     configure_music_audit_log,
     handle_music_command,
     log_music_command,
+    stop_music,
     unrestricted_music_guild,
 )
 
 ROOT = Path(__file__).resolve().parent
-load_dotenv(ROOT / ".env")
+load_dotenv(os.getenv("OWAUA_ENV_FILE") or ROOT / ".env")
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("owaua")
@@ -75,6 +78,7 @@ COMMANDS = frozenset(
         "!language",
         "!music",
         "!memory",
+        "!reset",
         "!pricing",
         "!security",
         "!shutdown",
@@ -123,6 +127,7 @@ HELP_TEXT = """**Owaua commands**
 `!music help` — play a song in your voice channel
 `!memory erase` — erase server memory (Manage Server required)
 `!memory erase mine` — erase your own conversation history
+`!reset all` — fully reset this bot in this server (Manage Server required)
 
 Each command has a 25s cooldown."""
 
@@ -134,6 +139,7 @@ OWNER_HELP_TEXT = """**Owaua commands**
 `!music help` — play a song in your voice channel
 `!memory erase` — erase server memory (Manage Server required)
 `!memory erase mine` — erase your own conversation history
+`!reset all` — fully reset this bot in this server (Manage Server required)
 `!security status|pause|resume` — API usage and emergency pause (bot owner only)
 `!shutdown` — fully stop the bot (bot owner only)
 `!pricing` — show model pricing (bot owner only)
@@ -147,8 +153,8 @@ MODEL_PRICING = {
     "openai/gpt-5.6-luna": (0.20, 1.20, "0.02 cached input"),
     "openai/gpt-5.6-luna": (0.20, 1.20, "0.02 cached input"),
     "gpt-5.6-luna": (0.20, 1.20, "0.02 cached input"),
-    "anthropic/claude-haiku-4.5": (1.00, 5.00, "provider pricing"),
-    "google/gemini-3.5-flash-lite": (0.10, 0.40, "provider pricing"),
+    "anthropic/claude-haiku-4-5": (1.00, 5.00, "provider pricing"),
+    "google/gemini-3.5-flash": (0.10, 0.40, "provider pricing"),
     "deepseek-v4.1-flash": (0.30, 1.20, "provider pricing"),
     "zai/glm-5.3-flash": (0.50, 2.00, "provider pricing"),
     "openai/gpt-oss-20b": (0.075, 0.30, "0.0375 cached input"),
@@ -171,7 +177,8 @@ def pricing_text() -> str:
     lines = [
         "**Owaua model pricing**",
         "USD per 1M tokens (provider list prices; tools/search may cost extra).",
-        _pricing_line("normal / host gpt", MODEL),
+        _pricing_line("normal personas / Gemini", GEMINI_MODEL),
+        _pricing_line("host gpt", MODEL),
         _pricing_line("host deepseek", DEEPSEEK_MODEL),
         _pricing_line("host mistral alias", MISTRAL_MODEL),
         _pricing_line("chaotic / Groq", GROQ_MODEL),
@@ -223,6 +230,8 @@ def is_full_mode_command(content: str) -> bool:
 
 def full_mode_location(message: object) -> bool:
     """True only in the one guild/channel where full mode is allowed."""
+    if LOCAL_AI_ONLY:
+        return True
     guild = getattr(message, "guild", None)
     channel = getattr(message, "channel", None)
     return (
@@ -232,14 +241,18 @@ def full_mode_location(message: object) -> bool:
 
 
 def full_mode_blocked(user_id: object) -> bool:
-    return user_id in FULL_MODE_BLOCKED_USER_IDS
+    return user_id in FULL_MODE_BLOCKED_USER_IDS or user_id in BLOCKED_USERS
 
 
 def full_mode_can_enable(user_id: object) -> bool:
+    if LOCAL_AI_ONLY:
+        return not full_mode_blocked(user_id)
     return user_id in FULL_MODE_ENABLE_USER_IDS or full_mode_allowed(user_id)
 
 
 def full_mode_allowed(user_id: object) -> bool:
+    if LOCAL_AI_ONLY:
+        return not full_mode_blocked(user_id)
     return user_id in FULL_MODE_ALLOWED_USER_IDS and not full_mode_blocked(user_id)
 
 
@@ -610,6 +623,8 @@ class PersonaBot(discord.Client):
         if selected == "explicit":
             selected = "flirty"
         if message is not None:
+            if full_mode_blocked(getattr(getattr(message, "author", None), "id", None)):
+                return "blocked"
             selected = self.memory.get_setting(persona_setting_key(message), "rudeish")
             # Migrate the old persona name in existing persisted settings.
             if selected == "explicit":
@@ -638,8 +653,9 @@ class PersonaBot(discord.Client):
         return True
 
     def full_mode_provider_for(self, user_id: object) -> str:
-        value = self.memory.get_setting(full_mode_provider_setting_key(user_id), "gpt")
-        return value if value in FULL_MODE_PROVIDERS else "gpt"
+        default_provider = "ollama" if LOCAL_AI_ONLY else "gpt"
+        value = self.memory.get_setting(full_mode_provider_setting_key(user_id), default_provider)
+        return value if value in FULL_MODE_PROVIDERS else default_provider
 
     def set_full_mode_for(self, user_id: int, enabled: bool) -> None:
         if enabled:
@@ -744,6 +760,7 @@ class PersonaBot(discord.Client):
             if message.author.id in OWNER_IDS and self.message_events.claim(message.id):
                 await self._shutdown()
             return
+        blocked_user = full_mode_blocked(message.author.id)
         unlimited = self.full_mode_active(message)
         music_command = matched_command(normalized) == "!music"
         unrestricted_music = music_command and unrestricted_music_guild(message.guild)
@@ -756,9 +773,6 @@ class PersonaBot(discord.Client):
                 )
 
         personal_erasure = command_text(message.content, None if self.user is None else self.user.id).casefold() == "!memory erase mine"
-        if message.author.id in BLOCKED_USERS and not personal_erasure and not unlimited:
-            audit_filtered("blocked_user")
-            return
         if message.guild is None and not ALLOW_DMS and message.author.id not in OWNER_IDS and not personal_erasure and not unlimited:
             audit_filtered("direct_messages_disabled")
             return
@@ -831,6 +845,7 @@ class PersonaBot(discord.Client):
             and is_full_mode_command(text)
         ):
             command = "!full"
+        blocked_user = full_mode_blocked(message.author.id)
         unlimited = self.full_mode_active(message)
         unrestricted_music = (
             command == "!music" and unrestricted_music_guild(message.guild)
@@ -886,6 +901,9 @@ class PersonaBot(discord.Client):
             return
         if name == "!memory":
             await self._reply(message, await self._memory_command(message, argument))
+            return
+        if name == "!reset":
+            await self._reply(message, await self._reset_command(message, argument))
             return
 
         is_dm = message.guild is None
@@ -967,8 +985,9 @@ class PersonaBot(discord.Client):
                         full_mode_provider=(
                             self.full_mode_provider_for(message.author.id)
                             if full_mode
-                            else "gpt"
+                            else ("ollama" if LOCAL_AI_ONLY else "gpt")
                         ),
+                        provider_override="groq" if blocked_user else None,
                         use_history=use_history,
                         relaxed_guardrails=relaxed_guardrails,
                     )
@@ -979,7 +998,7 @@ class PersonaBot(discord.Client):
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.warning("AI reply failed in channel %s", message.channel.id)
+            log.exception("AI reply failed in channel %s", message.channel.id)
             await self._reply(message, "I couldn't reach the AI provider just now.")
         finally:
             if occupies_slot:
@@ -1190,6 +1209,37 @@ class PersonaBot(discord.Client):
         )
         return "server memory fully erased for every user and channel"
 
+    async def _reset_command(self, message: discord.Message, argument: str) -> str:
+        """Reset persistent and live bot state belonging to this server."""
+        if message.guild is None:
+            return "!reset all only works in a server"
+        if argument.casefold() != "all":
+            return "usage: !reset all"
+        if not self.can_manage_settings(message):
+            return "you need the Manage Server permission to reset this server"
+
+        server_id = str(message.guild.id)
+        removed = await asyncio.to_thread(
+            self.memory.reset_server_data, server_id
+        )
+        self.response_languages.pop(f"guild:{server_id}", None)
+        try:
+            await asyncio.wait_for(
+                self._clear_guild_language_profile(message.guild),
+                timeout=PROFILE_UPDATE_TIMEOUT,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Profile reset failed; guild=%s", server_id)
+
+        # Reset the live music session too; stop_music is idempotent when the
+        # server is not currently playing anything.
+        await stop_music(self, message.guild)
+        self.music_tracks.pop(message.guild.id, None)
+        log.info("Reset bot state; server=%s records=%s", server_id, removed)
+        return "everything for this bot has been reset in this server"
+
     async def _reply(
         self, message: discord.Message, content: str, *, unlimited: bool = False
     ) -> None:
@@ -1316,7 +1366,7 @@ async def main() -> None:
         raise RuntimeError(
             "DISCORD_TOKEN is missing; copy .env.example to .env and fill it in"
         )
-    if not PERPLEXITY_API_KEY:
+    if not LOCAL_AI_ONLY and not PERPLEXITY_API_KEY:
         raise RuntimeError(
             "PERPLEXITY_API_KEY is missing; copy .env.example to .env and fill it in"
         )

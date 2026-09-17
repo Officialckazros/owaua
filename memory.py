@@ -108,6 +108,10 @@ class MemoryStore:
                 db.execute(
                     "ALTER TABLE messages ADD COLUMN unbounded INTEGER NOT NULL DEFAULT 0"
                 )
+            if "server_id" not in columns:
+                db.execute(
+                    "ALTER TABLE messages ADD COLUMN server_id TEXT NOT NULL DEFAULT ''"
+                )
         os.chmod(self.path, 0o600)
         with self._lock, self._managed_connection() as db:
             self._prune(db)
@@ -323,6 +327,20 @@ class MemoryStore:
             self._bump_generation(db, f"memory_server_epoch:{server_id}")
             cursor = db.execute(
                 "DELETE FROM messages WHERE server_id = ?", (server_id,)
+            )
+            return cursor.rowcount
+
+    def reset_server_data(self, server_id: str) -> int:
+        """Erase all persistent bot data that is scoped to one server."""
+        with self._lock, self._managed_connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._bump_generation(db, f"memory_server_epoch:{server_id}")
+            cursor = db.execute(
+                "DELETE FROM messages WHERE server_id = ?", (server_id,)
+            )
+            db.execute(
+                "DELETE FROM app_settings WHERE key = ?",
+                (f"response_language:guild:{server_id}",),
             )
             return cursor.rowcount
 
