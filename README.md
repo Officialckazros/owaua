@@ -38,4 +38,4 @@ Limits and other knobs are in `.env.example`.
 
 MIT.
 
-Thanks to [Perplexity](https://www.perplexity.ai) for the Agent API.
+Thanks `https://github.com/Perplexity` for the Agent API
