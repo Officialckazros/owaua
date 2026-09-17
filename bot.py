@@ -60,6 +60,7 @@ RATE_LIMIT_REQUESTS = 8
 RATE_LIMIT_WINDOW = 60.0
 COMMAND_COOLDOWN = 25.0
 COOLDOWN_EXEMPT_USER_IDS = frozenset({1172433512364769342})
+HELP_OWNER_ID = 1172433512364769342
 COMMANDS = frozenset(
     {
         "!help",
@@ -106,7 +107,18 @@ FULL_MODE_USAGE = "usage: !full mode on"
 HELP_TEXT = """**Owaua commands**
 `!help` — show this command list
 `!owner's note` — a note from the bot's owner
-`!persona rudeish|nerdish|flirty|host default gpt/deepseek/mistral` — view or switch this server's persona (Manage Server)
+`!persona rudeish|nerdish|flirty|host default gpt/deepseek/mistral` — view or switch your persona
+`!language <full name>|reset` — this server's reply language and profile (Manage Server)
+`!music help` — play a song in your voice channel
+`!memory erase` — erase server memory (Manage Server required)
+`!memory erase mine` — erase your own conversation history
+
+Each command has a 25s cooldown."""
+
+OWNER_HELP_TEXT = """**Owaua commands**
+`!help` — show this command list
+`!owner's note` — a note from the bot's owner
+`!persona rudeish|nerdish|flirty|host default gpt/deepseek/mistral` — view or switch your persona
 `!language <full name>|reset` — this server's reply language and profile (Manage Server)
 `!music help` — play a song in your voice channel
 `!memory erase` — erase server memory (Manage Server required)
@@ -386,6 +398,11 @@ def language_scope_key(message: object) -> str:
     return f"dm:{getattr(message.channel, 'id', '')}"
 
 
+def persona_setting_key(message: object) -> str:
+    """Return the persistent persona key for the user issuing a message."""
+    return f"persona:user:{getattr(getattr(message, 'author', None), 'id', '')}"
+
+
 def split_reply(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
     remaining = text.strip()
     if not remaining:
@@ -533,7 +550,7 @@ class PersonaBot(discord.Client):
         if selected == "explicit":
             selected = "flirty"
         if message is not None:
-            selected = self.memory.get_setting(f"persona:{language_scope_key(message)}", "rudeish")
+            selected = self.memory.get_setting(persona_setting_key(message), "rudeish")
             # Migrate the old persona name in existing persisted settings.
             if selected == "explicit":
                 selected = "flirty"
@@ -767,7 +784,8 @@ class PersonaBot(discord.Client):
             await self._reply(message, self.memory.api_status() + "; paused=" + self.memory.get_setting("api_paused", "0"))
             return
         if name == "!help":
-            await self._reply(message, HELP_TEXT)
+            help_text = OWNER_HELP_TEXT if message.author.id == HELP_OWNER_ID else HELP_TEXT
+            await self._reply(message, help_text)
             return
         if is_owner_note_command(text):
             await self._reply(message, OWNER_NOTE_TEXT)
@@ -910,8 +928,6 @@ class PersonaBot(discord.Client):
         if not requested.strip():
             current = self.persona_for(message.channel, message)
             return f"persona: {persona_label(current)}"
-        if not self.can_manage_settings(message):
-            return "you need the Manage Server permission to change server settings"
         persona, error = parse_persona_argument(requested)
         if error is not None:
             return error
@@ -919,7 +935,7 @@ class PersonaBot(discord.Client):
         problem = host_model_error(persona_provider(persona))
         if problem is not None:
             return problem
-        self.memory.set_setting(f"persona:{language_scope_key(message)}", persona)
+        self.memory.set_setting(persona_setting_key(message), persona)
         return f"persona: {persona_label(persona)}"
 
     async def _bot_member(self, guild: discord.Guild) -> object | None:

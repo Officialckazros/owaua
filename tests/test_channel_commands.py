@@ -19,6 +19,7 @@ from bot import (
     FULL_MODE_GUILD_ID,
     FULL_MODE_USAGE,
     HELP_TEXT,
+    OWNER_HELP_TEXT,
     OWNER_NOTE_TEXT,
     OWNER_IDS,
     PING_RESPONSE,
@@ -142,6 +143,26 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("!nuke", channel.sent[0])
         self.assertNotIn("!gifs", channel.sent[0])
         self.assertNotIn("!full", channel.sent[0])
+
+    async def test_help_hides_owner_only_commands_from_non_owner(self) -> None:
+        channel = FakeChannel()
+
+        await self.bot.on_message(make_message("!help", 1, channel, author_id=33))
+
+        self.assertEqual(channel.sent, [HELP_TEXT])
+        self.assertNotIn("!security", channel.sent[0])
+        self.assertNotIn("!shutdown", channel.sent[0])
+
+    async def test_help_shows_owner_only_commands_to_configured_help_owner(self) -> None:
+        channel = FakeChannel()
+
+        await self.bot.on_message(
+            make_message("!help", 1, channel, author_id=1172433512364769342)
+        )
+
+        self.assertEqual(channel.sent, [OWNER_HELP_TEXT])
+        self.assertIn("!security status|pause|resume", channel.sent[0])
+        self.assertIn("!shutdown", channel.sent[0])
 
     async def test_trusted_guild_music_bypasses_command_cooldown(self) -> None:
         channel = FakeChannel()
@@ -563,7 +584,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
 
         await self.bot.on_message(make_message("!persona flirty", 1, channel))
 
-        self.assertEqual(self.store.get_setting("persona:guild:11", "rudeish"), "flirty")
+        self.assertEqual(self.store.get_setting("persona:user:33", "rudeish"), "flirty")
         self.assertEqual(channel.sent, ["persona: flirty"])
 
     async def test_flirty_persona_reports_a_missing_mistral_key(self) -> None:
@@ -572,7 +593,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
             await self.bot.on_message(make_message("!persona flirty", 1, channel))
 
         self.assertEqual(channel.sent, ["mistral is not configured"])
-        self.assertEqual(self.store.get_setting("persona:guild:11", "rudeish"), "rudeish")
+        self.assertEqual(self.store.get_setting("persona:user:33", "rudeish"), "rudeish")
 
     async def test_persona_command_still_matches_when_the_bot_is_pinged(self) -> None:
         channel = FakeChannel()
@@ -580,7 +601,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         await self.bot.on_message(make_message("<@99> !persona nerdish", 1, channel))
 
         self.assertEqual(channel.sent, ["persona: nerdish"])
-        self.assertEqual(self.store.get_setting("persona:guild:11", "rudeish"), "nerdish")
+        self.assertEqual(self.store.get_setting("persona:user:33", "rudeish"), "nerdish")
 
     async def test_host_default_persona_defaults_to_deepseek(self) -> None:
         channel = FakeChannel()
@@ -588,10 +609,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
             await self.bot.on_message(make_message("!persona host default", 1, channel))
 
         self.assertEqual(channel.sent, ["persona: host default (gpt)"])
-        self.assertEqual(self.store.get_setting("persona:guild:11", "rudeish"), "host-default-gpt")
-        self.assertEqual(
-            self.store.get_setting("persona:guild:11"), "host-default-gpt"
-        )
+        self.assertEqual(self.store.get_setting("persona:user:33", "rudeish"), "host-default-gpt")
 
     async def test_host_default_persona_selects_deepseek_and_mistral(self) -> None:
         channel = FakeChannel()
@@ -614,7 +632,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
                 "persona: host default (mistral)",
             ],
         )
-        self.assertEqual(self.store.get_setting("persona:guild:11", "rudeish"), "host-default-mistral")
+        self.assertEqual(self.store.get_setting("persona:user:33", "rudeish"), "host-default-mistral")
 
     async def test_host_default_rejects_an_unknown_model(self) -> None:
         channel = FakeChannel()
@@ -624,7 +642,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIn("!persona host default gpt", channel.sent[0])
-        self.assertEqual(self.store.get_setting("persona:guild:11", "rudeish"), "rudeish")
+        self.assertEqual(self.store.get_setting("persona:user:33", "rudeish"), "rudeish")
 
     async def test_host_default_reports_a_missing_provider_key(self) -> None:
         channel = FakeChannel()
@@ -634,7 +652,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(channel.sent, ["deepseek is not configured"])
-        self.assertEqual(self.store.get_setting("persona:guild:11", "rudeish"), "rudeish")
+        self.assertEqual(self.store.get_setting("persona:user:33", "rudeish"), "rudeish")
 
     async def test_active_command_is_gone(self) -> None:
         channel = FakeChannel()
@@ -1151,7 +1169,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         await self.bot.on_message(make_message("!help", 1, channel, author_id=exempt))
         await self.bot.on_message(make_message("!help", 2, channel, author_id=exempt))
 
-        self.assertEqual(channel.sent[0], HELP_TEXT)
+        self.assertEqual(channel.sent[0], OWNER_HELP_TEXT)
         self.assertIn("slow down", channel.sent[1])
 
 

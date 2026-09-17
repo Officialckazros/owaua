@@ -148,7 +148,7 @@ class BotSecurityTests(unittest.IsolatedAsyncioTestCase):
     setUp = fixtures.ChannelCommandTests.setUp
     tearDown = fixtures.ChannelCommandTests.tearDown
     async def test_ordinary_member_cannot_change_shared_settings(self):
-        for i, command in enumerate(("!persona host default gpt", "!language hungarian", "!language reset")):
+        for i, command in enumerate(("!language hungarian", "!language reset")):
             self.bot.command_used.clear()
             message = make_message(command, 100+i, FakeChannel(), manage_guild=False)
             await self.bot.on_message(message)
@@ -156,7 +156,26 @@ class BotSecurityTests(unittest.IsolatedAsyncioTestCase):
             message.guild.me.edit.assert_not_called()
         self.assertEqual(self.store.get_setting("persona:guild:11"), "")
 
-    async def test_persona_does_not_cross_guilds_or_dms(self):
+    async def test_persona_is_per_user(self):
+        channel = FakeChannel()
+        with patch("bot.host_model_error", return_value=None):
+            await self.bot.on_message(
+                make_message(
+                    "!persona nerdish",
+                    100,
+                    channel,
+                    author_id=100,
+                    manage_guild=False,
+                )
+            )
+            self.bot.command_used.clear()
+            await self.bot.on_message(make_message("!persona", 101, channel, author_id=101))
+
+        self.assertEqual(channel.sent, ["persona: nerdish", "persona: rudeish"])
+        self.assertEqual(self.bot.persona_for(channel, make_message("hi", 102, channel, author_id=100)), "nerdish")
+        self.assertEqual(self.bot.persona_for(channel, make_message("hi", 103, channel, author_id=101)), "rudeish")
+
+    async def test_persona_isolated_between_users(self):
         first = make_message("!persona nerdish", 100, FakeChannel(), guild_id=11)
         await self.bot.on_message(first)
         other = make_message("!persona", 101, FakeChannel(44), guild_id=12, author_id=44)

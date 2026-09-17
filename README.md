@@ -10,9 +10,9 @@ If you actually put this in a server, I would like to know. DM me on Discord (`g
 
 ## Commands
 
-`!help` prints these too. Each command has a 25 second cooldown.
+`!help` prints the public commands below. The bot owner (Discord ID `1172433512364769342`) also sees the owner-only commands. Each command has a 25 second cooldown.
 
-- `!persona rudeish|nerdish|flirty|host default gpt/deepseek/mistral` — server changes need Manage Server. `flirty` is available in all channels. `host default` uses that model's own voice (`!persona host default` picks Luna).
+- `!persona rudeish|nerdish|flirty|host default gpt/deepseek/mistral` — changes your personal persona. The default is `rudeish`; `flirty` is available in all channels. `host default` uses that model's own voice (`!persona host default` picks Luna).
 - `!language <full name>|reset` — requires Manage Server; one reply language for the server (`hungarian`, not `hu`). If matching pictures are in `pfps/` and `banners/`, only that server’s profile picture and banner change. `reset` restores English and the original picture and banner.
 - `!music <YouTube video or Twitter/X post URL>` — plus pause / resume / restart / skip / leave. Song-name searches, attachments, playlists, Mix links, live radios, videos over 15 minutes, and other URLs are rejected. The bot leaves if the requester drops out or the voice channel is empty.
 - `!memory erase` — needs Manage Server
@@ -57,7 +57,7 @@ Quotas are reserved before sending and persist in `data/memory.sqlite3`. There a
 
 Hangout modes are text-only, with no hosted tools or image analysis, and an 80-token output cap. Once an allowlisted user enables `!full mode` in the trusted channel, the bot removes its own input, attachment, rate, cooldown, admission, quota, pause, output, deadline, and memory-retention limits for that user. Full mode uses the native OpenAI Responses API with web search and a hosted code interpreter. Image generation is not available. The Discord API and OpenAI account/model policies and limits still apply. Users who are not on that allowlist still hit the API ceilings. `BOT_ALLOWED_GUILD_IDS` can restrict invited servers; `BOT_BLOCKED_USER_IDS` denies selected users. Set `BOT_ALLOW_DMS=1` only if public DM chat is wanted.
 
-Memory keeps at most 20 records per conversation and 10,000 records overall. Expired records are removed on startup, reads, writes and hourly maintenance (seven days plus up to one maintenance interval while idle). Erasure prevents outstanding replies from restoring erased history. Usage counters remain. Existing global persona settings are discarded on startup because ordinary users could previously overwrite them; server administrators should select their server's persona again.
+Memory keeps at most 20 records per conversation and 10,000 records overall. Expired records are removed on startup, reads, writes and hourly maintenance (seven days plus up to one maintenance interval while idle). Erasure prevents outstanding replies from restoring erased history. Usage counters remain. Persona choices are stored per user; users without a saved choice get the default `rudeish` persona.
 
 Hangout AI can optionally go through Cloudflare AI Gateway (free plan: logs, 12 requests/minute, cache off). Full mode and music stay on the host so a Cloudflare outage cannot break them. If the gateway is missing or unreachable, the same provider is used directly; that is not a second paid reservation or a different API. `scripts/setup-cloudflare.py` creates the gateway and an append-only audit Worker when `CLOUDFLARE_API_TOKEN` is set. It does not enable Unified Billing or any paid Cloudflare product.
 

@@ -11,7 +11,7 @@ The initial independent source audit recorded eight findings. Existing uncommitt
 | Original weakness | Implemented control | Regression evidence |
 | --- | --- | --- |
 | Unlimited aggregate API spending | Atomic SQLite reservation before ordinary-chat provider POSTs; rolling global/user/server and lifetime attempt ceilings; durable commits; no refunds for errors; allowlisted full mode is exempt | Concurrent store instances, restart, erasure, clock rollback, duplicates, every budget dimension, storage failure |
-| Global persona/provider tampering | Guild/DM-scoped settings; Manage Server required for guild changes; untrusted legacy global selection ignored | Cross-guild/DM isolation and unauthorized member rejection |
+| Persona/provider tampering | User-scoped settings; untrusted legacy global selection ignored | Per-user isolation and provider validation |
 | Unbounded waiting requests | Ordinary-chat per-user and global AI admission; bounded ordinary-chat handlers and caches; no conversation wait queue; allowlisted full mode bypasses admission ceilings | Busy user across channels, global admission and cancellation cleanup |
 | Unauthorized language/profile changes | Manage Server check on both set and reset paths | Permission denial and existing legitimate profile/language tests |
 | Arbitrary music fetches | Ordinary guilds: canonical YouTube-video or Twitter/X-status lookup; approved-only extractors; HTTPS Googlevideo or exact Twitter video CDN streams; no download redirects; 20 MiB cap. Trusted guild `1535083112709496903` intentionally bypasses these controls. | Private/malformed/attacker hosts, redirect response, oversized stream, unsupported inputs; dedicated trusted-guild bypass tests |
