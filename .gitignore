@@ -5,3 +5,4 @@ __pycache__/
 .bot.pid
 data/
 .DS_Store
+.gitignore

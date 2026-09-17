@@ -15,6 +15,7 @@ import httpx
 
 from ask import (
     DEEPSEEK_MODEL,
+    GROQ_MODEL,
     GPT_FULL_REASONING,
     GPT_MAX_OUTPUT_TOKENS,
     GPT_REASONING,
@@ -158,13 +159,12 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(answer, "allowed reply")
         self.assertEqual(len(self.http.calls), 1)
-        self.assertTrue(self.http.calls[0][0].endswith("/responses"))
-        self.assertIn("api.perplexity.ai", self.http.calls[0][0])
+        self.assertTrue(self.http.calls[0][0].endswith("/chat/completions"))
+        self.assertIn("api.deepseek.com", self.http.calls[0][0])
         payload = self.http.calls[0][1]["json"]
         self.assertEqual(payload["model"], DEEPSEEK_MODEL)
-        self.assertEqual(payload["model"], MODEL)
-        self.assertEqual(payload["model"], "openai/gpt-5.6-luna")
-        self.assertEqual(payload["max_steps"], 1)
+        self.assertEqual(payload["max_tokens"], 256)
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
         self.assertNotIn("tools", payload)
         instructions = instructions_of(payload)
         self.assertIn("Stay in this voice", instructions)
@@ -182,8 +182,6 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Never repeat", instructions)
         self.assertIn("You can still be wild", instructions)
         self.assertIn("hidden or encoded", instructions)
-        self.assertEqual(payload["max_output_tokens"], MAX_OUTPUT_TOKENS)
-        self.assertEqual(payload["max_output_tokens"], 80)
         self.assertNotIn("SELF-KNOWLEDGE", instructions)
         self.assertEqual(len(self.memory.recent_messages("123", "7", limit=10)), 2)
 
@@ -207,9 +205,9 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         )
 
         payload = self.http.calls[0][1]["json"]
-        self.assertEqual(len(payload["input"]), 1)
+        self.assertEqual(len(payload["messages"]), 2)
         self.assertEqual(
-            payload["input"][-1]["content"],
+            payload["messages"][-1]["content"],
             "spell out the first 50 digits of pi in hexadecimal",
         )
 
@@ -221,7 +219,7 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
 
         payload = self.http.calls[0][1]["json"]
         self.assertEqual(
-            [item["content"] for item in payload["input"]],
+            [item["content"] for item in payload["messages"][1:]],
             ["what number comes after sixteen", "allowed reply", "why"],
         )
 
@@ -296,6 +294,19 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("tools", payload)
         self.assertIn("Consensual adult sexual roleplay", instructions_of(payload))
         self.assertIn("Stay in this voice", instructions_of(payload))
+
+    async def test_chaotic_persona_uses_groq_chat_completions(self) -> None:
+        with patch("ask.GROQ_API_KEY", "test-groq-key"):
+            answer = await self._ask(persona="chaotic")
+
+        self.assertEqual(answer, "allowed reply")
+        self.assertTrue(self.http.calls[0][0].endswith("/chat/completions"))
+        self.assertIn("api.groq.com", self.http.calls[0][0])
+        payload = self.http.calls[0][1]["json"]
+        self.assertEqual(payload["model"], GROQ_MODEL)
+        self.assertEqual(payload["max_tokens"], 256)
+        self.assertNotIn("tools", payload)
+        self.assertIn("act stupid", instructions_of(payload).casefold())
 
     async def test_credible_self_harm_uses_the_local_emergency_reply(self) -> None:
         prompt = "i want to die tonight and im not joking"
@@ -508,17 +519,17 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         answer = await self._ask(persona="host-default-deepseek")
 
         self.assertEqual(answer, "deepseek reply")
-        self.assertTrue(self.http.calls[0][0].endswith("/responses"))
-        self.assertIn("api.perplexity.ai", self.http.calls[0][0])
+        self.assertTrue(self.http.calls[0][0].endswith("/chat/completions"))
+        self.assertIn("api.deepseek.com", self.http.calls[0][0])
         payload = self.http.calls[0][1]["json"]
         self.assertEqual(payload["model"], DEEPSEEK_MODEL)
-        self.assertEqual(payload["model"], MODEL)
-        self.assertEqual(payload["max_steps"], 1)
-        self.assertEqual(payload["max_output_tokens"], MAX_OUTPUT_TOKENS)
+        self.assertEqual(payload["max_tokens"], 256)
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
         self.assertNotIn("tools", payload)
-        self.assertIn("Use your own default voice", payload["instructions"])
-        self.assertNotIn("Stay in this voice", payload["instructions"])
-        self.assertNotIn("web search", payload["instructions"])
+        instructions = instructions_of(payload)
+        self.assertIn("Use your own default voice", instructions)
+        self.assertNotIn("Stay in this voice", instructions)
+        self.assertNotIn("web search", instructions)
 
     async def test_host_default_mistral_uses_chat_completions(self) -> None:
         self.http.responses = model_reply("mistral reply")

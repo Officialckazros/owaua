@@ -54,6 +54,7 @@ required_runtime = {
     Path("personas/rudeish.txt"),
     Path("personas/nerdish.txt"),
     Path("personas/flirty.txt"),
+    Path("personas/chaotic.txt"),
     Path("requirements.txt"),
     Path("scripts/run-bots.sh"),
     Path("scripts/check-runtime.py"),

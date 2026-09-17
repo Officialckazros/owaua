@@ -4,7 +4,7 @@ Discord bot I made for hanging out in servers.
 
 Ping it and it talks back. It keeps a little conversation history. DMs are off by default.
 
-Normal chat uses Perplexity (GPT-5.6 Luna). There's a full mode that talks to OpenAI instead. Personas are just text files in `personas/` — edit one and the next reply uses it.
+Normal chat uses native DeepSeek for the default personas. The `chaotic` persona uses Groq's OpenAI-compatible API with `openai/gpt-oss-20b`; the other personas use the configured providers. Full mode can use GPT, Claude, Gemini, DeepSeek, or GLM. Personas are just text files in `personas/` — edit one and the next reply uses it.
 
 If you actually put this in a server, I'd like to know. DM me on Discord (`gays._`) or email `ckazros@owaua.com`.
 
@@ -12,7 +12,8 @@ If you actually put this in a server, I'd like to know. DM me on Discord (`gays.
 
 `!help` prints these. 25 second cooldown.
 
-- `!persona rudeish|nerdish|flirty|host default gpt/deepseek/mistral` — your persona, not the server's. Default is `rudeish`.
+- `!persona rudeish|nerdish|flirty|chaotic|host default gpt/deepseek/mistral` — your persona, not the server's. Default is `rudeish`.
+- `!full mode gpt|claude|gemini|deepseek|glm` — enable full mode with that model. `!full mode on` selects GPT; `!full mode off` disables it. The designated full-mode channel bypasses bot request limits for every user; other channels still require the normal per-user toggle and mention.
 - `!language hungarian` (or another full language name, not a code) — server-wide replies; needs Manage Server. `reset` goes back to English. Matching pictures in `pfps/` and `banners/` change too.
 - `!music <youtube or twitter url>` — plus pause / resume / restart / skip / leave. No name searches, playlists, or long videos.
 - `!memory erase` — wipe server memory (Manage Server)
@@ -20,11 +21,15 @@ If you actually put this in a server, I'd like to know. DM me on Discord (`gays.
 
 Owner-only: `!security status|pause|resume` and `!shutdown`.
 
+The bot owner can also use `!pricing` to show the configured models' current
+provider list prices per 1M tokens. It is intentionally hidden from normal
+`!help` output.
+
 Music needs Linux and a current FFmpeg. Chat works without that.
 
 ## Run
 
-Python 3.11+, Message Content Intent, then `DISCORD_TOKEN`, `PERPLEXITY_API_KEY`, and `OPENAI_API_KEY` in `.env`.
+Python 3.11+, Message Content Intent, then `DISCORD_TOKEN`, `PERPLEXITY_API_KEY`, `OPENAI_API_KEY`, and (for the `chaotic` persona) `GROQ_API_KEY` in `.env`.
 
 ```sh
 pip install -r requirements.txt

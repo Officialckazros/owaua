@@ -19,7 +19,7 @@ if [[ ! -f "$OWAUA_DEPLOY_SCRIPT" ]]; then
   echo "Cannot find the Daki deployment client: $OWAUA_DEPLOY_SCRIPT" >&2
   exit 1
 fi
-PERSONA_MODELS="${*:-rudeish nerdish flirty}"
+PERSONA_MODELS="${*:-rudeish nerdish flirty chaotic}"
 
 ROOT_DIR="$ROOT_DIR" OWAUA_DEPLOY_SCRIPT="$OWAUA_DEPLOY_SCRIPT" PERSONA_MODELS="$PERSONA_MODELS" python3 - <<'PY'
 import hashlib
@@ -34,6 +34,7 @@ model_files = {
     "rudeish": "personas/rudeish.txt",
     "nerdish": "personas/nerdish.txt",
     "flirty": "personas/flirty.txt",
+    "chaotic": "personas/chaotic.txt",
 }
 requested = os.environ["PERSONA_MODELS"].replace(",", " ").replace("/", " ").split()
 models = []
@@ -47,7 +48,7 @@ for model in requested:
     if model not in models:
         models.append(model)
 if not models:
-    models = ["rudeish", "nerdish", "flirty"]
+    models = ["rudeish", "nerdish", "flirty", "chaotic"]
 
 files = {model: root / model_files[model] for model in models}
 missing = [str(path) for path in files.values() if not path.is_file()]

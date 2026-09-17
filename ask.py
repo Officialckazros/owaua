@@ -29,14 +29,27 @@ PERPLEXITY_BASE_URL = os.getenv(
 ).rstrip("/")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
+DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1").rstrip("/")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1").rstrip("/")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b").strip()
 MODEL = "openai/gpt-5.6-luna"
-OPENAI_FULL_MODEL = os.getenv("OPENAI_FULL_MODEL", "gpt-5.6-terra").strip()
+OPENAI_FULL_MODEL = os.getenv("OPENAI_FULL_MODEL", "gpt-5.6-luna").strip()
 # Compatibility name for integrations that imported the former full-mode
 # model constant.
 GPT_TERRA_MODEL = OPENAI_FULL_MODEL
+FULL_MODE_PROVIDERS = ("gpt", "claude", "gemini", "deepseek", "glm")
+FULL_MODE_MODELS = {
+    "gpt": OPENAI_FULL_MODEL,
+    "claude": os.getenv("CLAUDE_FULL_MODEL", "anthropic/claude-haiku-4.5").strip(),
+    "gemini": os.getenv("GEMINI_FULL_MODEL", "google/gemini-3.5-flash-lite").strip(),
+    "deepseek": os.getenv("DEEPSEEK_FULL_MODEL", "deepseek-v4.1-flash").strip(),
+    "glm": os.getenv("GLM_FULL_MODEL", "zai/glm-5.3-flash").strip(),
+}
 # Hangout uses Luna. Perplexity's DeepSeek/GLM Agent API IDs time out past
 # Discord's 40s hangout budget, so aliases stay for commands but share Luna.
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "").strip() or MODEL
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4.1-flash").strip()
 MISTRAL_MODEL = os.getenv("MISTRAL_MODEL", "").strip() or MODEL
 HOST_DEFAULT_MODELS = ("gpt", "deepseek", "mistral")
 DEFAULT_HOST_MODEL = "gpt"
@@ -219,6 +232,7 @@ PERSONAS = {
     "rudeish": ROOT / "personas" / "rudeish.txt",
     "nerdish": ROOT / "personas" / "nerdish.txt",
     "flirty": ROOT / "personas" / "flirty.txt",
+    "chaotic": ROOT / "personas" / "chaotic.txt",
 }
 _FALLBACK_PERSONA = "You are Owaua, a warm and conversational Discord companion."
 _persona_cache: dict[Path, tuple[str, str]] = {}
@@ -254,6 +268,8 @@ def persona_provider(persona: str) -> str:
         return host
     if persona == "flirty":
         return "mistral"
+    if persona == "chaotic":
+        return "groq"
     return "deepseek"
 
 
@@ -267,6 +283,16 @@ def host_model_error(alias: str) -> str | None:
     return "perplexity is not configured"
 
 
+def full_mode_provider_error(provider: str) -> str | None:
+    if provider == "gpt":
+        return None if OPENAI_API_KEY else "gpt is not configured"
+    if provider == "deepseek":
+        return None if DEEPSEEK_API_KEY else "deepseek is not configured"
+    if provider == "groq":
+        return None if GROQ_API_KEY else "groq is not configured"
+    return None if PERPLEXITY_API_KEY else "perplexity is not configured"
+
+
 def gpt_full_tools(*, include_image_generation: bool = True) -> list[dict[str, object]]:
     """OpenAI Responses tools available to a privileged full-mode user.
 
@@ -278,6 +304,19 @@ def gpt_full_tools(*, include_image_generation: bool = True) -> list[dict[str, o
         {"type": "web_search"},
         {"type": "code_interpreter", "container": {"type": "auto"}},
     ]
+
+
+def full_mode_tools(provider: str) -> list[dict[str, object]]:
+    """Return tools in the native schema supported by each full-mode API."""
+    if provider == "gpt":
+        return gpt_full_tools()
+    if provider in {"claude", "gemini", "glm"}:
+        # Perplexity Agent API provides web search for third-party models;
+        # OpenAI's hosted code interpreter is not a Perplexity tool.
+        return [{"type": "web_search"}]
+    # DeepSeek's official API accepts function tools only. This bot has no
+    # callable external function to expose, so send no invalid hosted tools.
+    return []
 
 
 def read_persona(name: str) -> str:
@@ -783,6 +822,7 @@ def chat_completions_payload(
     api_input: list[dict[str, object]],
     max_output_tokens: int,
     provider: str,
+    tools: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     messages: list[dict[str, object]] = [
         {"role": "system", "content": instructions}
@@ -798,6 +838,10 @@ def chat_completions_payload(
         payload["reasoning_effort"] = "none"
     elif provider == "deepseek":
         payload["thinking"] = {"type": "disabled"}
+    elif provider == "groq":
+        payload["reasoning_effort"] = "low"
+    if tools:
+        payload["tools"] = tools
     return payload
 
 
@@ -1093,9 +1137,70 @@ async def request_ai(
     timeout: httpx.Timeout | None = None,
     reply_limit: int | None = MAX_REPLY_CHARS,
     full_mode: bool = False,
+    full_provider: str = "gpt",
     user_id: str = "",
     server_id: str = "",
 ) -> str:
+    if not full_mode and full_provider == "groq":
+        return await _post_answer(
+            http,
+            f"{GROQ_BASE_URL}/chat/completions",
+            _auth_headers(GROQ_API_KEY),
+            chat_completions_payload(
+                model=str(payload["model"]),
+                instructions=str(payload["instructions"]),
+                api_input=payload["input"],  # type: ignore[arg-type]
+                max_output_tokens=256,
+                provider="groq",
+            ),
+            extract=chat_completion_text,
+            authorize=authorize,
+            timeout=timeout,
+            reply_limit=reply_limit,
+        )
+    if full_provider == "deepseek":
+        return await _post_answer(
+            http,
+            f"{DEEPSEEK_BASE_URL}/chat/completions",
+            _auth_headers(DEEPSEEK_API_KEY),
+            chat_completions_payload(
+                model=str(payload["model"]),
+                instructions=str(payload["instructions"]),
+                api_input=payload["input"],  # type: ignore[arg-type]
+                max_output_tokens=65536 if full_mode else 256,
+                provider="deepseek",
+                tools=payload.get("tools"),  # type: ignore[arg-type]
+            ),
+            extract=chat_completion_text,
+            authorize=authorize,
+            timeout=timeout,
+            reply_limit=reply_limit,
+        )
+    if full_mode and full_provider != "gpt":
+        # Agent API requests must stay on Perplexity's direct endpoint in full
+        # mode. The AI Gateway only supports the hangout compatibility path;
+        # routing Claude/Gemini/GLM through it causes an edge rejection before
+        # the selected model can run.
+        url, fallback_url = provider_urls(
+            "perplexity", PERPLEXITY_BASE_URL, full_mode=True
+        )
+        headers = _auth_headers(PERPLEXITY_API_KEY)
+        gateway_headers = {
+            **headers,
+            **request_headers(provider="perplexity", user_id=user_id, server_id=server_id),
+        }
+        return await _post_answer(
+            http,
+            url,
+            gateway_headers if fallback_url else headers,
+            payload,
+            extract=response_reply,
+            authorize=authorize,
+            timeout=timeout,
+            reply_limit=reply_limit,
+            fallback_url=fallback_url,
+            fallback_headers=headers,
+        )
     if full_mode:
         return await _post_answer(
             http,
@@ -1142,6 +1247,7 @@ async def ask(
     created_at: float,
     language: str = "English",
     full_mode: bool = False,
+    full_mode_provider: str = "gpt",
     use_history: bool = False,
     relaxed_guardrails: bool = False,
 ) -> str | None:
@@ -1211,7 +1317,7 @@ async def ask(
         limit=history_limit,
     )
     host = host_default_model(persona)
-    provider = "gpt" if full_mode else persona_provider(persona)
+    provider = full_mode_provider if full_mode else persona_provider(persona)
     if capability_first:
         instructions = build_capable_instructions(
             None if host else read_persona(persona),
@@ -1248,10 +1354,14 @@ async def ask(
     async def generate(current_provider: str, *, full: bool = False) -> str:
         reply_limit = None if full else MAX_REPLY_CHARS
         request_timeout = GPT_FULL_REQUEST_TIMEOUT if full else GPT_REQUEST_TIMEOUT
-        if current_provider == "deepseek":
+        if full and current_provider in FULL_MODE_MODELS:
+            model = FULL_MODE_MODELS[current_provider]
+        elif current_provider == "deepseek":
             model = DEEPSEEK_MODEL
         elif current_provider == "mistral":
             model = MISTRAL_MODEL
+        elif current_provider == "groq":
+            model = GROQ_MODEL
         else:
             model = OPENAI_FULL_MODEL if full else MODEL
         max_output_tokens = None if full else (
@@ -1265,7 +1375,12 @@ async def ask(
             "reasoning": dict(GPT_FULL_REASONING if full else GPT_REASONING),
         }
         if full:
-            payload["tools"] = gpt_full_tools()
+            payload["tools"] = full_mode_tools(current_provider)
+            if current_provider != "gpt":
+                # Perplexity requires this for Anthropic models and accepts
+                # it for its other Agent API models. DeepSeek gets it in its
+                # Chat Completions adapter above.
+                payload["max_output_tokens"] = 65536
         else:
             payload["max_steps"] = 1
         if max_output_tokens is not None:
@@ -1277,6 +1392,7 @@ async def ask(
             timeout=request_timeout,
             reply_limit=reply_limit,
             full_mode=full,
+            full_provider=current_provider,
             user_id=user_id,
             server_id=server_id,
         )

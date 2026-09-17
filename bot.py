@@ -19,12 +19,19 @@ from dotenv import load_dotenv
 from PIL import Image
 
 from ask import (
+    FULL_MODE_PROVIDERS,
+    FULL_MODE_MODELS,
     HOST_DEFAULT_MODELS,
     MAX_ATTACHMENTS,
+    MODEL,
+    GROQ_MODEL,
+    DEEPSEEK_MODEL,
+    MISTRAL_MODEL,
     PERSONAS,
     ask,
     host_default_persona,
     host_model_error,
+    full_mode_provider_error,
     looks_like_decode_request,
     looks_like_repeat_request,
     persona_label,
@@ -68,6 +75,7 @@ COMMANDS = frozenset(
         "!language",
         "!music",
         "!memory",
+        "!pricing",
         "!security",
         "!shutdown",
     }
@@ -102,12 +110,15 @@ FULL_MODE_ALLOWED_USER_IDS = frozenset(
         1391094791210536970,
     }
 )
-FULL_MODE_USAGE = "usage: !full mode on"
+FULL_MODE_USAGE = (
+    "usage: !full mode on|off, or !full mode "
+    + "|".join(FULL_MODE_PROVIDERS)
+)
 
 HELP_TEXT = """**Owaua commands**
 `!help` — show this command list
 `!owner's note` — a note from the bot's owner
-`!persona rudeish|nerdish|flirty|host default gpt/deepseek/mistral` — view or switch your persona
+`!persona rudeish|nerdish|flirty|chaotic|host default gpt/deepseek/mistral` — view or switch your persona
 `!language <full name>|reset` — this server's reply language and profile (Manage Server)
 `!music help` — play a song in your voice channel
 `!memory erase` — erase server memory (Manage Server required)
@@ -118,15 +129,60 @@ Each command has a 25s cooldown."""
 OWNER_HELP_TEXT = """**Owaua commands**
 `!help` — show this command list
 `!owner's note` — a note from the bot's owner
-`!persona rudeish|nerdish|flirty|host default gpt/deepseek/mistral` — view or switch your persona
+`!persona rudeish|nerdish|flirty|chaotic|host default gpt/deepseek/mistral` — view or switch your persona
 `!language <full name>|reset` — this server's reply language and profile (Manage Server)
 `!music help` — play a song in your voice channel
 `!memory erase` — erase server memory (Manage Server required)
 `!memory erase mine` — erase your own conversation history
 `!security status|pause|resume` — API usage and emergency pause (bot owner only)
 `!shutdown` — fully stop the bot (bot owner only)
+`!pricing` — show model pricing (bot owner only)
 
 Each command has a 25s cooldown."""
+
+# USD per 1M tokens. These are provider list prices, not a charge made by the
+# bot. Keep this table keyed by the model IDs the bot actually uses so an env
+# override can be shown as unknown rather than being given a misleading rate.
+MODEL_PRICING = {
+    "openai/gpt-5.6-luna": (0.20, 1.20, "0.02 cached input"),
+    "openai/gpt-5.6-luna": (0.20, 1.20, "0.02 cached input"),
+    "gpt-5.6-luna": (0.20, 1.20, "0.02 cached input"),
+    "anthropic/claude-haiku-4.5": (1.00, 5.00, "provider pricing"),
+    "google/gemini-3.5-flash-lite": (0.10, 0.40, "provider pricing"),
+    "deepseek-v4.1-flash": (0.30, 1.20, "provider pricing"),
+    "zai/glm-5.3-flash": (0.50, 2.00, "provider pricing"),
+    "openai/gpt-oss-20b": (0.075, 0.30, "0.0375 cached input"),
+}
+
+
+def _pricing_line(label: str, model: str) -> str:
+    rates = MODEL_PRICING.get(model)
+    if rates is None:
+        return f"`{label}` `{model}` — input/output: unknown (check provider)"
+    input_rate, output_rate, cache = rates
+    return (
+        f"`{label}` `{model}` — input ${input_rate:g}, output ${output_rate:g}; "
+        f"{cache}"
+    )
+
+
+def pricing_text() -> str:
+    """Build the owner-only model price card from the active configuration."""
+    lines = [
+        "**Owaua model pricing**",
+        "USD per 1M tokens (provider list prices; tools/search may cost extra).",
+        _pricing_line("normal / host gpt", MODEL),
+        _pricing_line("host deepseek", DEEPSEEK_MODEL),
+        _pricing_line("host mistral alias", MISTRAL_MODEL),
+        _pricing_line("chaotic / Groq", GROQ_MODEL),
+    ]
+    lines.extend(
+        _pricing_line(f"full {provider}", model)
+        for provider, model in FULL_MODE_MODELS.items()
+    )
+    lines.append("DeepSeek direct: peak rates are shown; off-peak is 50%.")
+    lines.append("Prices can change—verify with each provider before billing decisions.")
+    return "\n".join(lines)
 
 OWNER_NOTE_TEXT = (
     "Hello, I hope you like my bot! I'm trying to keep it as simple as possible "
@@ -191,8 +247,12 @@ def full_mode_setting_key(user_id: object) -> str:
     return f"full_mode:{user_id}"
 
 
+def full_mode_provider_setting_key(user_id: object) -> str:
+    return f"full_mode_provider:{user_id}"
+
+
 PERSONA_USAGE = (
-    "usage: !persona rudeish, !persona nerdish, !persona flirty, "
+    "usage: !persona rudeish, !persona nerdish, !persona flirty, !persona chaotic, "
     "or !persona host default gpt/deepseek/mistral"
 )
 HOST_DEFAULT_USAGE = (
@@ -577,6 +637,10 @@ class PersonaBot(discord.Client):
         self.full_mode_users.add(parsed)
         return True
 
+    def full_mode_provider_for(self, user_id: object) -> str:
+        value = self.memory.get_setting(full_mode_provider_setting_key(user_id), "gpt")
+        return value if value in FULL_MODE_PROVIDERS else "gpt"
+
     def set_full_mode_for(self, user_id: int, enabled: bool) -> None:
         if enabled:
             self.full_mode_users.add(user_id)
@@ -586,6 +650,16 @@ class PersonaBot(discord.Client):
         self.memory.set_setting(full_mode_setting_key(user_id), "0")
 
     def full_mode_active(self, message: object) -> bool:
+        channel = getattr(message, "channel", None)
+        if (
+            getattr(channel, "id", None) == FULL_MODE_CHANNEL_ID
+            and getattr(getattr(message, "guild", None), "id", None)
+            == FULL_MODE_GUILD_ID
+        ):
+            # This channel is operator-designated as unlimited. Keep the
+            # user-level settings for the !full command and provider
+            # selection, but do not let them reintroduce request limits here.
+            return True
         if not full_mode_location(message):
             return False
         author = getattr(message, "author", None)
@@ -694,7 +768,7 @@ class PersonaBot(discord.Client):
         if not unlimited and not unrestricted_music and len(message.content) > MAX_INPUT_CHARS:
             audit_filtered("message_too_long")
             return
-        if (not unlimited and message.guild is not None and matched_command(normalized) is None
+        if (message.guild is not None and matched_command(normalized) is None
                 and not (full_mode_location(message) and is_full_mode_command(normalized))
                 and not (self.user is not None and self.user in message.mentions)):
             return
@@ -787,6 +861,10 @@ class PersonaBot(discord.Client):
             help_text = OWNER_HELP_TEXT if message.author.id == HELP_OWNER_ID else HELP_TEXT
             await self._reply(message, help_text)
             return
+        if name == "!pricing":
+            if message.author.id == HELP_OWNER_ID:
+                await self._reply(message, pricing_text())
+            return
         if is_owner_note_command(text):
             await self._reply(message, OWNER_NOTE_TEXT)
             return
@@ -812,7 +890,7 @@ class PersonaBot(discord.Client):
 
         is_dm = message.guild is None
         mentioned = self.user is not None and self.user in message.mentions
-        if not (is_dm or mentioned or unlimited):
+        if not (is_dm or mentioned):
             return
 
         prompt = message.content
@@ -886,6 +964,11 @@ class PersonaBot(discord.Client):
                         language=self.response_language(message),
                         created_at=message.created_at.timestamp(),
                         full_mode=full_mode,
+                        full_mode_provider=(
+                            self.full_mode_provider_for(message.author.id)
+                            if full_mode
+                            else "gpt"
+                        ),
                         use_history=use_history,
                         relaxed_guardrails=relaxed_guardrails,
                     )
@@ -918,10 +1001,22 @@ class PersonaBot(discord.Client):
             if problem is not None:
                 return problem
             self.set_full_mode_for(user_id, True)
+            self.memory.set_setting(full_mode_provider_setting_key(user_id), "gpt")
             return "full mode on"
         if text == "mode off":
             self.set_full_mode_for(user_id, False)
             return "full mode off"
+        if text.startswith("mode "):
+            provider = text[5:].strip()
+            if provider in FULL_MODE_PROVIDERS:
+                problem = full_mode_provider_error(provider)
+                if problem is not None:
+                    return problem
+                self.memory.set_setting(
+                    full_mode_provider_setting_key(user_id), provider
+                )
+                self.set_full_mode_for(user_id, True)
+                return f"full mode on ({provider})"
         return FULL_MODE_USAGE
 
     def _persona_command(self, message: discord.Message, requested: str) -> str:
@@ -932,7 +1027,12 @@ class PersonaBot(discord.Client):
         if error is not None:
             return error
         assert persona is not None
-        problem = host_model_error(persona_provider(persona))
+        provider = persona_provider(persona)
+        problem = (
+            full_mode_provider_error(provider)
+            if provider == "groq"
+            else host_model_error(provider)
+        )
         if problem is not None:
             return problem
         self.memory.set_setting(persona_setting_key(message), persona)

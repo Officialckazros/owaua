@@ -146,14 +146,14 @@ class CloudflareAskTests(unittest.IsolatedAsyncioTestCase):
         defaults.update(kwargs)
         return await ask(self.http, self.memory, **defaults)  # type: ignore[arg-type]
 
-    async def test_hangout_uses_the_gateway_when_configured(self) -> None:
+    async def test_hangout_deepseek_stays_on_native_api(self) -> None:
         with patch.dict(os.environ, GATEWAY_ENV, clear=False):
             answer = await self._ask()
         self.assertEqual(answer, "allowed reply")
         self.assertEqual(len(self.http.calls), 1)
         url, recorded = self.http.calls[0]
-        self.assertIn("api.perplexity.ai", url)
-        self.assertTrue(url.endswith("/responses"))
+        self.assertIn("api.deepseek.com", url)
+        self.assertTrue(url.endswith("/chat/completions"))
         self.assertNotIn("gateway.ai.cloudflare.com", url)
         self.assertNotIn("cf-aig-skip-cache", recorded["headers"])
 
@@ -166,12 +166,21 @@ class CloudflareAskTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("gateway.ai.cloudflare.com", url)
         self.assertNotIn("cf-aig-skip-cache", recorded["headers"])
 
-    async def test_missing_gateway_falls_back_to_the_same_provider(self) -> None:
+    async def test_full_mode_third_party_models_stay_on_perplexity_directly(self) -> None:
+        with patch.dict(os.environ, GATEWAY_ENV, clear=False):
+            await self._ask(full_mode=True, full_mode_provider="claude")
+        url, recorded = self.http.calls[0]
+        self.assertIn("api.perplexity.ai", url)
+        self.assertTrue(url.endswith("/v1/responses"))
+        self.assertNotIn("gateway.ai.cloudflare.com", url)
+        self.assertNotIn("cf-aig-skip-cache", recorded["headers"])
+
+    async def test_hangout_deepseek_ignores_gateway_configuration(self) -> None:
         with patch.dict(os.environ, GATEWAY_ENV, clear=False):
             answer = await self._ask()
         self.assertEqual(answer, "allowed reply")
         self.assertEqual(len(self.http.calls), 1)
-        self.assertIn("api.perplexity.ai", self.http.calls[0][0])
+        self.assertIn("api.deepseek.com", self.http.calls[0][0])
         self.assertNotIn("cf-aig-skip-cache", self.http.calls[0][1]["headers"])
 
     async def test_provider_errors_through_the_gateway_are_not_retried(self) -> None:
@@ -197,7 +206,7 @@ class CloudflareAskTests(unittest.IsolatedAsyncioTestCase):
             clear=False,
         ):
             await self._ask()
-        self.assertIn("api.perplexity.ai", self.http.calls[0][0])
+        self.assertIn("api.deepseek.com", self.http.calls[0][0])
 
 
 class CloudflareLogTests(unittest.IsolatedAsyncioTestCase):
