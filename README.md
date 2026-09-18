@@ -4,7 +4,9 @@ Discord bot I made for hanging out in servers.
 
 Ping it and it talks back. It keeps a little conversation history. DMs are off by default.
 
-Normal chat uses Gemini 3.5 Flash for every persona. Blocked users remain restricted to Groq's `openai/gpt-oss-20b`; explicit host-model commands are unchanged. Full mode can use GPT, Claude, Gemini, DeepSeek, or GLM. Personas are just text files in `personas/` — edit one and the next reply uses it.
+Normal chat uses Gemini 3.5 Flash Lite for every persona. Blocked users remain restricted to Groq's `openai/gpt-oss-20b`; explicit host-model commands are unchanged. Full mode can use GPT, Claude, Gemini, DeepSeek, or GLM. Personas are just text files in `personas/` — edit one and the next reply uses it.
+
+On this Mac, local mode uses DeepGrove Maple through its OpenAI-compatible MLX server at `http://127.0.0.1:8080/v1`. `scripts/run-bots.sh` starts that server automatically when `OWAUA_LOCAL_ONLY=1`.
 
 If you actually put this in a server, I'd like to know. DM me on Discord (`gays._`) or email `ckazros@owaua.com`.
 
@@ -13,7 +15,7 @@ If you actually put this in a server, I'd like to know. DM me on Discord (`gays.
 `!help` prints these. 25 second cooldown.
 
 - `!persona rudeish|nerdish|flirty|chaotic|host default gpt/deepseek/mistral` — your persona, not the server's. Default is `rudeish`.
-- `!full mode gpt|claude|gemini|deepseek|glm` — enable full mode with that model. `!full mode on` selects GPT; `!full mode off` disables it. The designated full-mode channel bypasses bot request limits for every user; other channels still require the normal per-user toggle and mention.
+- `!full mode gpt|claude|gemini|deepseek|glm` — enable full mode with that model. `!full mode on` selects GPT; `!full mode off` disables it. Full mode is opt-in for approved users in the designated channels. Allowlisted users get higher finite per-minute and per-user daily API ceilings, while the shared guild, global daily, lifetime, rate, concurrency, timeout, input, history, and output limits still apply.
 - `!reset all` — fully reset this bot in the current server (Manage Server required), including server memory, language/profile, and music state.
 - `!language hungarian` (or another full language name, not a code) — server-wide replies; needs Manage Server. `reset` goes back to English. Matching pictures in `pfps/` and `banners/` change too.
 - `!music <youtube or twitter url>` — plus pause / resume / restart / skip / leave. No name searches, playlists, or long videos.
@@ -57,6 +59,20 @@ Project structure and Daki deployment details are in
 `OWAUA_DAKI_DRY_RUN=1 ./scripts/deploy-daki.sh` to preview the remote upload.
 
 Contributing and security notes are kept in the [docs](docs/) folder.
+
+## Releases
+
+The current release version is recorded in [VERSION](VERSION). To build the
+same source archives used by GitHub Releases, run:
+
+```sh
+./scripts/package-release.sh
+```
+
+This creates a `.tar.gz`, `.zip`, and SHA-256 checksum file in `dist/`.
+Pushing a tag such as `v0.1.0` runs the release workflow and publishes those
+archives automatically. The package contains source code and assets only; it
+never includes `.env`, `data/`, virtual environments, or local model files.
 
 Limits and other knobs are in `.env.example`.
 

@@ -46,6 +46,17 @@ class ApiLimits:
 
 API_LIMITS = ApiLimits()
 
+# Full mode is still bounded by the shared guild, daily, and lifetime ceilings,
+# but people on the explicit full-mode allowlist get a little more room in the
+# two per-user dimensions. This is intentionally finite and configurable.
+FULL_MODE_API_LIMITS = ApiLimits(
+    per_minute=limit("FULL_MODE_REQUESTS_PER_MINUTE", 24, 240),
+    per_user_day=limit("FULL_MODE_REQUESTS_PER_USER_DAY", 100, 5000),
+    per_guild_day=API_LIMITS.per_guild_day,
+    per_day=API_LIMITS.per_day,
+    lifetime=API_LIMITS.lifetime,
+)
+
 
 class BudgetExceeded(RuntimeError):
     """No provider request may be made after this exception."""

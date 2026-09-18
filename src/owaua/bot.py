@@ -20,6 +20,7 @@ from PIL import Image
 
 from ask import (
     FULL_MODE_PROVIDERS,
+    GEMINI_ONLY,
     FULL_MODE_MODELS,
     HOST_DEFAULT_MODELS,
     LOCAL_AI_ONLY,
@@ -154,7 +155,6 @@ MODEL_PRICING = {
     "openai/gpt-5.6-luna": (0.20, 1.20, "0.02 cached input"),
     "gpt-5.6-luna": (0.20, 1.20, "0.02 cached input"),
     "anthropic/claude-haiku-4-5": (1.00, 5.00, "provider pricing"),
-    "google/gemini-3.5-flash": (0.10, 0.40, "provider pricing"),
     "deepseek-v4.1-flash": (0.30, 1.20, "provider pricing"),
     "zai/glm-5.3-flash": (0.50, 2.00, "provider pricing"),
     "openai/gpt-oss-20b": (0.075, 0.30, "0.0375 cached input"),
@@ -229,7 +229,7 @@ def is_full_mode_command(content: str) -> bool:
 
 
 def full_mode_location(message: object) -> bool:
-    """True only in the one guild/channel where full mode is allowed."""
+    """True only in the one guild's explicitly designated channels."""
     if LOCAL_AI_ONLY:
         return True
     guild = getattr(message, "guild", None)
@@ -653,6 +653,8 @@ class PersonaBot(discord.Client):
         return True
 
     def full_mode_provider_for(self, user_id: object) -> str:
+        if GEMINI_ONLY:
+            return "gemini"
         default_provider = "ollama" if LOCAL_AI_ONLY else "gpt"
         value = self.memory.get_setting(full_mode_provider_setting_key(user_id), default_provider)
         return value if value in FULL_MODE_PROVIDERS else default_provider
@@ -666,16 +668,10 @@ class PersonaBot(discord.Client):
         self.memory.set_setting(full_mode_setting_key(user_id), "0")
 
     def full_mode_active(self, message: object) -> bool:
-        channel = getattr(message, "channel", None)
-        if (
-            getattr(channel, "id", None) == FULL_MODE_CHANNEL_ID
-            and getattr(getattr(message, "guild", None), "id", None)
-            == FULL_MODE_GUILD_ID
-        ):
-            # This channel is operator-designated as unlimited. Keep the
-            # user-level settings for the !full command and provider
-            # selection, but do not let them reintroduce request limits here.
-            return True
+        # Full mode is an opt-in capability for approved users. It is not a
+        # guild-level trust bypass: every request still goes through bounded
+        # admission, concurrency, timeout, input, output, and API-budget
+        # limits. Allowlisted users get a higher finite API budget.
         if not full_mode_location(message):
             return False
         author = getattr(message, "author", None)
@@ -761,7 +757,6 @@ class PersonaBot(discord.Client):
                 await self._shutdown()
             return
         blocked_user = full_mode_blocked(message.author.id)
-        unlimited = self.full_mode_active(message)
         music_command = matched_command(normalized) == "!music"
         unrestricted_music = music_command and unrestricted_music_guild(message.guild)
         music_argument = normalized.split(maxsplit=1)[1].strip() if len(normalized.split(maxsplit=1)) == 2 else ""
@@ -773,13 +768,13 @@ class PersonaBot(discord.Client):
                 )
 
         personal_erasure = command_text(message.content, None if self.user is None else self.user.id).casefold() == "!memory erase mine"
-        if message.guild is None and not ALLOW_DMS and message.author.id not in OWNER_IDS and not personal_erasure and not unlimited:
+        if message.guild is None and not ALLOW_DMS and message.author.id not in OWNER_IDS and not personal_erasure:
             audit_filtered("direct_messages_disabled")
             return
-        if message.guild is not None and ALLOWED_GUILDS and message.guild.id not in ALLOWED_GUILDS and not unlimited and not unrestricted_music:
+        if message.guild is not None and ALLOWED_GUILDS and message.guild.id not in ALLOWED_GUILDS and not unrestricted_music:
             audit_filtered("guild_not_allowlisted")
             return
-        if not unlimited and not unrestricted_music and len(message.content) > MAX_INPUT_CHARS:
+        if not unrestricted_music and len(message.content) > MAX_INPUT_CHARS:
             audit_filtered("message_too_long")
             return
         if (message.guild is not None and matched_command(normalized) is None
@@ -794,7 +789,7 @@ class PersonaBot(discord.Client):
             return
         # Bound complete event handlers, including outbound Discord API waits.
         count = getattr(self, "handler_count", 0)
-        if not unlimited and not unrestricted_music and count >= MAX_HANDLERS:
+        if not unrestricted_music and count >= MAX_HANDLERS:
             audit_filtered("handler_capacity")
             return
         self.handler_count = count + 1
@@ -805,7 +800,7 @@ class PersonaBot(discord.Client):
         if current_task is not None:
             active_handlers.add(current_task)
         try:
-            if unlimited or unrestricted_music:
+            if unrestricted_music:
                 await self._handle_message(message)
             else:
                 await asyncio.wait_for(self._handle_message(message), timeout=HANDLER_TIMEOUT)
@@ -846,12 +841,12 @@ class PersonaBot(discord.Client):
         ):
             command = "!full"
         blocked_user = full_mode_blocked(message.author.id)
-        unlimited = self.full_mode_active(message)
+        full_mode = self.full_mode_active(message)
         unrestricted_music = (
             command == "!music" and unrestricted_music_guild(message.guild)
         )
         if command is not None:
-            if not unlimited and not unrestricted_music:
+            if not unrestricted_music:
                 admitted, retry_after = self.admit_command(message.author.id, command)
                 if not admitted:
                     await self._reply(message, f"slow down try again in {retry_after}s")
@@ -918,9 +913,8 @@ class PersonaBot(discord.Client):
                 .replace(f"<@!{self.user.id}>", "")
                 .strip()
             )
-        prompt = (prompt if unlimited else sanitize_user_text(prompt)).strip()
-        full_mode = unlimited
-        attachment_limit = None if full_mode else MAX_ATTACHMENTS
+        prompt = sanitize_user_text(prompt).strip()
+        attachment_limit = MAX_ATTACHMENTS
         image_urls = [
             url
             for attachment in message.attachments[:attachment_limit]
@@ -929,14 +923,16 @@ class PersonaBot(discord.Client):
         relaxed_guardrails = full_mode
         decode_now = not relaxed_guardrails and looks_like_decode_request(prompt)
         repeat_now = not relaxed_guardrails and looks_like_repeat_request(prompt)
-        use_history = full_mode
+        # Full mode changes the provider/capabilities for approved users, but
+        # it does not receive an unbounded conversation window.
+        use_history = False
         if decode_now or repeat_now:
             image_urls = []
         elif prompt or image_urls:
             quoted = referenced_message_context(
                 message,
                 None if self.user is None else self.user.id,
-                unbounded=full_mode,
+                unbounded=False,
             )
             if quoted:
                 prompt = f"{quoted}\n{prompt}".strip()
@@ -948,17 +944,16 @@ class PersonaBot(discord.Client):
                 await self._reply(message, PING_RESPONSE)
             return
 
-        if not full_mode:
-            admitted, retry_after = self.admit_request(message.author.id)
-            if not admitted:
-                await self._reply(message, f"slow down try again in {retry_after}s")
-                return
+        admitted, retry_after = self.admit_request(message.author.id)
+        if not admitted:
+            await self._reply(message, f"slow down try again in {retry_after}s")
+            return
         scope_id = str(message.channel.id)
         user_id = str(message.author.id)
         inflight = getattr(self, "inflight_users", None)
         if inflight is None:
             self.inflight_users = inflight = set()
-        occupies_slot = not full_mode
+        occupies_slot = True
         if occupies_slot:
             if message.author.id in inflight or len(inflight) >= MAX_INFLIGHT:
                 return
@@ -987,14 +982,18 @@ class PersonaBot(discord.Client):
                             if full_mode
                             else ("ollama" if LOCAL_AI_ONLY else "gpt")
                         ),
-                        provider_override="groq" if blocked_user else None,
+                        provider_override=(
+                            None if GEMINI_ONLY else ("groq" if blocked_user else None)
+                        ),
                         use_history=use_history,
                         relaxed_guardrails=relaxed_guardrails,
                     )
-                answer = await request if full_mode else await asyncio.wait_for(request, timeout=ASK_TIMEOUT)
+                answer = await asyncio.wait_for(request, timeout=ASK_TIMEOUT)
             if not answer:
                 return
-            await self._reply(message, answer, unlimited=full_mode)
+            # Full mode is a capability/provider selection, not an output
+            # limit bypass. Keep Discord replies under the normal cap too.
+            await self._reply(message, answer)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1016,11 +1015,12 @@ class PersonaBot(discord.Client):
                 else "full mode off"
             )
         if text == "mode on":
-            problem = host_model_error("gpt")
+            provider = "gemini" if GEMINI_ONLY else "gpt"
+            problem = full_mode_provider_error(provider)
             if problem is not None:
                 return problem
             self.set_full_mode_for(user_id, True)
-            self.memory.set_setting(full_mode_provider_setting_key(user_id), "gpt")
+            self.memory.set_setting(full_mode_provider_setting_key(user_id), provider)
             return "full mode on"
         if text == "mode off":
             self.set_full_mode_for(user_id, False)
@@ -1055,6 +1055,10 @@ class PersonaBot(discord.Client):
         if problem is not None:
             return problem
         self.memory.set_setting(persona_setting_key(message), persona)
+        # Conversation history contains assistant style as well as facts.
+        # Drop it whenever a persona is selected, including re-selecting the
+        # current persona, so the previous character cannot bleed through.
+        self.memory.erase_user_memory(str(message.author.id))
         return f"persona: {persona_label(persona)}"
 
     async def _bot_member(self, guild: discord.Guild) -> object | None:
@@ -1241,11 +1245,11 @@ class PersonaBot(discord.Client):
         return "everything for this bot has been reset in this server"
 
     async def _reply(
-        self, message: discord.Message, content: str, *, unlimited: bool = False
+        self, message: discord.Message, content: str
     ) -> None:
         if self.shutdown_requested:
             return
-        text = content if unlimited else content[:MAX_REPLY_CHARS]
+        text = content[:MAX_REPLY_CHARS]
         chunks = split_reply(text)
         for index, chunk in enumerate(chunks):
             if self.shutdown_requested:

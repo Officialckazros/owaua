@@ -93,8 +93,10 @@ disabled_keys = {
 
 forced_values = {
     "OWAUA_LOCAL_ONLY": "1",
-    "OLLAMA_BASE_URL": "http://127.0.0.1:11434/v1",
-    "OLLAMA_MODEL": "gpt-oss:20b",
+    "OWAUA_LOCAL_BASE_URL": "http://127.0.0.1:8080/v1",
+    "OWAUA_LOCAL_MODEL": "default_model",
+    "OWAUA_LOCAL_AI_ROOT": "/Users/ckazro/mlx-lm-deepgrove",
+    "OWAUA_LOCAL_AI_MODEL_PATH": "/Users/ckazro/mlx-lm-deepgrove/maple-2bit-mlx",
 }
 
 lines = []
@@ -173,53 +175,15 @@ echo "  -> Installing / verifying dependencies..."
 uv pip install -r requirements.txt --python .venv/bin/python
 
 # -----------------------------------------------------------------------------
-# 4. Install Ollama and pull gpt-oss 20B
+# 4. Check the installed DeepGrove Maple runtime
 # -----------------------------------------------------------------------------
 echo ""
-echo "[4/5] Checking Ollama and GPT OSS 20B on Mac..."
-if ! command -v ollama &>/dev/null; then
-  if [[ -x "/Applications/Ollama.app/Contents/Resources/ollama" ]]; then
-    ln -sf "/Applications/Ollama.app/Contents/Resources/ollama" "$HOME/.local/bin/ollama"
-  elif [[ -x "/opt/homebrew/bin/ollama" ]]; then
-    ln -sf "/opt/homebrew/bin/ollama" "$HOME/.local/bin/ollama"
-  elif [[ -x "/usr/local/bin/ollama" ]]; then
-    ln -sf "/usr/local/bin/ollama" "$HOME/.local/bin/ollama"
-  else
-    echo "  -> Installing Ollama CLI..."
-    mkdir -p /tmp/ollama-install
-    curl -fsSL https://github.com/ollama/ollama/releases/latest/download/Ollama-darwin.zip -o /tmp/ollama-install/Ollama-darwin.zip
-    unzip -q -o /tmp/ollama-install/Ollama-darwin.zip -d /Applications/
-    rm -rf /tmp/ollama-install
-    ln -sf "/Applications/Ollama.app/Contents/Resources/ollama" "$HOME/.local/bin/ollama"
-  fi
-fi
-
-if command -v ollama &>/dev/null; then
-  echo "  -> Ollama CLI is ready: $(ollama --version 2>/dev/null || echo 'installed')"
-  
-  # Ensure Ollama server is running
-  if ! curl -s http://localhost:11434/api/tags &>/dev/null; then
-    echo "  -> Starting Ollama background server..."
-    mkdir -p "$HOME/.ollama"
-    ollama serve > "$HOME/.ollama/server.log" 2>&1 &
-    for _ in {1..15}; do
-      if curl -s http://localhost:11434/api/tags &>/dev/null; then
-        break
-      fi
-      sleep 1
-    done
-  fi
-
-  echo "  -> Checking for gpt-oss:20b in local models..."
-  if ollama list 2>/dev/null | grep -q "gpt-oss:20b"; then
-    echo "  -> gpt-oss:20b is already downloaded on your Mac!"
-  else
-    echo "  -> Pulling gpt-oss:20b model (~14 GB). This may take several minutes..."
-    ollama pull gpt-oss:20b
-    echo "  -> gpt-oss:20b successfully downloaded!"
-  fi
+echo "[4/5] Checking DeepGrove Maple installation..."
+if [[ -x "$HOME/mlx-lm-deepgrove/.venv/bin/python" && -d "$HOME/mlx-lm-deepgrove/maple-2bit-mlx" ]]; then
+  echo "  -> DeepGrove Maple MLX runtime is ready."
 else
-  echo "  -> Notice: Could not install Ollama automatically. You can install it from https://ollama.com"
+  echo "  -> Notice: DeepGrove Maple was not found at $HOME/mlx-lm-deepgrove."
+  echo "     Set OWAUA_LOCAL_AI_ROOT and OWAUA_LOCAL_AI_MODEL_PATH in .env."
 fi
 
 # -----------------------------------------------------------------------------
@@ -249,13 +213,14 @@ echo "Migration complete! Everything is now configured on your Mac."
 echo "  - Cloud host (Daki): OFFLINE"
 echo "  - Cloud AI providers: DISABLED"
 echo "  - Cloudflare AI Gateway & remote audit logs: DISABLED"
-echo "  - Local AI model: gpt-oss:20b with web search and code execution tools via Ollama (http://127.0.0.1:11434/v1)"
+echo "  - Local AI model: DeepGrove Maple via MLX (http://127.0.0.1:8080/v1)"
 echo "  - Python environment: Python 3.12 ready in .venv"
 echo "=========================================================="
 echo ""
 read -r -p "Do you want to start the bot locally now? [Y/n] " confirm || confirm="Y"
 if [[ "$confirm" =~ ^[Yy]?$ ]]; then
   echo "Starting owaua bot locally..."
+  OWAUA_ENV_FILE="$ROOT_DIR/.env" "$ROOT_DIR/scripts/start-local-ai.sh"
   exec .venv/bin/python src/owaua/bot.py
 else
   echo "To start the bot anytime, run:"

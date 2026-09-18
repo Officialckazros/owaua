@@ -6,5 +6,6 @@ __pycache__/
 *.pyc
 .bot.pid
 data/
+dist/
 .DS_Store
 .gitignore

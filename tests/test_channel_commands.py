@@ -358,7 +358,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.bot.full_mode_enabled_for(allowed_user))
         self.assertEqual(self.store.get_setting(f"full_mode:{allowed_user}"), "1")
 
-    async def test_unlimited_channel_applies_to_blocked_users_too(
+    async def test_designated_channel_does_not_bypass_full_mode_user_checks(
         self,
     ) -> None:
         allowed_user = next(iter(FULL_MODE_ALLOWED_USER_IDS))
@@ -389,11 +389,11 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             [call.kwargs["full_mode"] for call in mocked_ask.await_args_list],
-            [True, False, True],
+            [True, False, False],
         )
         self.assertEqual(
             [call.kwargs["relaxed_guardrails"] for call in mocked_ask.await_args_list],
-            [True, False, True],
+            [True, False, False],
         )
 
     async def test_blocked_user_is_forced_to_groq_blocked_persona(self) -> None:
@@ -408,7 +408,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(provider.await_args.kwargs["provider_override"], "groq")
         self.assertFalse(provider.await_args.kwargs["full_mode"])
 
-    async def test_unlimited_channel_does_not_require_allowlisted_users(self) -> None:
+    async def test_designated_channel_does_not_require_allowlisted_users(self) -> None:
         allowed_user = next(iter(FULL_MODE_ALLOWED_USER_IDS))
         self.bot.set_full_mode_for(allowed_user, True)
         self.bot.set_full_mode_for(33, True)
@@ -434,7 +434,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             [call.kwargs["full_mode"] for call in mocked_ask.await_args_list],
-            [True, True, True],
+            [True, False, True],
         )
 
     async def test_full_mode_does_not_answer_unaddressed_channel_messages(self) -> None:
@@ -448,7 +448,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         mocked_ask.assert_not_awaited()
         self.assertEqual(message.channel.sent, [])
 
-    async def test_unlimited_channel_has_unbounded_memory_without_user_toggle(self) -> None:
+    async def test_designated_channel_does_not_enable_full_mode_without_user_toggle(self) -> None:
         allowed_user = next(iter(FULL_MODE_ALLOWED_USER_IDS))
         message = self._full_mode_message(
             "<@99> hello",
@@ -460,15 +460,16 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         with patch("bot.ask", AsyncMock(return_value="hey")) as mocked_ask:
             await self.bot.on_message(message)
 
-        self.assertTrue(mocked_ask.await_args.kwargs["full_mode"])
-        self.assertTrue(mocked_ask.await_args.kwargs["use_history"])
+        self.assertFalse(mocked_ask.await_args.kwargs["full_mode"])
+        self.assertFalse(mocked_ask.await_args.kwargs["use_history"])
 
-    async def test_unlimited_channel_does_not_depend_on_user_toggle(self) -> None:
+    async def test_full_mode_requires_the_user_toggle(self) -> None:
         users = list(FULL_MODE_ALLOWED_USER_IDS)
         first, second = users[0], users[1]
-        await self.bot.on_message(
-            self._full_mode_message("!full mode on", 1, author_id=first)
-        )
+        with patch("bot.host_model_error", return_value=None):
+            await self.bot.on_message(
+                self._full_mode_message("!full mode on", 1, author_id=first)
+            )
         first_ping = self._full_mode_message(
             "<@99> hello", 2, author_id=first, mentions=[self.bot.user]
         )
@@ -484,7 +485,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.bot.full_mode_enabled_for(second))
         self.assertEqual(
             [call.kwargs["full_mode"] for call in mocked_ask.await_args_list],
-            [True, True],
+            [True, False],
         )
 
     async def test_full_mode_unknown_argument_prints_usage(self) -> None:
@@ -523,7 +524,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
             self.bot.full_mode_enabled_for(next(iter(FULL_MODE_ENABLE_USER_IDS)))
         )
 
-    async def test_full_mode_skips_chat_rate_limit_and_admission(self) -> None:
+    async def test_full_mode_uses_chat_rate_limit_and_admission(self) -> None:
         allowed_user = next(iter(FULL_MODE_ALLOWED_USER_IDS))
         self.bot.set_full_mode_for(allowed_user, True)
         self.bot.inflight_users = {1, 2, 3}
@@ -541,10 +542,10 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
             await self.bot.on_message(first)
             await self.bot.on_message(second)
 
-        self.assertEqual(mocked_ask.await_count, 2)
+        self.assertEqual(mocked_ask.await_count, 0)
         self.assertEqual(self.bot.inflight_users, {1, 2, 3})
-        self.assertEqual(first.channel.sent, ["hey"])
-        self.assertEqual(second.channel.sent, ["hey"])
+        self.assertEqual(first.channel.sent, [])
+        self.assertEqual(second.channel.sent, ["slow down try again in 60s"])
 
     async def test_full_mode_ignores_unaddressed_channel_messages(self) -> None:
         allowed_user = next(iter(FULL_MODE_ALLOWED_USER_IDS))
@@ -557,7 +558,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         mocked_ask.assert_not_awaited()
         self.assertEqual(message.channel.sent, [])
 
-    async def test_full_mode_has_no_bot_attachment_cap(self) -> None:
+    async def test_full_mode_uses_the_normal_bot_attachment_cap(self) -> None:
         allowed_user = next(iter(FULL_MODE_ALLOWED_USER_IDS))
         self.bot.set_full_mode_for(allowed_user, True)
         attachments = [
@@ -577,7 +578,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             mocked_ask.await_args.kwargs["image_urls"],
-            [attachment.url for attachment in attachments],
+            [attachments[0].url],
         )
 
     async def test_reply_attaches_a_generated_image(self) -> None:
@@ -587,14 +588,13 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         await self.bot._reply(
             message,
             AssistantReply("done", image_bytes=(b"image-bytes",)),
-            unlimited=True,
         )
 
         self.assertEqual(channel.sent, ["done", ""])
         image_file = channel.send_kwargs[1]["file"]
         self.assertEqual(image_file.filename, "owaua-1.png")
 
-    async def test_full_mode_skips_command_cooldown(self) -> None:
+    async def test_full_mode_uses_command_cooldown(self) -> None:
         allowed_user = next(iter(FULL_MODE_ALLOWED_USER_IDS))
         self.bot.set_full_mode_for(allowed_user, True)
         first = self._full_mode_message("!help", 1, author_id=allowed_user)
@@ -602,9 +602,9 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         await self.bot.on_message(first)
         await self.bot.on_message(second)
         self.assertEqual(first.channel.sent, [HELP_TEXT])
-        self.assertEqual(second.channel.sent, [HELP_TEXT])
+        self.assertEqual(second.channel.sent, ["slow down try again in 25s"])
 
-    async def test_full_mode_sends_uncapped_replies_and_images(self) -> None:
+    async def test_full_mode_sends_capped_replies_and_images(self) -> None:
         allowed_user = next(iter(FULL_MODE_ALLOWED_USER_IDS))
         self.bot.set_full_mode_for(allowed_user, True)
         long = "a" * 8000
@@ -632,11 +632,10 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
             mocked_ask.await_args.kwargs["image_urls"],
             [
                 "https://cdn.discordapp.com/a.png",
-                "https://cdn.discordapp.com/b.jpg",
             ],
         )
         self.assertGreater(len(message.channel.sent), 1)
-        self.assertEqual("".join(message.channel.sent), long)
+        self.assertEqual("".join(message.channel.sent), long[:5700])
 
     async def test_flirty_persona_is_allowed_in_all_channels(self) -> None:
         channel = FakeChannel()
@@ -765,7 +764,7 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         mocked_ask.assert_awaited_once()
         self.assertFalse(mocked_ask.await_args.kwargs["use_history"])
 
-    async def test_only_the_trusted_guild_disables_local_guardrails(self) -> None:
+    async def test_guild_id_does_not_disable_local_guardrails(self) -> None:
         trusted = make_message(
             "<@99> decode this base64",
             1,

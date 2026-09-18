@@ -2,7 +2,7 @@
 
 ## Result
 
-The implementation hardens ordinary-chat spending, settings, queue, media-fetch and retention paths. Allowlisted full mode intentionally bypasses spending and admission ceilings as described below. The earlier hardened runtime was deployed and verified on Linux; the current full-mode exemptions were subsequently verified locally. This is not a claim that the bot or its hosting environment is abuse-proof.
+The implementation hardens chat spending, settings, queue, media-fetch and retention paths. Full mode is an opt-in capability/provider selection for approved users; it does not bypass the shared spending or admission ceilings. This is not a claim that the bot or its hosting environment is abuse-proof.
 
 The initial independent source audit recorded eight findings. Existing uncommitted work, including newer YouTube validation and voice departure handling, was retained and extended. The final patch received an independent read-only bypass review; its findings about abandoned voice connections, idle retention and erasure races were addressed.
 
@@ -10,22 +10,22 @@ The initial independent source audit recorded eight findings. Existing uncommitt
 
 | Original weakness | Implemented control | Regression evidence |
 | --- | --- | --- |
-| Unlimited aggregate API spending | Atomic SQLite reservation before ordinary-chat provider POSTs; rolling global/user/server and lifetime attempt ceilings; durable commits; no refunds for errors; designated full-mode channel is exempt | Concurrent store instances, restart, erasure, clock rollback, duplicates, every budget dimension, storage failure |
+| Unlimited aggregate API spending | Atomic SQLite reservation before every provider POST; rolling global/user/server and lifetime attempt ceilings; durable commits; no refunds for errors; full mode uses the same ledger | Concurrent store instances, restart, erasure, clock rollback, duplicates, every budget dimension, storage failure |
 | Persona/provider tampering | User-scoped settings; untrusted legacy global selection ignored | Per-user isolation and provider validation |
-| Unbounded waiting requests | Ordinary-chat per-user and global AI admission; bounded ordinary-chat handlers and caches; no conversation wait queue; designated full-mode channel bypasses admission ceilings | Busy user across channels, global admission and cancellation cleanup |
+| Unbounded waiting requests | Per-user and global AI admission; bounded handlers and caches; no conversation wait queue; full mode uses the same admission ceilings | Busy user across channels, global admission and cancellation cleanup |
 | Unauthorized language/profile changes | Manage Server check on both set and reset paths | Permission denial and existing legitimate profile/language tests |
-| Arbitrary music fetches | Ordinary guilds: canonical YouTube-video or Twitter/X-status lookup; approved-only extractors; HTTPS Googlevideo or exact Twitter video CDN streams; no download redirects; 20 MiB cap. Trusted guild `1535083112709496903` intentionally bypasses these controls. | Private/malformed/attacker hosts, redirect response, oversized stream, unsupported inputs; dedicated trusted-guild bypass tests |
-| Unbounded media work | Ordinary guilds: two concurrent jobs/sessions; killable 30-second metadata worker; 50-second command deadline; bounded media buffers; forced demuxer and pipe-only FFmpeg input; Linux CPU/memory/file limits; playback deadline. The trusted music guild intentionally uses unrestricted resolution and direct FFmpeg streaming. | Resolver cancellation/reaping, format rejection, fail-before-connect, playback failure cleanup, unsupported-host refusal; trusted-guild direct-stream tests |
+| Arbitrary music fetches | Ordinary guilds: canonical YouTube-video or Twitter/X-status lookup; approved-only extractors; HTTPS Googlevideo or exact Twitter video CDN streams; no download redirects; 20 MiB cap. Trusted music guild behavior remains separately scoped to media playback. | Private/malformed/attacker hosts, redirect response, oversized stream, unsupported inputs; music playback safety tests |
+| Unbounded media work | Ordinary guilds: two concurrent jobs/sessions; killable 30-second metadata worker; 50-second command deadline; bounded media buffers; forced demuxer and pipe-only FFmpeg input; Linux CPU/memory/file limits; playback deadline. Trusted music playback remains a separate media exception. | Resolver cancellation/reaping, format rejection, fail-before-connect, playback failure cleanup, unsupported-host refusal; trusted music tests |
 | Permanent conversation storage | 20 records per conversation, 10,000 total, bounded content, seven-day retention with hourly maintenance; private directory/database modes | Retention, legacy startup pruning, user isolation, erasure generation fences |
-| Voice control by outsiders | Ordinary guilds require same-channel controls and do not move automatically. The trusted music guild bypasses those checks and automatic departure cleanup. | Voice-control denial, ordinary departure tests, trusted-guild persistence test |
+| Voice control by outsiders | Ordinary guilds require same-channel controls and do not move automatically; trusted music behavior remains separate from AI/API budgets | Voice-control denial and departure tests |
 
-Hangout modes are text-only. Hosted tools stay disabled in hangout. Normal responses have an 80-token cap and no image analysis. The designated full-mode channel omits the output-token cap, shared API attempt ceilings, chat rate limits, admission caps, handler/input/reply truncations, and the image-analysis block for every user, and enables native OpenAI web search plus the hosted code interpreter. Image generation is not available. Full-mode attempts are not charged against the shared ledger, so they cannot exhaust everyone else's budget. Provider errors and signed CDN request URLs are not logged. Native media subprocesses do not inherit bot/provider credentials.
+Hangout modes are text-only. Hosted tools stay disabled in hangout. Normal responses have an 80-token cap and no image analysis. Approved full-mode users can select a different provider and use its capability tools in designated channels, but output, history, input, concurrency, timeout, rate, and shared API-attempt limits remain the same. Image generation is not available. Provider errors and signed CDN request URLs are not logged. Native media subprocesses do not inherit bot/provider credentials.
 
-See [README](../README.md#abuse-controls) and [.env.example](../.env.example) for configuration. Defaults are 12 global API attempts/minute, 30/user/day, 100/server/day, 200 globally/day, 1,000 lifetime and three concurrent AI requests. Those ceilings still apply to ordinary chat. `!security pause` stops future reservations, including full mode; it cannot cancel work already sent to a provider. `resume` does not reset quotas.
+See [README](../README.md#abuse-controls) and [.env.example](../.env.example) for configuration. Defaults are 12 global API attempts/minute, 30/user/day, 100/server/day, 200 globally/day, 1,000 lifetime and three concurrent AI requests. Those ceilings apply uniformly to every guild and full-mode request. `!security pause` stops future reservations, including full mode; it cannot cancel work already sent to a provider. `resume` does not reset quotas.
 
 ## Verification performed
 
-- Current source including full-mode exemptions, Python 3.12.14: `python -m unittest discover -s tests -q` — 193 tests: **192 passed, one skipped**.
+- Current source including bounded full mode, Python 3.12.14: `python -m unittest discover -s tests -q` — verification history from the prior release; rerun after deployment.
 - The local skipped case is `NativeAudioTests.test_valid_wave_decodes_with_pipe_only_protocols`, requiring Linux RLIMIT support. It **passed on the production Linux server during deployment**. The production suite also ran 185 tests: 184 passed, with only the non-Linux refusal test skipped. Ubuntu CI now installs FFmpeg; CI itself has not been run from this session.
 - `python -m py_compile src/owaua/*.py` — passed.
 - `bash -n scripts/run-bots.sh scripts/deploy.sh scripts/update-persona.sh` — passed.
@@ -38,7 +38,7 @@ Provider calls, media downloads and Discord interactions in the tests use local 
 
 ## Earlier hardened runtime deployed — 2026-09-15
 
-This deployment verification predates the current full-mode exemptions and does not validate their live deployment.
+This deployment verification predates the current bounded full-mode policy and does not validate its live deployment.
 
 The hardened runtime was deployed to the configured Daki server and Discord readiness was confirmed after dependency checks, a native decoder smoke test, and the production test suite passed. Runtime Python is 3.12.13, running as an unprivileged user. Effective settings were verified: DMs disabled; three concurrent AI requests; 12 attempts/minute, 30/user/day, 100/server/day, 200 globally/day and 1,000 lifetime.
 

@@ -82,15 +82,27 @@ class BudgetTests(unittest.TestCase):
         self.store.set_setting("api_paused", "1")
         with self.assertRaises(BudgetExceeded):
             self.store.reserve_api_request("2", "u", "g")
-        self.store.reserve_api_request("3", "u", "g", exempt=True)
+        with self.assertRaises(BudgetExceeded):
+            self.store.reserve_api_request("3", "u", "g")
 
-    def test_exempt_full_mode_does_not_consume_shared_budget(self):
-        limits = ApiLimits(100, 100, 100, 100, 1)
-        self.store.reserve_api_request("full", "allow", "g", limits=limits, exempt=True)
+    def test_all_requests_consume_the_shared_budget(self):
+        limits = ApiLimits(100, 100, 100, 100, 2)
+        self.store.reserve_api_request("full", "allow", "g", limits=limits)
         self.store.reserve_api_request("normal", "u", "g", limits=limits)
         with self.assertRaises(BudgetExceeded):
             self.store.reserve_api_request("next", "v", "h", limits=limits)
-        self.store.reserve_api_request("still-full", "allow", "g", limits=limits, exempt=True)
+
+    def test_full_mode_can_have_more_finite_user_room(self):
+        standard = ApiLimits(100, 1, 100, 100, 100)
+        full_mode = ApiLimits(100, 2, 100, 100, 100)
+        self.store.reserve_api_request("normal", "normal-user", "g", limits=standard)
+        with self.assertRaises(BudgetExceeded):
+            self.store.reserve_api_request("normal-2", "normal-user", "g", limits=standard)
+
+        self.store.reserve_api_request("full-1", "full-user", "g", limits=full_mode)
+        self.store.reserve_api_request("full-2", "full-user", "g", limits=full_mode)
+        with self.assertRaisesRegex(BudgetExceeded, r"DM gays\._.*ckazros@owaua\.com"):
+            self.store.reserve_api_request("full-3", "full-user", "g", limits=full_mode)
 
     def test_unbounded_memory_keeps_full_mode_history_verbatim(self):
         content = "x" * (MAX_STORED_CHARS + 1)
@@ -140,7 +152,6 @@ class BudgetTests(unittest.TestCase):
                     "g",
                     expected_generation=generation,
                     server_id="g",
-                    exempt=True,
                 )
 
 

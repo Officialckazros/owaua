@@ -424,7 +424,7 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         stored = self.memory.recent_messages("123", "7", limit=10)
         self.assertEqual(stored[-1]["content"], "im not decoding that")
 
-    async def test_trusted_guild_mode_does_not_apply_local_refusals(self) -> None:
+    async def test_capability_mode_does_not_apply_local_refusals(self) -> None:
         self.http.responses = model_reply("It prints:\nhello")
 
         answer = await self._ask(
@@ -582,11 +582,11 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("tools", payload)
         self.assertNotIn("web search", payload["instructions"])
 
-    async def test_full_mode_has_unbounded_output_and_privileged_tools(self) -> None:
+    async def test_full_mode_keeps_tools_but_uses_the_normal_output_cap(self) -> None:
         await self._ask("generate an image of a crown", full_mode=True)
         payload = self.http.calls[0][1]["json"]
         self.assertEqual(payload["model"], GPT_TERRA_MODEL)
-        self.assertNotIn("max_output_tokens", payload)
+        self.assertEqual(payload["max_output_tokens"], GPT_MAX_OUTPUT_TOKENS)
         self.assertNotIn("max_tokens", payload)
         self.assertEqual(payload["reasoning"], dict(GPT_FULL_REASONING))
         self.assertEqual(payload["tools"], gpt_full_tools())
@@ -614,7 +614,7 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
             self.http.calls[0][1]["json"]["instructions"],
         )
 
-    async def test_full_mode_sends_images_and_keeps_long_replies(self) -> None:
+    async def test_full_mode_sends_images_and_caps_long_replies(self) -> None:
         urls = [
             "https://cdn.discordapp.com/a.png",
             "https://cdn.discordapp.com/b.png",
@@ -624,15 +624,15 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
 
         answer = await self._ask("look", image_urls=urls, full_mode=True)
 
-        self.assertEqual(answer, long)
+        self.assertEqual(answer, long[:5700])
         content = latest_user_content(self.http.calls[0][1]["json"])
         self.assertIsInstance(content, list)
         self.assertEqual(
             [block["image_url"] for block in content if block.get("type") == "input_image"],
-            urls,
+            urls[:1],
         )
 
-    async def test_full_mode_accepts_long_prompts_and_history(self) -> None:
+    async def test_full_mode_uses_the_normal_prompt_and_history_bounds(self) -> None:
         filler = "x" * (MAX_MESSAGE_CHARS + 50)
         await self._ask(filler, event_id="first", full_mode=True)
         self.http.calls.clear()
@@ -645,21 +645,21 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
             for item in self.http.calls[0][1]["json"]["input"]
         ]
         self.assertEqual(contents[-1], "why")
-        self.assertIn(filler, contents)
+        self.assertNotIn(filler, contents)
 
-    async def test_full_mode_does_not_charge_the_shared_budget(self) -> None:
+    async def test_full_mode_charges_the_shared_budget(self) -> None:
         before = self.memory.api_status()
         await self._ask(full_mode=True)
-        self.assertEqual(self.memory.api_status(), before)
+        self.assertNotEqual(self.memory.api_status(), before)
         await self._ask(event_id="100")
         self.assertNotEqual(self.memory.api_status(), before)
 
-    async def test_full_mode_ignores_an_emergency_api_pause(self) -> None:
+    async def test_full_mode_respects_an_emergency_api_pause(self) -> None:
         self.memory.set_setting("api_paused", "1")
 
         answer = await self._ask(full_mode=True)
 
-        self.assertEqual(answer, "allowed reply")
+        self.assertEqual(answer, "AI requests are paused by the owner")
 
     async def test_full_mode_overrides_deepseek_and_mistral_personas(self) -> None:
         await self._ask(persona="flirty", full_mode=True)

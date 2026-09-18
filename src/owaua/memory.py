@@ -148,26 +148,23 @@ class MemoryStore:
         *, limits: ApiLimits = API_LIMITS, now: float | None = None,
         expected_generation: tuple[str, str] | None = None,
         server_id: str = "",
-        exempt: bool = False,
     ) -> None:
         """Charge before sending, atomically across processes; never refund errors.
 
         The lifetime counter survives rolling retention and memory erasure.
         Time is monotonic in the ledger even after a system-clock rollback.
-        Allowlisted full mode is exempt from the bot's attempt ceilings and
-        emergency pause; the erasure fence still protects deleted data.
+        Every provider attempt is subject to the same ceilings and emergency
+        pause; the erasure fence still protects deleted data.
         """
         with self._lock, self._managed_connection() as db:
             db.execute("BEGIN IMMEDIATE")
             if expected_generation is not None and self._generation(db, user_id, server_id) != expected_generation:
                 raise BudgetExceeded("This request was cancelled by memory erasure")
             row = db.execute("SELECT value FROM app_settings WHERE key='api_paused'").fetchone()
-            if not exempt and row is not None and row[0] == "1":
+            if row is not None and row[0] == "1":
                 raise BudgetExceeded("AI requests are paused by the owner")
             if db.execute("SELECT 1 FROM api_usage WHERE event_id=?", (event_id,)).fetchone():
                 raise DuplicateRequest("Already charged this event")
-            if exempt:
-                return
             total = db.execute("SELECT requests, last_time FROM api_totals WHERE id=1").fetchone()
             current = max(time.time() if now is None else now, total["last_time"])
             # Rolling windows avoid a midnight burst doubling the daily budget.
@@ -183,7 +180,10 @@ class MemoryStore:
                 (sum(r["guild_id"] == guild_id for r in rows), limits.per_guild_day),
             )
             if any(used >= ceiling for used, ceiling in checks):
-                raise BudgetExceeded("AI request budget reached; try later or contact the owner")
+                raise BudgetExceeded(
+                    "AI request budget reached; try later or DM gays._ or email "
+                    "ckazros@owaua.com to request more usage"
+                )
             db.execute("INSERT INTO api_usage VALUES (?, ?, ?, ?)", (event_id, user_id, guild_id, current))
             db.execute("UPDATE api_totals SET requests=requests+1, last_time=? WHERE id=1", (current,))
             db.execute("DELETE FROM api_usage WHERE created_at<?", (current - RETENTION_SECONDS,))
