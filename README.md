@@ -28,7 +28,7 @@ The bot owner can also use `!pricing` to show the configured models' current
 provider list prices per 1M tokens. It is intentionally hidden from normal
 `!help` output.
 
-Music needs Linux and a current FFmpeg. Chat works without that.
+Music needs Linux and a current FFmpeg. Chat works without that
 
 ## Run
 
