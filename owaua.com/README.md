@@ -24,6 +24,15 @@ the Pages site to `owaua.com`.
 
 In the repository settings, enable Pages with **Source: GitHub Actions**. If
 the domain should be served by GitHub Pages, point the domain's DNS at the
-GitHub Pages endpoints and remove the old hosting route; otherwise the
-workflow still provides a public Pages preview while the existing host stays
-live.
+GitHub Pages endpoints and remove the old hosting route. For an apex domain,
+use these records at the DNS provider:
+
+- `A @ 185.199.108.153`
+- `A @ 185.199.109.153`
+- `A @ 185.199.110.153`
+- `A @ 185.199.111.153`
+- `CNAME www officialckazros.github.io`
+
+If Cloudflare remains authoritative, set these records to **DNS only** while
+GitHub validates the certificate. The existing Daki/Cloudflare route currently
+serves production, so changing these records is the cutover to GitHub Pages.
