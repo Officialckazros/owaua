@@ -77,7 +77,7 @@ never includes `.env`, `data/`, virtual environments, or local model files.
 The same release tag also publishes a container image to GitHub Packages:
 
 ```sh
-docker pull ghcr.io/officialckazros/owaua:latest
+docker pull ghcr.io/zeousky/owaua:latest
 ```
 
 Pass the bot configuration as environment variables when starting the

@@ -31,7 +31,7 @@ use these records at the DNS provider:
 - `A @ 185.199.109.153`
 - `A @ 185.199.110.153`
 - `A @ 185.199.111.153`
-- `CNAME www officialckazros.github.io`
+- `CNAME www zeousky.github.io`
 
 If Cloudflare remains authoritative, set these records to **DNS only** while
 GitHub validates the certificate. The existing Daki/Cloudflare route currently
