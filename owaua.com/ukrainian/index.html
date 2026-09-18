@@ -24,8 +24,8 @@
 <meta property="og:description" content="маленький Discord-бот, з яким справді можна поговорити">
 <title>owaua · маленький Discord hangout-бот</title>
 <link rel="icon" href="/assets/pfp-ukrainian-96.webp?v=20260918a" type="image/webp">
-<link rel="stylesheet" href="/assets/owaua.css?v=20260915b">
-<script src="/assets/owaua.js?v=20260915b" defer></script>
+<link rel="stylesheet" href="/assets/owaua.css?v=20260919b">
+<script src="/assets/owaua.js?v=20260919b" defer></script>
 </head>
 <body class="theme theme-ukrainian">
 <div class="flag-bar" aria-hidden="true"></div>
@@ -95,7 +95,7 @@ owaua
 <ul class="list">
 <li><strong>чекає, доки запитаєш</strong><span>Згадай на сервері — і він відповість. Самотнє <code>@owaua</code> без нічого отримує маленьке локальне «yeah?» — без виклику моделі. Інших ботів ігнорує. Особисті повідомлення працюють лише якщо оператор увімкнув <code>BOT_ALLOW_DMS=1</code>.</span></li>
 <li><strong>пам'ятає вашу нитку, не кімнату</strong><span>Твоя історія з ним — це лише ти, у тому каналі. Тримає до 20 ходів, за тиждень вони згасають, а весь файл зупиняється на 10 000 записах. У людини поруч окрема пам'ять.</span></li>
-<li><strong>кілька голосів і кілька мізків</strong><span>Обери <code>rudeish</code>, <code>nerdish</code> або вікове <code>explicit</code>. Адміни сервера можуть також вибрати, хто говорить під цим: стандарт хоста, DeepSeek, Mistral або GPT.</span></li>
+<li><strong>кілька голосів і кілька мізків</strong><span>Обери <code>rudeish</code>, <code>nerdish</code>, <code>flirty</code> або <code>chaotic</code>. Адміни сервера можуть також вибрати, хто говорить під цим: стандарт хоста, DeepSeek, Mistral або GPT.</span></li>
 <li><strong>може відповідати твоєю мовою</strong><span>Адміни ставлять повну назву мови, наприклад <code>!language hungarian</code>. Коли є відповідна картинка, owaua може ще змінити аватар і банер бота на тому сервері, щоб він виглядав своїм.</span></li>
 <li><strong>трек у voice, якщо попросиш</strong><span><code>!music</code> грає пісню, посилання YouTube або аудіофайл, який ти прикріпиш. Пауза, продовжити, restart, skip, leave. Один трек за раз. Без скидання плейлиста.</span></li>
 <li><strong>короткі відповіді, навмисне</strong><span>Звичайний hangout лишається лише текстом, із маленькою стелею 80 токенів, і він не дивиться на картинки. Той, хто його тримає, може відкрити <code>!full mode on</code> в одному приватному каналі для людей, яким довіряє.</span></li>
@@ -107,7 +107,7 @@ owaua
 <p>Кожна команда чекає 25 секунд перед наступною. Зміна налаштувань сервера потребує Керування сервером. Керування музикою працює лише якщо ти в тому ж голосовому каналі, що й бот.</p>
 <div class="commands">
 <div class="command"><code>!help</code><p>Список, коли забуваєш.</p></div>
-<div class="command"><code>!persona rudeish|nerdish|explicit</code><p>Послухати або змінити голос. <code>explicit</code> лише в каналах з віковим обмеженням. <code>!persona host default gpt|deepseek|mistral</code> обирає, хто відповідає під цим.</p></div>
+<div class="command"><code>!persona rudeish|nerdish|flirty|chaotic</code><p>Послухати або змінити голос для загальної аудиторії. <code>!persona host default gpt|deepseek|mistral</code> обирає, хто відповідає під цим.</p></div>
 <div class="command"><code>!language &lt;повна назва&gt;|reset</code><p>Поставити або скинути мову відповіді сервера й відповідну картинку профілю, якщо вона є.</p></div>
 <div class="command"><code>!music &lt;пісня, URL YouTube або аудіо&gt;</code><p>Поставити щось. Або <code>pause</code>, <code>resume</code>, <code>restart</code>, <code>skip</code> і <code>leave</code>.</p></div>
 <div class="command"><code>!memory erase</code> / <code>!memory erase mine</code><p>Адміни можуть стерти збережені чати сервера. Будь-хто може стерти свої, разом з особистими, коли вони ввімкнені.</p></div>
@@ -149,7 +149,7 @@ owaua
 </details>
 <details>
 <summary>Можна змінити, як він звучить?</summary>
-<p>Так. <code>!persona rudeish</code>, <code>!persona nerdish</code> або <code>!persona explicit</code>. Explicit лише в каналах з віковим обмеженням. Якщо explicit уже вибрано, звичайні канали тихо беруть rudeish.</p>
+<p>Так. <code>!persona rudeish</code>, <code>!persona nerdish</code>, <code>!persona flirty</code> або <code>!persona chaotic</code>.</p>
 </details>
 <details>
 <summary>Музика справді грає?</summary>
@@ -171,7 +171,7 @@ owaua
 <p>owaua з відкритим кодом. Потрібні Python 3.11+, Message Content Intent Discord, ключі провайдера, і Linux плюс FFmpeg, якщо хочеш музику. Далі — просто розмова.</p>
 <div class="actions">
 <a class="button" href="https://github.com/zeousky/owaua">подивитись код</a>
-<a class="button ghost" href="mailto:ckazros@owaua.com">написати тому, хто його зробив</a>
+<a class="button ghost contact-link" href="mailto:ckazros@owaua.com" data-contact-email="ckazros@owaua.com">написати тому, хто його зробив</a>
 </div>
 </section>
 </main>

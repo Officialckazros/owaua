@@ -24,8 +24,8 @@
 <meta property="og:description" content="ένα μικρό Discord bot με το οποίο μπορείς πραγματικά να μιλήσεις">
 <title>owaua · ένα μικρό Discord hangout bot</title>
 <link rel="icon" href="/assets/pfp-greek-96.webp?v=20260918a" type="image/webp">
-<link rel="stylesheet" href="/assets/owaua.css?v=20260915b">
-<script src="/assets/owaua.js?v=20260915b" defer></script>
+<link rel="stylesheet" href="/assets/owaua.css?v=20260919b">
+<script src="/assets/owaua.js?v=20260919b" defer></script>
 </head>
 <body class="theme theme-greek">
 <div class="flag-bar" aria-hidden="true"></div>
@@ -95,7 +95,7 @@ owaua
 <ul class="list">
 <li><strong>περιμένει να τον ρωτήσεις</strong><span>Κάν' του ping σε server και απαντάει. Ένα μοναχικό <code>@owaua</code> χωρίς τίποτα άλλο παίρνει ένα μικρό τοπικό «yeah;» — χωρίς κλήση στο μοντέλο. Τα άλλα bot αγνοούνται. Τα DM δουλεύουν μόνο αν ο operator ανοίξει το <code>BOT_ALLOW_DMS=1</code>.</span></li>
 <li><strong>θυμάται το δικό σας νήμα, όχι το δωμάτιο</strong><span>Το ιστορικό σου μαζί του είσαι μόνο εσύ, σ' αυτό το κανάλι. Κρατάει μέχρι 20 γύρους, σβήνουν μετά από μια εβδομάδα, και όλο το αρχείο σταματάει στα 10.000 records. Το άτομο δίπλα έχει χωριστή μνήμη.</span></li>
-<li><strong>μερικές φωνές, και μερικά μυαλά</strong><span>Διάλεξε <code>rudeish</code>, <code>nerdish</code>, ή ηλικιακά περιορισμένο <code>explicit</code>. Οι admin του server μπορούν επίσης να διαλέξουν ποιος μιλάει από κάτω: το default του host, DeepSeek, Mistral, ή GPT.</span></li>
+<li><strong>μερικές φωνές, και μερικά μυαλά</strong><span>Διάλεξε <code>rudeish</code>, <code>nerdish</code>, <code>flirty</code> ή <code>chaotic</code>. Οι admin του server μπορούν επίσης να διαλέξουν ποιος μιλάει από κάτω: το default του host, DeepSeek, Mistral, ή GPT.</span></li>
 <li><strong>μπορεί να απαντήσει στη γλώσσα σου</strong><span>Οι admin βάζουν πλήρες όνομα γλώσσας, π.χ. <code>!language hungarian</code>. Όταν υπάρχει ταιριαστή εικόνα, ο owaua μπορεί να αλλάξει και το avatar και το banner του bot σ' αυτόν τον server, για να μοιάζει του τόπου.</span></li>
 <li><strong>ένα κομμάτι στο voice, αν το ζητήσεις</strong><span>Το <code>!music</code> παίζει τραγούδι, σύνδεσμο YouTube, ή αρχείο ήχου που επισυνάπτεις. Παύση, συνέχεια, restart, skip, leave. Ένα track τη φορά. Χωρίς dump playlist.</span></li>
 <li><strong>κοντές απαντήσεις, επίτηδες</strong><span>Η κανονική hangout λειτουργία μένει μόνο κείμενο, με μικρό όριο 80 tokens, και δεν κοιτάει εικόνες. Όποιος τον τρέχει μπορεί να ανοίξει <code>!full mode on</code> σε ένα ιδιωτικό κανάλι, για ανθρώπους που εμπιστεύεται.</span></li>
@@ -107,7 +107,7 @@ owaua
 <p>Κάθε εντολή περιμένει 25 δευτερόλεπτα πριν την επόμενη. Η αλλαγή ρυθμίσεων server θέλει Διαχείριση διακομιστή. Τα controls μουσικής δουλεύουν μόνο αν είσαι στο ίδιο voice channel με το bot.</p>
 <div class="commands">
 <div class="command"><code>!help</code><p>Η λίστα, όταν την ξεχνάς.</p></div>
-<div class="command"><code>!persona rudeish|nerdish|explicit</code><p>Ν' ακούσεις ή να αλλάξεις τη φωνή. Το <code>explicit</code> μόνο σε κανάλια με όριο ηλικίας. Το <code>!persona host default gpt|deepseek|mistral</code> διαλέγει ποιος απαντάει από κάτω.</p></div>
+<div class="command"><code>!persona rudeish|nerdish|flirty|chaotic</code><p>Ν' ακούσεις ή να αλλάξεις τη φωνή για γενικό κοινό. Το <code>!persona host default gpt|deepseek|mistral</code> διαλέγει ποιος απαντάει από κάτω.</p></div>
 <div class="command"><code>!language &lt;πλήρες όνομα&gt;|reset</code><p>Βάλε ή καθάρισε τη γλώσσα απάντησης του server, και την ταιριαστή εικόνα προφίλ όταν υπάρχει.</p></div>
 <div class="command"><code>!music &lt;τραγούδι, URL YouTube, ή ήχος&gt;</code><p>Βάλε κάτι. Ή <code>pause</code>, <code>resume</code>, <code>restart</code>, <code>skip</code>, και <code>leave</code>.</p></div>
 <div class="command"><code>!memory erase</code> / <code>!memory erase mine</code><p>Οι admin μπορούν να σβήσουν τις αποθηκευμένες συζητήσεις του server. Ο καθένας μπορεί να σβήσει τις δικές του, μαζί και τα DM όταν είναι ανοιχτά.</p></div>
@@ -149,7 +149,7 @@ owaua
 </details>
 <details>
 <summary>Μπορώ να αλλάξω πώς ακούγεται;</summary>
-<p>Ναι. <code>!persona rudeish</code>, <code>!persona nerdish</code>, ή <code>!persona explicit</code>. Το explicit μόνο σε κανάλια με όριο ηλικίας. Αν το explicit είναι ήδη επιλεγμένο, τα κανονικά κανάλια χρησιμοποιούν ήσυχα rudeish.</p>
+<p>Ναι. <code>!persona rudeish</code>, <code>!persona nerdish</code>, <code>!persona flirty</code> ή <code>!persona chaotic</code>.</p>
 </details>
 <details>
 <summary>Η μουσική παίζει στ' αλήθεια;</summary>
@@ -171,7 +171,7 @@ owaua
 <p>Ο owaua είναι ανοιχτός κώδικας. Θέλεις Python 3.11+, το Message Content Intent του Discord, τα κλειδιά του παρόχου, και Linux συν FFmpeg αν θέλεις μουσική. Μετά είναι απλά κουβέντα.</p>
 <div class="actions">
 <a class="button" href="https://github.com/zeousky/owaua">δες τον κώδικα</a>
-<a class="button ghost" href="mailto:ckazros@owaua.com">γράψε σε όποιον τον έφτιαξε</a>
+<a class="button ghost contact-link" href="mailto:ckazros@owaua.com" data-contact-email="ckazros@owaua.com">γράψε σε όποιον τον έφτιαξε</a>
 </div>
 </section>
 </main>

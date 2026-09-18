@@ -24,8 +24,8 @@
 <meta property="og:description" content="un piccolo bot Discord con cui puoi davvero parlare">
 <title>owaua · un piccolo bot Discord da hangout</title>
 <link rel="icon" href="/assets/pfp-italian-96.webp?v=20260918a" type="image/webp">
-<link rel="stylesheet" href="/assets/owaua.css?v=20260915b">
-<script src="/assets/owaua.js?v=20260915b" defer></script>
+<link rel="stylesheet" href="/assets/owaua.css?v=20260919b">
+<script src="/assets/owaua.js?v=20260919b" defer></script>
 </head>
 <body class="theme theme-italian">
 <div class="flag-bar" aria-hidden="true"></div>
@@ -95,7 +95,7 @@ owaua
 <ul class="list">
 <li><strong>aspetta che glielo chiedi</strong><span>Pingalo in un server e risponde. Un <code>@owaua</code> da solo, senza altro, prende un piccolo «yeah?» locale — senza chiamare il modello. Gli altri bot vengono ignorati. I DM funzionano solo se l'operatore accende <code>BOT_ALLOW_DMS=1</code>.</span></li>
 <li><strong>ricorda il vostro filo, non la stanza</strong><span>La tua cronologia con lui sei solo tu, in quel canale. Tiene fino a 20 turni, dopo una settimana svaniscono, e il file intero si ferma a 10.000 record. Chi ti sta accanto ha una memoria a parte.</span></li>
-<li><strong>qualche voce, e qualche testa</strong><span>Scegli <code>rudeish</code>, <code>nerdish</code>, o <code>explicit</code> (canali con limite di età). Gli admin del server possono anche scegliere chi parla sotto: il default dell'host, DeepSeek, Mistral, o GPT.</span></li>
+<li><strong>qualche voce, e qualche testa</strong><span>Scegli <code>rudeish</code>, <code>nerdish</code>, <code>flirty</code> o <code>chaotic</code>. Gli admin del server possono anche scegliere chi parla sotto: il default dell'host, DeepSeek, Mistral, o GPT.</span></li>
 <li><strong>può rispondere nella tua lingua</strong><span>Gli admin impostano un nome di lingua intero, tipo <code>!language hungarian</code>. Quando c'è l'immagine giusta, owaua può anche cambiare avatar e banner del bot su quel server, così sembra di casa.</span></li>
 <li><strong>una canzone in vocale, se glielo chiedi</strong><span><code>!music</code> suona una canzone, un link YouTube, o un file audio che alleghi. Pausa, riprendi, restart, skip, leave. Un brano alla volta. Niente playlist intere.</span></li>
 <li><strong>risposte corte, di proposito</strong><span>La modalità hangout normale resta solo testo, con un piccolo tetto di 80 token, e non guarda le immagini. Chi lo fa girare può aprire <code>!full mode on</code> in un canale privato, per le persone di cui si fida.</span></li>
@@ -107,7 +107,7 @@ owaua
 <p>Ogni comando aspetta 25 secondi prima del successivo. Cambiare le impostazioni del server serve Gestisci server. I controlli musica funzionano solo se sei nello stesso canale vocale del bot.</p>
 <div class="commands">
 <div class="command"><code>!help</code><p>La lista, quando non la ricordi.</p></div>
-<div class="command"><code>!persona rudeish|nerdish|explicit</code><p>Ascoltare o cambiare la voce. <code>explicit</code> solo nei canali con limite di età. <code>!persona host default gpt|deepseek|mistral</code> sceglie chi risponde sotto.</p></div>
+<div class="command"><code>!persona rudeish|nerdish|flirty|chaotic</code><p>Ascoltare o cambiare una voce per tutti. <code>!persona host default gpt|deepseek|mistral</code> sceglie chi risponde sotto.</p></div>
 <div class="command"><code>!language &lt;nome completo&gt;|reset</code><p>Impostare o togliere la lingua di risposta del server, e l'immagine del profilo quando c'è.</p></div>
 <div class="command"><code>!music &lt;canzone, URL YouTube, o audio&gt;</code><p>Mettere qualcosa. Oppure <code>pause</code>, <code>resume</code>, <code>restart</code>, <code>skip</code>, e <code>leave</code>.</p></div>
 <div class="command"><code>!memory erase</code> / <code>!memory erase mine</code><p>Gli admin possono cancellare le chat salvate del server. Chiunque può cancellare le proprie, compresi i DM quando sono accesi.</p></div>
@@ -149,7 +149,7 @@ owaua
 </details>
 <details>
 <summary>Posso cambiare come suona?</summary>
-<p>Sì. <code>!persona rudeish</code>, <code>!persona nerdish</code>, o <code>!persona explicit</code>. Explicit solo nei canali con limite di età. Se explicit è già scelto, i canali normali usano rudeish in silenzio.</p>
+<p>Sì. <code>!persona rudeish</code>, <code>!persona nerdish</code>, <code>!persona flirty</code> o <code>!persona chaotic</code>.</p>
 </details>
 <details>
 <summary>La musica suona davvero?</summary>
@@ -171,7 +171,7 @@ owaua
 <p>owaua è open source. Ti servono Python 3.11+, l'intent Message Content di Discord, le chiavi del provider, e Linux più FFmpeg se vuoi la musica. Poi è solo parlare.</p>
 <div class="actions">
 <a class="button" href="https://github.com/zeousky/owaua">guarda il codice</a>
-<a class="button ghost" href="mailto:ckazros@owaua.com">scrivi a chi l'ha fatto</a>
+<a class="button ghost contact-link" href="mailto:ckazros@owaua.com" data-contact-email="ckazros@owaua.com">scrivi a chi l'ha fatto</a>
 </div>
 </section>
 </main>

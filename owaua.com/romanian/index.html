@@ -24,8 +24,8 @@
 <meta property="og:description" content="un bot mic de Discord cu care poți chiar vorbi">
 <title>owaua · un bot mic de Discord de hangout</title>
 <link rel="icon" href="/assets/pfp-romanian-96.webp?v=20260918a" type="image/webp">
-<link rel="stylesheet" href="/assets/owaua.css?v=20260915b">
-<script src="/assets/owaua.js?v=20260915b" defer></script>
+<link rel="stylesheet" href="/assets/owaua.css?v=20260919b">
+<script src="/assets/owaua.js?v=20260919b" defer></script>
 </head>
 <body class="theme theme-romanian">
 <div class="flag-bar" aria-hidden="true"></div>
@@ -95,7 +95,7 @@ owaua
 <ul class="list">
 <li><strong>așteaptă să-l întrebi</strong><span>Ping-uiește-l pe un server și răspunde. Un <code>@owaua</code> singur, fără altceva, primește un mic „yeah?” local — fără să cheme modelul. Alți boți sunt ignorați. DM-urile merg doar dacă operatorul pornește <code>BOT_ALLOW_DMS=1</code>.</span></li>
 <li><strong>ține minte firul vostru, nu camera</strong><span>Istoricul tău cu el ești doar tu, pe canalul ăla. Ține până la 20 de ture, dispar după o săptămână, și tot fișierul se oprește la 10.000 de înregistrări. Persoana de lângă tine are o memorie separată.</span></li>
-<li><strong>câteva voci, și câteva creiere</strong><span>Alege <code>rudeish</code>, <code>nerdish</code>, sau <code>explicit</code> (canale cu restricție de vârstă). Adminii serverului pot alege și cine vorbește pe dedesubt: default-ul hostului, DeepSeek, Mistral, sau GPT.</span></li>
+<li><strong>câteva voci, și câteva creiere</strong><span>Alege <code>rudeish</code>, <code>nerdish</code>, <code>flirty</code> sau <code>chaotic</code>. Adminii serverului pot alege și cine vorbește pe dedesubt: default-ul hostului, DeepSeek, Mistral, sau GPT.</span></li>
 <li><strong>poate răspunde în limba ta</strong><span>Adminii pun un nume de limbă întreg, gen <code>!language hungarian</code>. Când există imaginea potrivită, owaua poate schimba și avatarul și bannerul botului pe serverul ăla, ca să pară de-al locului.</span></li>
 <li><strong>o piesă pe voice, dacă ceri</strong><span><code>!music</code> cântă o melodie, un link YouTube, sau un fișier audio pe care-l atașezi. Pauză, continuă, restart, skip, leave. Un track pe rând. Fără playlist întreg.</span></li>
 <li><strong>răspunsuri scurte, dinadins</strong><span>Modul hangout normal rămâne doar text, cu un plafon mic de 80 de tokeni, și nu se uită la imagini. Persoana care-l ține poate deschide <code>!full mode on</code> pe un canal privat, pentru oamenii în care are încredere.</span></li>
@@ -107,7 +107,7 @@ owaua
 <p>Fiecare comandă așteaptă 25 de secunde înainte de următoarea. Schimbarea setărilor serverului cere Gestionează serverul. Controalele de muzică merg doar dacă ești pe același canal vocal cu botul.</p>
 <div class="commands">
 <div class="command"><code>!help</code><p>Lista, când uiți.</p></div>
-<div class="command"><code>!persona rudeish|nerdish|explicit</code><p>Să auzi sau să schimbi vocea. <code>explicit</code> doar pe canale cu restricție de vârstă. <code>!persona host default gpt|deepseek|mistral</code> alege cine răspunde pe dedesubt.</p></div>
+<div class="command"><code>!persona rudeish|nerdish|flirty|chaotic</code><p>Să auzi sau să schimbi vocea general-audience. <code>!persona host default gpt|deepseek|mistral</code> alege cine răspunde pe dedesubt.</p></div>
 <div class="command"><code>!language &lt;nume complet&gt;|reset</code><p>Pune sau scoate limba de răspuns a serverului, și imaginea de profil potrivită când există.</p></div>
 <div class="command"><code>!music &lt;piesă, URL YouTube, sau audio&gt;</code><p>Pune ceva. Sau <code>pause</code>, <code>resume</code>, <code>restart</code>, <code>skip</code>, și <code>leave</code>.</p></div>
 <div class="command"><code>!memory erase</code> / <code>!memory erase mine</code><p>Adminii pot șterge conversațiile salvate ale serverului. Oricine își poate șterge pe ale lui, inclusiv DM-urile când sunt pornite.</p></div>
@@ -149,7 +149,7 @@ owaua
 </details>
 <details>
 <summary>Pot schimba cum sună?</summary>
-<p>Da. <code>!persona rudeish</code>, <code>!persona nerdish</code>, sau <code>!persona explicit</code>. Explicit doar pe canale cu restricție de vârstă. Dacă explicit e deja ales, canalele obișnuite folosesc rudeish în tăcere.</p>
+<p>Da. <code>!persona rudeish</code>, <code>!persona nerdish</code>, <code>!persona flirty</code> sau <code>!persona chaotic</code>.</p>
 </details>
 <details>
 <summary>Muzica chiar cântă?</summary>
@@ -171,7 +171,7 @@ owaua
 <p>owaua e open source. Îți trebuie Python 3.11+, intentul Message Content de la Discord, cheile providerului, și Linux plus FFmpeg dacă vrei muzică. După aia e doar vorbit.</p>
 <div class="actions">
 <a class="button" href="https://github.com/zeousky/owaua">uită-te la sursă</a>
-<a class="button ghost" href="mailto:ckazros@owaua.com">scrie-i persoanei care l-a făcut</a>
+<a class="button ghost contact-link" href="mailto:ckazros@owaua.com" data-contact-email="ckazros@owaua.com">scrie-i persoanei care l-a făcut</a>
 </div>
 </section>
 </main>
