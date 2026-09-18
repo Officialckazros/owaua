@@ -74,6 +74,15 @@ Pushing a tag such as `v0.1.0` runs the release workflow and publishes those
 archives automatically. The package contains source code and assets only; it
 never includes `.env`, `data/`, virtual environments, or local model files.
 
+The same release tag also publishes a container image to GitHub Packages:
+
+```sh
+docker pull ghcr.io/officialckazros/owaua:latest
+```
+
+Pass the bot configuration as environment variables when starting the
+container and mount `/app/data` if its memory database should persist.
+
 Limits and other knobs are in `.env.example`.
 
 ## Please don't burn the API
