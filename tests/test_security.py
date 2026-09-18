@@ -101,7 +101,7 @@ class BudgetTests(unittest.TestCase):
 
         self.store.reserve_api_request("full-1", "full-user", "g", limits=full_mode)
         self.store.reserve_api_request("full-2", "full-user", "g", limits=full_mode)
-        with self.assertRaisesRegex(BudgetExceeded, r"DM gays\._.*ckazros@owaua\.com"):
+        with self.assertRaisesRegex(BudgetExceeded, r"DM ckazros.*ckazros@owaua\.com"):
             self.store.reserve_api_request("full-3", "full-user", "g", limits=full_mode)
 
     def test_unbounded_memory_keeps_full_mode_history_verbatim(self):

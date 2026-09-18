@@ -8,7 +8,7 @@ Normal chat uses Gemini 3.5 Flash Lite for every persona. Blocked users remain r
 
 On this Mac, local mode uses DeepGrove Maple through its OpenAI-compatible MLX server at `http://127.0.0.1:8080/v1`. `scripts/run-bots.sh` starts that server automatically when `OWAUA_LOCAL_ONLY=1`.
 
-If you actually put this in a server, I'd like to know. DM me on Discord (`gays._`) or email `ckazros@owaua.com`.
+If you actually put this in a server, I'd like to know. DM me on Discord (`ckazros`) or email `ckazros@owaua.com`.
 
 ## Commands
 

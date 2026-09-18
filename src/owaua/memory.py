@@ -181,7 +181,7 @@ class MemoryStore:
             )
             if any(used >= ceiling for used, ceiling in checks):
                 raise BudgetExceeded(
-                    "AI request budget reached; try later or DM gays._ or email "
+                    "AI request budget reached; try later or DM ckazros or email "
                     "ckazros@owaua.com to request more usage"
                 )
             db.execute("INSERT INTO api_usage VALUES (?, ?, ?, ?)", (event_id, user_id, guild_id, current))

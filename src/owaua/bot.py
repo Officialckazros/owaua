@@ -196,7 +196,7 @@ OWNER_NOTE_TEXT = (
     "and don't pack it with useless features/commands. I spent a lot of time "
     "developing and (trying) to promote this bot, and I really hope you like it. "
     "I would also like to know what communities this bot is in, so if you see "
-    "this message please DM me on Discord (gays._) or on email (ckazros@owaua.com)"
+    "this message please DM me on Discord (ckazros) or on email (ckazros@owaua.com)"
 )
 
 
