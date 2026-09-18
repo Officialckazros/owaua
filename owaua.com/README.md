@@ -15,3 +15,15 @@ Keep page URLs stable when moving files: the deployment serves each directory's
 `index.html` at its directory path.
 
 Deployment instructions are in [`AGENTS.md`](AGENTS.md).
+
+## GitHub Pages
+
+The repository contains the complete static site and deploys `owaua.com/` to
+GitHub Pages whenever `main` changes. The checked-in [`CNAME`](CNAME) binds
+the Pages site to `owaua.com`.
+
+In the repository settings, enable Pages with **Source: GitHub Actions**. If
+the domain should be served by GitHub Pages, point the domain's DNS at the
+GitHub Pages endpoints and remove the old hosting route; otherwise the
+workflow still provides a public Pages preview while the existing host stays
+live.
