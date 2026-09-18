@@ -58,7 +58,7 @@ Project structure and Daki deployment details are in
 [docs/OPERATIONS.md](docs/OPERATIONS.md). Use
 `OWAUA_DAKI_DRY_RUN=1 ./scripts/deploy-daki.sh` to preview the remote upload.
 
-Contributing and security notes are kept in the [docs](docs/) folder.
+Contributing and security notes are kept in the [docs](docs/) folder
 
 ## Releases
 
@@ -85,7 +85,7 @@ container and mount `/app/data` if its memory database should persist.
 
 Limits and other knobs are in `.env.example`.
 
-## Please don't burn the API
+## Please don't burn the API 
 
 Owaua is a hangout bot. Every reply costs real money. You do not get a free
 model, a homework mill, a benchmark harness, or a toy for wasting tokens.
