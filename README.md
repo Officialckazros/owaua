@@ -4,9 +4,16 @@ Discord bot I made for hanging out in servers.
 
 Ping it and it talks back. It keeps a little conversation history. DMs are off by default.
 
-<a href="https://top.gg/bot/1442127404607737999">
-  <img src="https://top.gg/api/widget/1442127404607737999.svg" alt="owaua on Top.gg">
-</a>
+<table>
+  <tr>
+    <td>
+      <a href="https://top.gg/bot/1442127404607737999">
+        <img src="https://top.gg/api/widget/1442127404607737999.svg" width="320" alt="owaua on Top.gg">
+      </a>
+    </td>
+    <td>This widget shows the bot&#39;s Top.gg status.</td>
+  </tr>
+</table>
 
 Normal chat uses Gemini 3.5 Flash Lite for every persona. Blocked users remain restricted to Groq's `openai/gpt-oss-20b`; explicit host-model commands are unchanged. Full mode can use GPT, Claude, Gemini, DeepSeek, or GLM. Personas are just text files in `personas/` — edit one and the next reply uses it.
 
