@@ -281,6 +281,107 @@ class ChannelCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.bot.full_mode_enabled_for(owner))
         self.assertEqual(self.store.get_setting(f"full_mode:{owner}"), "1")
 
+    async def test_topgg_full_mode_enables_it_for_the_invoking_user(self) -> None:
+        user_id = 33
+        message = self._full_mode_message(
+            "!topgg full mode", 1, author_id=user_id, channel_id=22
+        )
+
+        await self.bot.on_message(message)
+
+        self.assertEqual(message.channel.sent, ["full mode on"])
+        self.assertTrue(self.bot.full_mode_enabled_for(user_id))
+        self.assertTrue(self.bot.full_mode_active(
+            self._full_mode_message("<@99> hello", 2, author_id=user_id)
+        ))
+        self.assertEqual(self.store.get_setting(f"topgg_full_mode:{user_id}"), "1")
+
+    async def test_discordify_full_mode_supports_on_and_off(self) -> None:
+        user_id = 33
+        on = self._full_mode_message(
+            "!discordify full mode on", 1, author_id=user_id, channel_id=22
+        )
+        off = self._full_mode_message(
+            "!discordify full mode off", 2, author_id=user_id, channel_id=22
+        )
+
+        await self.bot.on_message(on)
+        self.bot.command_used.clear()
+        await self.bot.on_message(off)
+
+        self.assertEqual(on.channel.sent, ["full mode on"])
+        self.assertEqual(off.channel.sent, ["full mode off"])
+        self.assertFalse(self.bot.full_mode_enabled_for(user_id))
+        self.assertEqual(self.store.get_setting(f"discordify_full_mode:{user_id}"), "0")
+
+    async def test_promoted_full_mode_has_eight_shared_lifetime_prompts(self) -> None:
+        user_id = 33
+        enable = self._full_mode_message(
+            "!topgg full mode on", 1, author_id=user_id, channel_id=22
+        )
+        await self.bot.on_message(enable)
+        replies: list[str] = []
+
+        with patch("bot.ask", AsyncMock(return_value="hey")):
+            for message_id in range(2, 10):
+                prompt = self._full_mode_message(
+                    f"<@99> prompt {message_id}", message_id,
+                    author_id=user_id,
+                    mentions=[self.bot.user],
+                )
+                await self.bot.on_message(prompt)
+                replies.extend(prompt.channel.sent)
+                self.bot.rate_windows.clear()
+            exhausted = self._full_mode_message(
+                "<@99> prompt 10", 10, author_id=user_id,
+                mentions=[self.bot.user],
+            )
+            await self.bot.on_message(exhausted)
+            replies.extend(exhausted.channel.sent)
+
+        self.assertEqual(replies.count("hey"), 8)
+        self.assertEqual(replies[-1], "full mode prompt limit reached")
+
+        self.bot.command_used.clear()
+        off = self._full_mode_message(
+            "!topgg full mode off", 11, author_id=user_id, channel_id=22
+        )
+        on_again = self._full_mode_message(
+            "!discordify full mode on", 12, author_id=user_id, channel_id=22
+        )
+        await self.bot.on_message(off)
+        await self.bot.on_message(on_again)
+        with patch("bot.ask", AsyncMock(return_value="hey")):
+            exhausted_again = self._full_mode_message(
+                "<@99> prompt 13", 13, author_id=user_id,
+                mentions=[self.bot.user],
+            )
+            await self.bot.on_message(exhausted_again)
+            self.assertEqual(
+                exhausted_again.channel.sent[-1], "full mode prompt limit reached"
+            )
+
+    async def test_topgg_full_mode_does_not_match_extra_text(self) -> None:
+        message = self._full_mode_message(
+            "!topgg full mode please", 1, author_id=33, channel_id=22
+        )
+
+        with patch("bot.ask", AsyncMock(return_value="hey")) as mocked_ask:
+            await self.bot.on_message(message)
+
+        self.assertEqual(message.channel.sent, [])
+        mocked_ask.assert_not_awaited()
+
+    async def test_blocked_user_cannot_use_topgg_full_mode(self) -> None:
+        blocked = next(iter(FULL_MODE_BLOCKED_USER_IDS))
+        message = self._full_mode_message(
+            "!topgg full mode", 1, author_id=blocked, channel_id=22
+        )
+
+        await self.bot.on_message(message)
+
+        self.assertEqual(message.channel.sent, ["you can't use this"])
+
     async def test_full_mode_off_disables_the_flag(self) -> None:
         owner = next(iter(FULL_MODE_ENABLE_USER_IDS))
         self.bot.set_full_mode_for(owner, True)

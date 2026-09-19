@@ -119,6 +119,7 @@ FULL_MODE_USAGE = (
     "usage: !full mode on|off, or !full mode "
     + "|".join(FULL_MODE_PROVIDERS)
 )
+PROMOTED_FULL_MODE_PROMPT_LIMIT = 8
 
 HELP_TEXT = """**Owaua commands**
 `!help` — show this command list
@@ -216,9 +217,28 @@ def matched_command(text: str) -> str | None:
     """Return the prefix command name, if this message is one."""
     if is_owner_note_command(text):
         return "!owner's note"
+    promoted_command = promoted_full_mode_command(text)
+    if promoted_command is not None:
+        return promoted_command
     name = text.split(maxsplit=1)[0].lower() if text else ""
     if name in COMMANDS:
         return name
+    return None
+
+
+def is_topgg_full_mode_command(content: str) -> bool:
+    """Match the Top.gg full-mode command, including its on/off argument."""
+    return promoted_full_mode_command(content) == "!topgg full mode"
+
+
+def promoted_full_mode_command(content: str) -> str | None:
+    normalized = " ".join(content.casefold().split())
+    for prefix in ("!topgg", "!discordify"):
+        if normalized == f"{prefix} full mode" or normalized in {
+            f"{prefix} full mode on",
+            f"{prefix} full mode off",
+        }:
+            return f"{prefix} full mode"
     return None
 
 
@@ -262,6 +282,14 @@ def full_mode_setting_key(user_id: object) -> str:
 
 def full_mode_provider_setting_key(user_id: object) -> str:
     return f"full_mode_provider:{user_id}"
+
+
+def topgg_full_mode_setting_key(user_id: object) -> str:
+    return f"topgg_full_mode:{user_id}"
+
+
+def discordify_full_mode_setting_key(user_id: object) -> str:
+    return f"discordify_full_mode:{user_id}"
 
 
 PERSONA_USAGE = (
@@ -659,6 +687,24 @@ class PersonaBot(discord.Client):
         value = self.memory.get_setting(full_mode_provider_setting_key(user_id), default_provider)
         return value if value in FULL_MODE_PROVIDERS else default_provider
 
+    def topgg_full_mode_granted_for(self, user_id: object) -> bool:
+        return self.memory.get_setting(topgg_full_mode_setting_key(user_id), "") == "1"
+
+    def promoted_full_mode_granted_for(self, user_id: object) -> bool:
+        return (
+            self.topgg_full_mode_granted_for(user_id)
+            or self.memory.get_setting(discordify_full_mode_setting_key(user_id), "") == "1"
+        )
+
+    def promoted_full_mode_limited_for(self, user_id: object) -> bool:
+        return (
+            self.promoted_full_mode_granted_for(user_id)
+            and not full_mode_allowed(user_id)
+        )
+
+    def full_mode_allowed_for(self, user_id: object) -> bool:
+        return full_mode_allowed(user_id) or self.promoted_full_mode_granted_for(user_id)
+
     def set_full_mode_for(self, user_id: int, enabled: bool) -> None:
         if enabled:
             self.full_mode_users.add(user_id)
@@ -881,6 +927,9 @@ class PersonaBot(discord.Client):
         if command == "!full":
             await self._reply(message, self._full_mode_command(message, argument))
             return
+        if command in {"!topgg full mode", "!discordify full mode"}:
+            await self._reply(message, self._promoted_full_mode_command(message, command))
+            return
         if name == "!persona":
             await self._reply(message, self._persona_command(message, argument))
             return
@@ -958,6 +1007,17 @@ class PersonaBot(discord.Client):
             if message.author.id in inflight or len(inflight) >= MAX_INFLIGHT:
                 return
             inflight.add(message.author.id)
+        if full_mode and self.promoted_full_mode_limited_for(message.author.id):
+            reserved = await asyncio.to_thread(
+                self.memory.reserve_full_mode_prompt,
+                str(message.id),
+                str(message.author.id),
+                limit=PROMOTED_FULL_MODE_PROMPT_LIMIT,
+            )
+            if not reserved:
+                await self._reply(message, "full mode prompt limit reached")
+                inflight.discard(message.author.id)
+                return
         try:
             async with message.channel.typing():
                 request = ask(
@@ -1037,6 +1097,34 @@ class PersonaBot(discord.Client):
                 self.set_full_mode_for(user_id, True)
                 return f"full mode on ({provider})"
         return FULL_MODE_USAGE
+
+    def _promoted_full_mode_command(self, message: discord.Message, command: str) -> str:
+        """Enable or disable a persistent, prompt-limited integration grant."""
+        user_id = message.author.id
+        if full_mode_blocked(user_id):
+            return "you can't use this"
+        normalized = command_text(
+            message.content, None if self.user is None else self.user.id
+        ).casefold()
+        suffix = normalized.removeprefix(command).strip()
+        setting_key = (
+            topgg_full_mode_setting_key(user_id)
+            if command == "!topgg full mode"
+            else discordify_full_mode_setting_key(user_id)
+        )
+        if suffix == "off":
+            self.memory.set_setting(setting_key, "0")
+            if not self.promoted_full_mode_granted_for(user_id):
+                self.set_full_mode_for(user_id, False)
+            return "full mode off"
+        provider = "gemini" if GEMINI_ONLY else "gpt"
+        problem = full_mode_provider_error(provider)
+        if problem is not None:
+            return problem
+        self.memory.set_setting(setting_key, "1")
+        self.memory.set_setting(full_mode_provider_setting_key(user_id), provider)
+        self.set_full_mode_for(user_id, True)
+        return "full mode on"
 
     def _persona_command(self, message: discord.Message, requested: str) -> str:
         if not requested.strip():

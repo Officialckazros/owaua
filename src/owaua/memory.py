@@ -224,6 +224,37 @@ class MemoryStore:
             )
             return True
 
+    def reserve_full_mode_prompt(
+        self, event_id: str, user_id: str, *, limit: int, now: float | None = None
+    ) -> bool:
+        """Reserve one of a promoted full-mode user's lifetime prompts."""
+        if limit < 1:
+            return False
+        current = time.time() if now is None else now
+        key = f"full_mode_prompt:{user_id}"
+        with self._lock, self._managed_connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            existing = db.execute(
+                "SELECT value FROM app_settings WHERE key=?", (key,)
+            ).fetchone()
+            used = 0 if existing is None else int(existing[0])
+            event_key = f"{key}:event:{event_id}"
+            if db.execute(
+                "SELECT 1 FROM app_settings WHERE key=?", (event_key,)
+            ).fetchone() is not None:
+                return True
+            if used >= limit:
+                return False
+            db.execute(
+                "INSERT INTO app_settings(key,value) VALUES (?, ?)",
+                (key, str(used + 1)),
+            ) if existing is None else db.execute(
+                "UPDATE app_settings SET value=? WHERE key=?",
+                (str(used + 1), key),
+            )
+            db.execute("INSERT INTO app_settings(key,value) VALUES (?, '1')", (event_key,))
+            return True
+
     def prune(self) -> None:
         with self._lock, self._managed_connection() as db:
             self._prune(db)
