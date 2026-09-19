@@ -104,13 +104,8 @@ MIT.
 
 Thanks [@Perplexity](https://github.com/perplexityai) for the Agent API
 
-<table>
-  <tr>
-    <td>
-      <a href="https://top.gg/bot/1442127404607737999">
-        <img src="https://top.gg/api/widget/1442127404607737999.svg" width="320" alt="owaua on Top.gg">
-      </a>
-    </td>
-    <td>This widget shows the bot&#39;s Top.gg status.</td>
-  </tr>
-</table>
+<p align="center">
+  <a href="https://top.gg/bot/1442127404607737999">
+    <img src="https://top.gg/api/widget/servers/1442127404607737999.svg" alt="Discord Bots">
+  </a>
+</p>
