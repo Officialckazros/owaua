@@ -4,17 +4,6 @@ Discord bot I made for hanging out in servers.
 
 Ping it and it talks back. It keeps a little conversation history. DMs are off by default.
 
-<table>
-  <tr>
-    <td>
-      <a href="https://top.gg/bot/1442127404607737999">
-        <img src="https://top.gg/api/widget/1442127404607737999.svg" width="320" alt="owaua on Top.gg">
-      </a>
-    </td>
-    <td>This widget shows the bot&#39;s Top.gg status.</td>
-  </tr>
-</table>
-
 Normal chat uses Gemini 3.5 Flash Lite for every persona. Blocked users remain restricted to Groq's `openai/gpt-oss-20b`; explicit host-model commands are unchanged. Full mode can use GPT, Claude, Gemini, DeepSeek, or GLM. Personas are just text files in `personas/` — edit one and the next reply uses it.
 
 On this Mac, local mode uses DeepGrove Maple through its OpenAI-compatible MLX server at `http://127.0.0.1:8080/v1`. `scripts/run-bots.sh` starts that server automatically when `OWAUA_LOCAL_ONLY=1`.
@@ -114,3 +103,14 @@ GPT OSS 20B model.
 MIT.
 
 Thanks [@Perplexity](https://github.com/perplexityai) for the Agent API
+
+<table>
+  <tr>
+    <td>
+      <a href="https://top.gg/bot/1442127404607737999">
+        <img src="https://top.gg/api/widget/1442127404607737999.svg" width="320" alt="owaua on Top.gg">
+      </a>
+    </td>
+    <td>This widget shows the bot&#39;s Top.gg status.</td>
+  </tr>
+</table>
