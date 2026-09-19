@@ -46,7 +46,7 @@ owaua
 <header class="page-head">
 <p>terms</p>
 <h1>the agreement</h1>
-<p>Last updated September 15, 2026. If you invite owaua, talk to it, or keep it in a server, you agree to this. It is written like a person on purpose. It still counts.</p>
+<p>Last updated September 19, 2026. If you invite owaua, talk to it, or keep it in a server, you agree to this. It is written like a person on purpose. It still counts.</p>
 </header>
 
 <section class="section" id="covers">
@@ -68,7 +68,7 @@ owaua
 <section class="section" id="service">
 <h2>what the bot is</h2>
 <div class="body">
-<p>owaua is a hangout companion. You ping it in a server, and DMs work only when the operator has turned them on. It can switch between rudeish / nerdish / flirty / chaotic voices, answer in a chosen language, play bounded YouTube or uploaded audio in a voice channel, and remember up to 20 records per channel + user. Normal hangout mode is text-only. Commands start with <code>!</code>. There are no slash commands.</p>
+<p>owaua is a hangout companion. You ping it in a server, and DMs work only when the operator has turned them on. It can switch between rudeish / nerdish / flirty / chaotic voices, answer in a chosen server language, play bounded YouTube or Twitter/X video and supported audio attachments in a voice channel, and remember up to 20 records per channel + user. Normal hangout mode is text-only; approved users can opt into bounded full mode in designated channels. Commands start with <code>!</code>. There are no slash commands.</p>
 <p>It is not a person. It is not a moderator you can lean on. It is not advice. It can be wrong, confident, and still wrong. It is instructed to hang out, not to help.</p>
 </div>
 </section>
@@ -78,7 +78,7 @@ owaua
 <div class="body">
 <p>Messages you send to the bot — usually pings, and DMs only when enabled — can be stored locally. Up to 20 records for that channel + user can go back to the model, with a seven-day expiry. <code>!memory erase mine</code> removes your own history.</p>
 <p>Please don’t send passwords, tokens, private keys, or anything you would not want saved. Someone with Manage Server can run <code>!memory erase</code> for that server. DMs are not wiped by that command.</p>
-<p>There are layered request ceilings: 12 global attempts per minute, 30 per user per day, 100 per server per day, 200 total per day, and 1,000 lifetime attempts. Hitting one is not a ban. Trying to break it, using the bot to spam a channel, or burning API credits on junk is.</p>
+<p>There are layered request ceilings: eight AI-admission attempts per user per minute in the running process, plus 30 persisted AI requests per user per rolling 10 minutes. There can be three AI users in flight at once, and each command has a 25-second per-user cooldown. Hitting a limit is not a ban. Trying to break it, using the bot to spam a channel, or burning API credits on junk is.</p>
 <p>More on storage is in the <a href="/privacy">privacy policy</a>.</p>
 </div>
 </section>

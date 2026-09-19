@@ -63,7 +63,7 @@ owaua
 </div>
 </div>
 <h1>the bot that hangs out in your server</h1>
-<p class="lede">Mention it when you want a reply. It remembers a little of what you two just said — not the whole room — and it can change how it sounds, or put a song on in voice. Small on purpose.</p>
+<p class="lede">Mention it when you want a reply. It remembers a little of what you two just said — not the whole room — and it can change how it sounds, answer in the server’s language, or put a song on in voice. Small on purpose.</p>
 <div class="actions">
 <a class="button" href="https://discord.gg/CNbpwtE9HS">come sit in the Discord</a>
 <a class="button ghost" href="https://discord.com/oauth2/authorize?client_id=1442127404607737999&amp;permissions=4503599630609408&amp;integration_type=0&amp;scope=bot">invite owaua</a>
@@ -93,21 +93,21 @@ owaua
 <ul class="list">
 <li><strong>it waits until you ask</strong><span>Ping it in a server and it replies. A lonely <code>@owaua</code> with nothing else gets a tiny local “yeah?” — no model call. Other bots are ignored. DMs only work if the operator turns on <code>BOT_ALLOW_DMS=1</code>.</span></li>
 <li><strong>it remembers your thread, not the room</strong><span>Your history with it is just you, in that channel. It keeps up to 20 turns, they fade after a week, and the whole file tops out at 10,000 records. The person next to you has a separate memory.</span></li>
-<li><strong>a few voices, and a few brains</strong><span>Pick <code>rudeish</code>, <code>nerdish</code>, <code>flirty</code>, or <code>chaotic</code>. Server admins can also choose who talks underneath: the host default, DeepSeek, Mistral, or GPT.</span></li>
+<li><strong>a few voices, and a few brains</strong><span>Pick <code>rudeish</code>, <code>nerdish</code>, <code>flirty</code>, or <code>chaotic</code> for yourself. You can also choose a host default, DeepSeek, Mistral, or GPT alias when that option is available. Full mode is a separate opt-in for approved users.</span></li>
 <li><strong>it can answer in your language</strong><span>Admins set a full language name, like <code>!language hungarian</code>. When matching art exists, owaua can change that server’s bot avatar and banner too, so it looks like it belongs there.</span></li>
-<li><strong>a song in voice, if you ask</strong><span><code>!music</code> plays a song, a YouTube link, or an audio file you attach. Pause, resume, restart, skip, leave. One track at a time. No playlist dump.</span></li>
-<li><strong>short answers, on purpose</strong><span>Normal hangout mode stays text-only, with a small 80-token cap, and it does not look at images. Approved people can open <code>!full mode on</code> in the designated channel, but every guild still shares the same request and spending limits.</span></li>
+<li><strong>a song in voice, if you ask</strong><span><code>!music</code> plays a single YouTube video or Twitter/X post with video, or a supported audio attachment. Pause, resume, restart, skip, stop, now, and leave. No name searches or playlists.</span></li>
+<li><strong>short answers, on purpose</strong><span>Normal hangout mode stays text-only, with a small 80-token cap, and it does not look at images. Approved people can open <code>!full mode on</code> in the designated channels. Full mode still uses the same per-user request budget.</span></li>
 </ul>
 </section>
 
 <section class="section" id="commands">
 <h2>how you talk to it</h2>
-<p>Every command waits 25 seconds before you can run another. Changing server settings needs Manage Server. Music controls only work if you are in the same voice channel as the bot.</p>
+<p>Each command has its own 25-second per-user cooldown. Changing server settings needs Manage Server. Music controls only work if you are in the same voice channel as the bot.</p>
 <div class="commands">
 <div class="command"><code>!help</code><p>The list, when you forget.</p></div>
-<div class="command"><code>!persona rudeish|nerdish|flirty|chaotic</code><p>Hear or change the general-audience voice. <code>!persona host default gpt|deepseek|mistral</code> picks who is answering underneath.</p></div>
+<div class="command"><code>!persona rudeish|nerdish|flirty|chaotic</code><p>Hear or change your general-audience voice. <code>!persona host default gpt|deepseek|mistral</code> selects a host-model alias for you.</p></div>
 <div class="command"><code>!language &lt;full name&gt;|reset</code><p>Set or clear the server’s reply language, and the matching profile art when it exists.</p></div>
-<div class="command"><code>!music &lt;song, YouTube URL, or audio&gt;</code><p>Put something on. Or <code>pause</code>, <code>resume</code>, <code>restart</code>, <code>skip</code>, and <code>leave</code>.</p></div>
+<div class="command"><code>!music &lt;YouTube/X URL or attachment&gt;</code><p>Put one supported track on. Or <code>pause</code>, <code>resume</code>, <code>restart</code>, <code>skip</code>, <code>stop</code>, <code>now</code>, and <code>leave</code>.</p></div>
 <div class="command"><code>!memory erase</code> / <code>!memory erase mine</code><p>Admins can wipe the server’s stored chats. Anyone can wipe their own, including DMs when those are on.</p></div>
 <div class="command"><code>!security status|pause|resume</code><p>Owner-only. How busy it is, and an emergency pause if something is going wrong.</p></div>
 <div class="command"><code>!owner's note</code><p>A short note from the person who made it.</p></div>
@@ -118,9 +118,9 @@ owaua
 <h2>the limits, said plainly</h2>
 <p>These exist so one person cannot melt it, and so it can stay cheap enough to keep around. They are request ceilings, not a promise of free usage.</p>
 <ul class="list">
-<li><strong>12 tries a minute, for everyone together</strong><span>On top of that: 30 per person per day, 100 per server per day, 200 total per day, and 1,000 over the life of the current ledger.</span></li>
-<li><strong>three AI replies at once</strong><span>If a try fails or you cancel it, it still counts. There is no automatic paid retry, and it will not hop to another provider for you.</span></li>
-<li><strong>music stays small</strong><span>YouTube only, videos up to 15 minutes, downloads up to 20 MiB, at most two sessions, and playback stops after 15 minutes. Native playback needs Linux and FFmpeg.</span></li>
+<li><strong>eight AI tries a minute, per user</strong><span>There is also a persistent budget of 30 AI requests per user per rolling 10 minutes. Full mode uses that same per-user budget.</span></li>
+<li><strong>three AI users at once</strong><span>At most three users can occupy an AI reply slot at a time. A command has a separate 25-second per-user cooldown.</span></li>
+<li><strong>music stays small</strong><span>Supported YouTube or Twitter/X video links must resolve to a single track under 15 minutes. Audio attachments and downloaded audio are capped at 20 MiB, with at most two ordinary music sessions. Native playback needs Linux and FFmpeg.</span></li>
 </ul>
 <p class="note">It is not a moderator, a homework machine, an advice line, or an image bot. It can be wrong with a straight face. Check anything that matters.</p>
 </section>
@@ -129,7 +129,7 @@ owaua
 <h2>what it keeps</h2>
 <div class="body">
 <p>It holds a little recent chat so the next reply is not from nowhere. That lives in a local SQLite file, keyed by channel and person. Old turns fall off on their own. <code>!memory erase</code> clears a server’s stored conversations. <code>!memory erase mine</code> clears yours.</p>
-<p>Hangout requests go to the configured model with storage turned off. Music requests land in a small audit log for the operator. Passwords, signed media links, and provider error text are not written down.</p>
+<p>Hangout requests go to the configured model with provider-side storage turned off. Music requests land in a small audit log for the operator; it records operational metadata and hashes the raw argument. Passwords, signed media links, and provider error text are not written down.</p>
 <p>The longer, careful version is the <a href="/privacy">privacy policy</a>. Inviting it also means the <a href="/terms">terms</a>.</p>
 </div>
 </section>
@@ -143,7 +143,7 @@ owaua
 </details>
 <details>
 <summary>Why didn’t it answer?</summary>
-<p>Make sure you actually pinged it. Give it a moment — it shows typing while it works. There is a 25-second command cooldown, and the daily ceilings above. Other bots are ignored on purpose.</p>
+<p>Make sure you actually pinged it. Give it a moment — it shows typing while it works. Check the rolling per-user budget and command cooldowns above. Other bots are ignored on purpose.</p>
 </details>
 <details>
 <summary>Can I change how it sounds?</summary>

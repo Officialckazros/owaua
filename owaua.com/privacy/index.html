@@ -46,7 +46,7 @@ owaua
 <header class="page-head">
 <p>privacy</p>
 <h1>what it remembers</h1>
-<p>Last updated September 15, 2026. owaua keeps a short, scoped conversation history so it can talk back. This page is the honest version of what that means.</p>
+<p>Last updated September 19, 2026. owaua keeps a short, scoped conversation history so it can talk back. This page is the honest version of what that means.</p>
 </header>
 
 <section class="section" id="covers">
@@ -74,8 +74,8 @@ owaua
 <li><strong>messages</strong><span>Pings and replies, plus DMs only when the operator enables them. Ordinary unmentioned messages are not conversation. Prefix commands are handled as commands, not as conversation.</span></li>
 <li><strong>attachments</strong><span>Normal hangout mode is text-only and does not look at images. Audio attachments can be used by <code>!music</code> within its safety limits.</span></li>
 <li><strong>channel and server settings</strong><span>The selected persona, reply language, and provider choice. Those live in the same SQLite file so they survive a restart. Public DMs are off by default.</span></li>
-<li><strong>usage limits</strong><span>Persistent request ceilings cover 12 global attempts per minute, 30 per user per day, 100 per server per day, 200 total per day, and 1,000 lifetime attempts. Three AI requests can run at once.</span></li>
-<li><strong>voice and music</strong><span><code>!music</code> sees the author’s voice channel and the song name or url, then streams YouTube audio through yt-dlp. The current track is not saved across restarts. It does not download playlists.</span></li>
+<li><strong>usage limits</strong><span>Persistent usage records cover 30 AI requests per user per rolling 10 minutes. The running process also allows eight AI-admission attempts per user per minute, and up to three AI users can be in flight. Command cooldowns are separate.</span></li>
+<li><strong>voice and music</strong><span><code>!music</code> sees the author’s voice channel and a single YouTube or Twitter/X video link, or a supported audio attachment. Ordinary playback is capped at 15 minutes and 20 MiB where downloaded audio is involved. The current track is not saved across restarts, and playlists are rejected.</span></li>
 <li><strong>mail you send us</strong><span>If you email or DM the operator, that message is just a message. We keep what we need to answer it.</span></li>
 </ul>
 <p class="note">It does not scrape every channel it can see. No ping, no DM, and no active-mode hit means it stays out. Other bots are ignored.</p>
@@ -93,7 +93,7 @@ owaua
 <h2>how memory works</h2>
 <div class="body">
 <p>Data lives in a local SQLite file on the host (<code>data/memory.sqlite3</code>, WAL mode). Each conversation is keyed by channel + user. Two people in the same channel have separate histories. The same person in two channels has two histories. Up to 20 records (you + the bot) are sent back to the model, with inputs capped at 2,000 characters.</p>
-<p>There is no privacy opt-in gate and no 30-day auto-expiry of that recent chat. It is stored because the bot needs it to talk. Duplicate Discord events for the same message id are not stored twice.</p>
+<p>There is no privacy opt-in gate: the recent chat is stored because the bot needs it to talk. It is pruned after seven days, beyond the 20-record conversation window, or when the database reaches its 10,000-record cap. Duplicate Discord events for the same message id are not stored twice.</p>
 <p>Please don’t send passwords, tokens, private keys, or anything you would not want saved. If you already did, have someone with Manage Server run <code>!memory erase</code> in that server, or write us.</p>
 </div>
 </section>
@@ -102,11 +102,11 @@ owaua
 <h2>who else sees it</h2>
 <div class="body">
 <p>Discord already has the message. That is their platform, their rules.</p>
-<p>To generate a reply, the bot sends the current prompt, the last 12 stored turns for that channel + user, and any image it is looking at to an OpenAI-compatible model provider (default base url <code>https://api.openai.com/v1</code>, overridable). Those calls use storage-off. A local self-harm check can answer without calling the model at all.</p>
+<p>To generate a reply, the bot sends the current prompt and, when conversation context is useful, up to the last four stored messages for that channel + user to the configured model provider. Normal mode does not inspect images; approved full-mode requests can include one image attachment. Provider-side storage is requested off. A local self-harm check and other refusal guards can answer without calling the model at all.</p>
 <p>Other services only see what that feature needs:</p>
 </div>
 <ul class="list">
-<li><strong>music</strong><span>The song name or url you typed, so yt-dlp can find an audio stream. It plays that audio in the voice channel. It does not download playlists.</span></li>
+<li><strong>music</strong><span>The supported link or attachment metadata needed to resolve and play one track. Music commands are written to a restricted audit log with Discord/user/server/channel metadata, the requested action, a hash of the raw argument, and the outcome; signed media URLs are not written.</span></li>
 </ul>
 <p class="note">We are not Discord, and we are not those vendors. Their policies apply to what passes through them. There is no TTS provider, no speech-to-text, and no third-party antivirus scan.</p>
 </section>
